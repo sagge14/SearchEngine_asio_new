@@ -1,0 +1,25 @@
+# игнорируем каталоги сборки (CLion, CMake)
+cmake-build-*/
+lib/
+minizip/
+other/
+
+# бинарные файлы и библиотеки
+*.exe
+*.dll
+*.so
+*.a
+*.lib
+*.o
+*.obj
+*.out
+*.user
+*.log
+
+# системные и IDE-файлы
+.idea/
+*.iml
+.DS_Store
+
+# если не хочешь игнорировать src/
+!src/
