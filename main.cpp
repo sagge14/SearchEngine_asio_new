@@ -4,15 +4,10 @@
 
 #include "SearchServer.h"
 #include "ConverterJSON.h"
-#include "SQLite/mySQLite.h"
-#include "md5/md5Hasher.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "AsioServer.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
 
-#include "nlohmann/json.hpp"
-#include "Commands/SaveMessage/Message.h"
-#include "MyStrings/myWstring.h"
 #include <filesystem>
 
 #include "SqlLogger.h"

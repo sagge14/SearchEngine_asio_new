@@ -221,19 +221,38 @@ inverted_index::mapEntry inverted_index::InvertedIndex::getWordCount(const strin
 
 }
 
-void inverted_index::InvertedIndex::delFromDictionary(const setLastWriteTimeFiles& _del) {
+void inverted_index::InvertedIndex::delFromDictionary(const setLastWriteTimeFiles& del)
+{
+    std::lock_guard<std::mutex> lock(mapMutex);
 
-    for(const auto& f:_del)
+    for (const auto& [file_name, file_time] : del)
     {
-        for(auto& i:wordIts[f.first])
+
+        std::vector<std::string> wordsToErase;          // Шаг 1: список слов, которые «опустеют»
+
+        for (auto wordIt : wordIts[file_name])             // safe: копия итератора
         {
-            i->second.erase(f.first);
-            if(i->second.size() == 0)
-                freqDictionary.erase(i->first);
+            if (wordIt == freqDictionary.end())         // защита от случайного dangling-а
+                continue;
+
+            auto &entry = wordIt->second;               // mapEntry
+            entry.erase(file_name);
+
+            if (entry.empty())
+                wordsToErase.push_back(wordIt->first);  // пометим слово на удаление,
+            //   но не трогаем map пока идём по вектору
         }
-        wordIts.erase(f.first);
+
+        for (const auto &w : wordsToErase)              // Шаг 2: удаляем слова одним
+            freqDictionary.erase(w);                    //        проходом ПОСЛЕ цикла
+
+        wordIts.erase(file_name);                          // Шаг 3: убираем вектор итераторов
     }
 }
+
+
+
+
 
 void inverted_index::InvertedIndex::dictonaryToLog() const {
     for(const auto& i:freqDictionary)

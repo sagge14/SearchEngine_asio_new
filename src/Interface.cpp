@@ -69,77 +69,89 @@ std::list<std::wstring> Interface::getAllFilesFromDir(const std::string& dir, co
 #include <string>
 #include <list>
 
-std::list<std::wstring> Interface::getAllFilesFromDir2(const std::string& dir, const std::list<std::string>& exts, const std::vector<std::string>& excludeDirs) {
-    /**
-    Функция получения всех файлов из дирректории @param dir и ее подпапках, исключая имена папок и заданные исключенные директории */
-
+std::list<std::wstring>
+Interface::getAllFilesFromDir2(const std::string& dir,
+                               const std::list<std::string>& exts,
+                               const std::vector<std::string>& excludeDirs)
+{
     namespace fs = std::filesystem;
     using convert_t = std::codecvt_utf8<wchar_t>;
-    std::wstring_convert<convert_t, wchar_t> strconverter;
+    std::wstring_convert<convert_t, wchar_t> toWide;
 
-    auto recursiveGetFileNamesByExtension = [&exts, &excludeDirs](const std::wstring &path)
+    const fs::path root = toWide.from_bytes(dir);
+    std::list<std::wstring> out;
+
+    /* ---------- опции обхода ---------- */
+    auto opts = fs::directory_options::skip_permission_denied
+                | fs::directory_options::follow_directory_symlink;
+
+    std::error_code ec;
+    fs::recursive_directory_iterator it(root, opts, ec), end;
+
+    /* ---------- обход ---------- */
+    for (; it != end; it.increment(ec))
     {
-        std::list<std::wstring> _docPaths;
-        auto opt1 = std::filesystem::directory_options::skip_permission_denied;
-        auto opt2 = std::filesystem::directory_options::follow_directory_symlink;
-        auto iter = fs::recursive_directory_iterator(path, opt1 | opt2);
-        auto end_iter = fs::end(iter);
-        auto ec = std::error_code();
+        /* если во время increment возникла ошибка – пропускаем элемент */
+        if (ec) { ec.clear(); continue; }
 
-        for (; iter != end_iter; iter.increment(ec))
+        const fs::directory_entry& de = *it;
+
+        /* --- 1. исключённые каталоги -------------------------------- */
+        if (de.is_directory(ec))
         {
-            if (ec)
+            if (ec) { ec.clear(); continue; }
+
+            const std::wstring wDir = de.path().wstring();
+
+            bool excluded = std::any_of(excludeDirs.begin(), excludeDirs.end(),
+                                        [&wDir](const std::string& excl)
+                                        {
+                                            using convert_t = std::codecvt_utf8<wchar_t>;
+                                            std::wstring_convert<convert_t, wchar_t> conv;
+                                            return wDir.find(conv.from_bytes(excl)) == 0;
+                                        });
+
+            if (excluded)
             {
+                it.disable_recursion_pending();   // не заходить глубже
                 continue;
             }
-            auto p = *iter;
-            auto dirPath = p.path().wstring();
-            auto fName = p.path().string();
-
-            // Проверяем, если текущая директория находится в списке исключений
-            bool isExcluded = std::any_of(excludeDirs.begin(), excludeDirs.end(),
-                                          [&dirPath](const std::string& excludeDir) {
-                                              namespace fs = std::filesystem;
-                                              using convert_t = std::codecvt_utf8<wchar_t>;
-                                              std::wstring_convert<convert_t, wchar_t> strconverter;
-                                              return dirPath.find(strconverter.from_bytes(excludeDir)) == 0;
-                                          });
-
-            if (isExcluded)
-            {
-                iter.disable_recursion_pending();
-                continue;
-            }
-
-            auto trueExt = [fName](const std::list<std::string>& exts)
-            {
-                for (const auto& ext : exts) {
-
-                    if (ext == "")
-                    {
-                        if (fName.find('.') == std::string::npos)
-                            return true;
-                    }
-                    else
-                    {
-                        auto b = std::equal(fName.end() - ext.length(), fName.end(), ext.begin(),
-                                            [](char ch1, char ch2) { return tolower(ch1) == tolower(ch2); });
-                        if (b)
-                            return true;
-                    }
-                }
-                return false;
-            };
-
-            if (p.is_regular_file() && fs::file_size(p) > 10 && (!exts.size() || trueExt(exts)))
-                _docPaths.push_back(p.path().wstring());
+            continue;                             // папка нас не интересует
         }
 
-        return _docPaths;
-    };
+        /* --- 2. только regular_file --------------------------------- */
+        if (!de.is_regular_file(ec)) { ec.clear(); continue; }
 
-    return std::move(recursiveGetFileNamesByExtension(strconverter.from_bytes(dir)));
+        /* --- 3. размер > 10 байт ------------------------------------ */
+        auto fsize = de.file_size(ec);
+        if (ec || fsize < 10) { ec.clear(); continue; }
+
+        /* --- 4. проверка расширения --------------------------------- */
+        const std::string fileName = de.path().string();
+        auto matchExt = [&fileName](const std::string& ext) -> bool
+        {
+            if (ext.empty())
+                return fileName.find('.') == std::string::npos;     // «без точки»
+
+            if (ext.size() > fileName.size()) return false;
+
+            return std::equal(fileName.end() - ext.size(),
+                              fileName.end(),
+                              ext.begin(),
+                              [](char a, char b)
+                              { return std::tolower(a) == std::tolower(b); });
+        };
+
+        bool okExt = exts.empty() ||
+                     std::any_of(exts.begin(), exts.end(), matchExt);
+
+        if (okExt)
+            out.push_back(de.path().wstring());
+    }
+
+    return out;      // NRVO, явный move не нужен
 }
+
 
 
 bool folderExists(const std::wstring& path)
