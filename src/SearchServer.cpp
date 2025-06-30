@@ -11,8 +11,39 @@
 size_t get_dir_time;
 
 
+FileEvent merge(FileEvent old, FileEvent neu)
+{
+    if (neu == FileEvent::Removed || neu == FileEvent::RenamedOld)
+        return neu;                         // удаление всегда победит
+
+    if (neu == FileEvent::RenamedNew)       // «новое имя» = Added
+        neu = FileEvent::Added;
+
+    if (old == FileEvent::Removed)          // уже помечен удалённым
+        return old;
+
+    if (old == FileEvent::Added && neu == FileEvent::Modified)
+        return old;                         // Added+Modified == Added
+
+    return neu;                             // иначе последнее
+}
 
 
+
+
+namespace my_conv  {
+    // Преобразуем std::wstring в UTF-8 std::string
+    std::string wstringToUtf8(const std::wstring &wstr) {
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
+        return conv.to_bytes(wstr);
+    }
+
+    // Преобразуем UTF-8 std::string в std::wstring
+    std::wstring utf8ToWstring(const std::string &str) {
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
+        return conv.from_bytes(str);
+    }
+}
 
 
 search_server::setFileInd search_server::SearchServer::intersectionSetFiles(const set<string> &request) const {
@@ -56,20 +87,57 @@ search_server::setFileInd search_server::SearchServer::intersectionSetFiles(cons
     setFileInd result, first;
     list<Word> wordList;
 
-    auto getSetFromMap = [this](const std::string& word) {
+    auto getSetFromMap = [this](const std::string& word) -> setFileInd
+    {
         setFileInd s;
-        for(const auto& z:index->freqDictionary.at(word))
-            s.insert(z.first);
+
+        /* ───── новый путь ───── */
+        if (const auto* post = index->tryGetPosting(word))
+        {
+            std::cout << "[NEW] " << word << '\n';          // ← ВРЕМЕННЫЙ ЛОГ
+            for (const auto& [fileId, _] : *post)
+                s.insert(fileId);
+            return s;
+        }
+        return {};
+
+        /* ───── старый путь ──── */
+        /*
+        auto it = index->freqDictionary.find(word);
+        if (it != index->freqDictionary.end())
+        {
+            std::cout << "[OLD] " << word << '\n';          // ← ВРЕМЕННЫЙ ЛОГ
+            for (const auto& [fileId, _] : it->second)
+                s.insert(fileId);
+        }
         return s;
+         */
     };
 
-    for(const auto& word:request)
-        if(index->freqDictionary.find(word) != index->freqDictionary.end())
-            wordList.emplace_back(word, index->freqDictionary.at(word).size());
+
+
+    for (const auto& word : request)
+    {
+        /* 1.  Сначала пробуем найти posting-лист
+               через новый индекс (dictionary).          */
+        if (const auto* post = index->tryGetPosting(word); post)
+        {
+            wordList.emplace_back(word, post->size());
+        }
+            /* 2.  Если слово не найдено и сервер НЕ в режиме exact-search —
+                   просто пропускаем его (как и раньше).                   */
         else if (!settings.exactSearch)
+        {
             continue;
+        }
+            /* 3.  Режим exact-search и слово отсутствует —
+                   весь запрос не может быть выполнен.                     */
         else
-            return {};
+        {
+            return {};          // мгновенно выходим с пустым результатом
+        }
+    }
+
 
     if(!settings.exactSearch)
     {
@@ -232,6 +300,8 @@ void search_server::SearchServer::updateDocumentBase(const std::list<std::wstrin
         }).count();
 
 }
+
+
 void search_server::SearchServer::update()
 {
     try
@@ -242,7 +312,7 @@ void search_server::SearchServer::update()
         {
             addToLog("update() → index is null, creating new InvertedIndex");
             std::cout << "Load index" << std::endl;
-            index = new inverted_index::InvertedIndex();
+            index = new inverted_index::InvertedIndex(pool_);
             std::cout << "end load index" << std::endl;
             addToLog("update() → index created");
         }
@@ -290,7 +360,8 @@ void search_server::SearchServer::update()
 
             addToLog("Index database update completed! " +
                      std::to_string(index->docPaths.size()) + " files, " +
-                     std::to_string(index->freqDictionary.size()) +
+                     std::to_string(index->dictionary.size()) +
+
                      " unique words in dictionary. Time of update " +
                      std::to_string(time) + " seconds.");
 
@@ -300,8 +371,9 @@ void search_server::SearchServer::update()
             addToLog("update() → notifying all search waiters");
             cv_search_server.notify_all();
 
-            if (i % 9 == 0) {
+            if (i % 10 == 0) {
                 addToLog("update() → calling index->saveIndex()");
+                index->compact();
                 index->saveIndex();
                 addToLog("update() → saveIndex completed");
             }
@@ -327,17 +399,105 @@ void search_server::SearchServer::update()
 
 
 
+void search_server::SearchServer::pushFileEvent(FileEvent evt,
+                                 const std::wstring& path)
+{
+    if (!matchByExtensions(path)) return;
+
+    size_t h = std::hash<std::wstring>{}(path);
+
+    std::lock_guard lk(mtx_);
+
+    auto& st = evtMap_[h];          // создаётся по необходимости
+    st.evt  = (st.queued) ? merge(st.evt, evt) : evt;
+    st.path = path;
+
+    if (!st.queued) {               // впервые — кладём в очередь
+        pendingQ_.push(h);
+        st.queued = true;
+    }
+}
+
+void search_server::SearchServer::flushPending()
+{
+    std::queue<size_t> local;
+
+    {   std::lock_guard lk(mtx_);
+        std::swap(local, pendingQ_);
+    }
+
+    while (!local.empty())
+    {
+        size_t h = local.front(); local.pop();
+        FileEvent evt; std::wstring path;
+
+        {   std::lock_guard lk(mtx_);
+            auto it = evtMap_.find(h);
+            if (it == evtMap_.end()) continue;      // уже стерли
+            evt  = it->second.evt;
+            path = it->second.path;
+            evtMap_.erase(it);                      //   ← снимаем блок
+        }
+
+        switch (evt)
+        {
+            case FileEvent::Removed:
+            case FileEvent::RenamedOld:
+                index->enqueueFileDeletion(path);
+                break;
+            default:                                // Added / Modified / Ren.New
+                index->enqueueFileUpdate(path);
+                break;
+        }
+    }
+}
+
+
+void search_server::SearchServer::initWatchers(const Settings& settings)
+{
+    /* parent-dir → множество имён нужных подпапок */
+    std::unordered_map<std::wstring,
+            std::unordered_set<std::wstring>> need;
+
+    for (const auto& d8 : settings.dirs)
+    {
+        std::filesystem::path p = my_conv::utf8ToWstring(d8);
+        std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
+        std::wstring name   = p.filename().wstring();      // напр.  L"Data"
+        std::wcout << L"    [enqueueUpdate]  " << name << " " << parent  << std::endl;
+        need[parent].insert(name);
+    }
+
+    /* callback для файлов (из SearchServer) */
+    auto fileCb = [this](FileEvent evt, const std::wstring& full)
+    {
+        pushFileEvent(evt, full);
+    };
+
+    /* создаём по parent-каталогу один MultiDirWatcher */
+    for (auto& [parent, kids] : need)
+    {
+        /* фильтр: интересны только каталоги, имя которых в “kids” */
+        auto dirFilter = [kids](const std::wstring& n) -> bool
+        {
+            return kids.contains(n);
+        };
+
+        auto w = std::make_unique<MultiDirWatcher>(parent, dirFilter, fileCb);
+        w->start();
+        dirWatchers_.emplace_back(std::move(w));
+    }
+}
 
 
 
-
-
-
-
-search_server::SearchServer::SearchServer(const Settings& _settings) : time{}, index()
+search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::thread_pool& _pool) : time{}, index(), pool_{_pool}
 {
     settings = (_settings);
     trustSettings();
+
+    initWatchers(settings);
+
 
     // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
 
@@ -359,14 +519,9 @@ search_server::SearchServer::SearchServer(const Settings& _settings) : time{}, i
 
     threadUpdate = new std::thread(updateFunc);
     threadUpdate->detach();
-
+    flushThread_ = std::thread(&SearchServer::flushLoop, this);
 
 }
-
-
-
-
-
 
 
 void search_server::SearchServer::trustSettings() const {
@@ -448,6 +603,10 @@ void search_server::SearchServer::addToLog(const string &s) {
 search_server::SearchServer::~SearchServer() {
     /**
     Деструктор класса*/
+    dirWatchers_.clear();
+    stopFlush_ = true;
+    if (flushThread_.joinable())
+        flushThread_.join();
     delete  index;
     delete  threadUpdate;
     delete  threadAsio;
@@ -471,7 +630,7 @@ void search_server::SearchServer::dictonaryToLog() const {
 }
 
 void search_server::SearchServer::resume() {
-    {
+
         // std::unique_lock<std::mutex> lock{updateM};
         if(update_is_running || must_start_update)
             return;
@@ -479,8 +638,8 @@ void search_server::SearchServer::resume() {
         must_start_update = true;
         cv_start_scan_dirs.notify_one();
 
-    }
 }
+
 
 bool search_server::SearchServer::getIsUpdateRuning() const {
     return index->work;
@@ -506,17 +665,28 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
 
     filePath = strconverter.to_bytes(_index->docPaths.at(_fileInd));
 
-    auto checkWordAndFileInd =[_index,_fileInd] (const auto& word) {
-        return (_index->freqDictionary.find(word) != _index->freqDictionary.end() &&
-                _index->freqDictionary.find(word)->second.find(_fileInd) != _index->freqDictionary.find(word)->second.end());
+    auto checkWordAndFileInd = [_index, _fileInd](const std::string& w)
+    {
+        if (const auto* post = _index->tryGetPosting(w))
+            return post->find(_fileInd) != nullptr;  // true, если найдено
+
+        return false;
     };
 
 
 
-    for(const auto& word:_request)
+    for (const auto& word : _request)
     {
-        if(_exactSearch || checkWordAndFileInd(word))
-         sum += _index->freqDictionary.at(word).at(_fileInd);
+        if (_exactSearch || checkWordAndFileInd(word))
+        {
+            if (const auto* post = _index->tryGetPosting(word))
+            {
+                if (const uint16_t* p = post->find(_fileInd))
+                    sum += *p;
+            }
+            // else — если нужен резерв через старый freqDictionary, оставьте закомментированным
+            //     sum += _index->freqDictionary.at(word).at(_fileInd);
+        }
     }
 
     if(sum > max)
@@ -575,4 +745,57 @@ search_server::Settings *search_server::Settings::getSettings() {
 
     return settings;
 
+}
+
+void search_server::SearchServer::flushLoop()
+{
+    using namespace std::chrono_literals;
+    while (!stopFlush_)
+    {
+        std::this_thread::sleep_for(5s);
+        std::cout << " - flushPending - !" << std::endl;
+        flushPending();                   // ❱❱❱ вызываем раз в 5 сек
+    }
+}
+
+/*  Проверяем, подходит ли путь под список settings.extensions.
+    ""  в списке  →  разрешить файлы БЕЗ точки или с точкой в конце.         */
+bool search_server::SearchServer::matchByExtensions(const std::wstring& path) const
+{
+    using namespace std::filesystem;
+
+    /* Если список пуст -- фильтра нет → разрешаем всё */
+    if (settings.extensions.empty())
+        return true;
+
+    std::wstring file = std::filesystem::path(path).filename().wstring();
+
+    // позиция последней точки
+    auto pos = file.rfind(L'.');                 // npos ⇒ нет точки
+    bool hasDot   = pos != std::wstring::npos;
+    bool dotAtEnd = hasDot && pos == file.size() - 1;
+    bool noExt    = !hasDot || dotAtEnd;         // «без расширения»
+
+    for (const auto& e8 : settings.extensions)
+    {
+        std::wstring e (e8.begin(), e8.end());   // UTF-8 → UTF-16
+
+        /*  Пустая строка в конфиге значит: «разрешить файлы без расширения» */
+        if (e.empty())
+        {
+            if (noExt)
+                return true;
+            continue;
+        }
+
+        /*  Файл имеет расширение → сравниваем нечувствительно к регистру  */
+        if (!noExt && e.size() <= file.size() - pos - 1 &&
+            std::equal(e.begin(), e.end(),
+                       file.end() - e.size(),
+                       [](wchar_t a, wchar_t b){
+                           return towlower(a) == towlower(b);
+                       }))
+            return true;
+    }
+    return false;
 }

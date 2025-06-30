@@ -14,6 +14,9 @@
 
 #include <exception>
 #include <fstream>
+#include <io.h>
+#include <fcntl.h>
+#include <iostream>
 
 void myTerminateHandler() {
     std::ofstream log("fatal_crash.log", std::ios::app);
@@ -57,15 +60,20 @@ void writeBytesToFile(const std::vector<uint8_t>& bytes, const std::filesystem::
 int main() {
 
     using namespace std;
-/**/
+
     std::set_terminate(myTerminateHandler);
     SetUnhandledExceptionFilter(myUnhandledFilter);
+    std::locale::global(std::locale("Russian_Russia.866"));
+
+
+
+    boost::asio::thread_pool pool(std::thread::hardware_concurrency());
 
     auto settings = ConverterJSON::getSettings();
     TelegaWay::base_way_dir = "D:\\F12\\" + settings.year + ".db";
     TelegaWay::base_f12_dir = "D:\\F12\\base.db";
     TelegaWay::work_year = settings.year;
-    std::locale::global(std::locale("Russian_Russia.866"));
+
 
     SqlLogger::instance("log.db"); // инициализация
 
@@ -82,7 +90,7 @@ int main() {
 
     try {
         asio_server::Interface::setYear(settings.year);
-        search_server::SearchServer myServer(settings);
+        search_server::SearchServer myServer(settings, pool);
         boost::asio::io_context io_context;
         asio_server::Interface::setSearchServer(&myServer);
 
@@ -122,6 +130,7 @@ int main() {
             // system("cls");
         }
 
+        pool.join();
         // Ожидание завершения всех потоков
         for (auto& thread : thread_pool) {
             if (thread.joinable()) {

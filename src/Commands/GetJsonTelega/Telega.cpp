@@ -157,7 +157,7 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
     //    std::cout << base_name << std::endl;
         if (!std::filesystem::exists(base_name))
         {
-            std::cout << base_name << " - not exist -" << std::endl;
+    //        std::cout << base_name << " - not exist -" << std::endl;
             continue;
         }
         res.push_back(base_name);

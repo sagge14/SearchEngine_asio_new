@@ -60,6 +60,17 @@ public:
     [[nodiscard]] size_t size() const;
     std::tuple<setLastWriteTimeFiles, setLastWriteTimeFiles> getUpdate(const std::list<std::wstring>& vecDoc);
 
+    bool needUpdate(size_t hash, std::filesystem::file_time_type newTime) const;
+
+    /** Вставить новую пару (hash, time) либо обновить time старой.
+        mapHashDocPaths синхронизируем заодно.                     */
+    void upsert(size_t hash,
+                const std::wstring& path,
+                std::filesystem::file_time_type newTime);
+
+    /** Удалить запись, если она была. */
+    void erase(size_t hash);
+
     DocPaths() = default;
 
 private:

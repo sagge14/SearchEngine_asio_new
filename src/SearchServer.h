@@ -8,12 +8,23 @@
 #include <set>
 #include <condition_variable>
 
+#include "FileWatcherManager.h"
+#include "MultiWatcher.h"
+#include <codecvt>
+
+
 namespace search_server {
 
     using namespace std;
     typedef set <size_t> setFileInd;
     typedef list <pair<string, float>> listAnswer;
     typedef list <pair<listAnswer, string>> listAnswers;
+
+    struct PendingEvt {
+        FileEvent                evt;
+        std::wstring             path;
+    };
+
 
     enum class ErrorCodes {
         NAME,
@@ -131,15 +142,42 @@ namespace search_server {
         thread *threadUpdate{};
         thread *threadAsio{};
 
+
+        struct EvtState {
+            FileEvent          evt;       // последнее пришедшее событие
+            std::wstring       path;      // полный путь (для удобства)
+            bool               queued{false}; // уже лежит в pendingQ?
+        };
+
+        std::unordered_map<size_t, EvtState>  evtMap_;   // hash → state
+        std::queue<size_t>                    pendingQ_; // hash-и
+        std::mutex                            mtx_;
+
         boost::asio::io_context io_context;
         asio_server::AsioServer *asioServer{};
 
+        //FileWatcherManager watcherManager_;
+
+        std::vector<std::unique_ptr<MultiDirWatcher>> dirWatchers_;
+        boost::asio::thread_pool& pool_;
+
+        std::queue<PendingEvt>   pending_;      //  очередь
+        std::unordered_set<size_t> pendingHash_;
+          //  защита
+        void flushPending();                    //  обработать всё скопом
+
         mutable std::mutex updateM;
         mutable std::shared_mutex searchM;
+        mutable std::mutex pendingMtx_;
 
+        std::thread        flushThread_;
+        std::atomic<bool>  stopFlush_{false};
+
+        void flushLoop();                 // ← фоновая функция
 
         atomic<bool>update_is_running = false;
         atomic<bool>must_start_update = false;
+
         mutable std::condition_variable_any cv_search_server;
         mutable std::condition_variable_any cv_start_scan_dirs;
 
@@ -152,10 +190,13 @@ namespace search_server {
             @param addToLog функция добавление в @param logFile инфрормации о работе сервера.*/
 
         void trustSettings() const;
+        void initWatchers(const Settings& settings);
 
         bool checkHash(bool resetHash = false) const;
 
         setFileInd intersectionSetFiles(const std::set<string> &request) const;
+
+        bool matchByExtensions(const std::wstring& path) const;
 
         static std::set<string> getUniqWords(const string &text);
 
@@ -170,6 +211,8 @@ namespace search_server {
             @param myExp исключения выбрасываемые сервером.*/
 
         static void addToLog(const string &s);
+
+        void pushFileEvent(FileEvent evt, const std::wstring& path);
 
         struct myExp : public std::exception {
             ErrorCodes codeExp{};
@@ -201,7 +244,7 @@ namespace search_server {
 
         bool getUpdateStatus() const;
 
-        explicit SearchServer(const Settings &settings);
+        explicit SearchServer(const Settings &settings, boost::asio::thread_pool& _pool);
 
         //explicit SearchServer() = default;
 

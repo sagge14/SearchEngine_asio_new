@@ -2,8 +2,7 @@
 // Created by user on 01.02.2023.
 //
 #pragma once
-
-#include "TreadPool.h"
+#include <boost/asio/thread_pool.hpp>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -15,6 +14,13 @@
 #include <boost/serialization/access.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/unordered_map.hpp>
+#include <boost/serialization/string.hpp>
+#include "WordID.h"
+#include "PostingList.h"
+
+
 
 #include "DocPaths.h"
 
@@ -98,13 +104,37 @@ namespace inverted_index {
             @param logMutex мьютекс для разделения доступа между потоками к файлу 'logFile'.
             @param logFile файл для хранения информации о работе сервера. */
 
+
+        // В public-секции InvertedIndex
+        const PostingList* tryGetPosting(const std::string& w) const
+        {
+            uint32_t wid;
+            if (!wordIds.tryGet(w, wid))
+                return nullptr;
+            if (wid >= dictionary.size())
+                return nullptr;
+            const PostingList* post = &dictionary[wid];
+            return post->empty() ? nullptr : post;
+        }
+
+
+
+
         atomic<bool> work{};
         DocPaths docPaths;
         mutable mutex mapMutex;
         mutable mutex logMutex;
         mutable ofstream logFile;
-        unordered_map<string, mapEntry> freqDictionary;
-        mapDictionaryIterators wordIts;
+       // unordered_map<string, mapEntry> freqDictionary;
+     //   mapDictionaryIterators wordIts;
+
+        using mapEntry = std::unordered_map<size_t, size_t>;   // fileId → count
+      //  std::vector<mapEntry> dictionary;    // НОВЫЙ контейнер (WordID → posting list)
+        WordIdManager wordIds;               // то, что добавили на шаге 1
+        std::unordered_map<size_t, std::vector<uint32_t>> wordRefs;
+        std::vector<PostingList> dictionary;
+
+        boost::asio::thread_pool& pool_;
 
         friend class search_server::SearchServer;
         friend class search_server::RelativeIndex;
@@ -114,26 +144,31 @@ namespace inverted_index {
             @param addToLog функция добавление в 'logFile' инфрормации о работе сервера. */
 
         void fileIndexing(size_t _fileHash);
+        void safeEraseFile(size_t hash);
         void addToDictionary(const setLastWriteTimeFiles& ind, size_t threadCount = 0);
         void delFromDictionary(const setLastWriteTimeFiles& del);
         void addToLog(const string &_s) const;
         void reconstructWordIts();
-
+        void compact();
         friend class boost::serialization::access;
 
         template<class Archive>
         void save(Archive & ar, const unsigned int version) const {
             std::lock_guard<std::mutex> lock(mapMutex);
-            ar & freqDictionary;
+          //  ar & freqDictionary;
+            ar & dictionary;
             //   ar & wordIts;
+            ar & wordIds;
             ar & docPaths;
         }
 
         template<class Archive>
         void load(Archive & ar, const unsigned int version) {
             std::lock_guard<std::mutex> lock(mapMutex);
-            ar & freqDictionary;
+            //ar & freqDictionary;
+            ar & dictionary;
             //  ar & wordIts;
+            ar & wordIds;
             ar & docPaths;
             reconstructWordIts();
         }
@@ -150,9 +185,11 @@ namespace inverted_index {
             содержится в файле с индексом first - функция используется только для тестирования */
 
         void updateDocumentBase(const std::list<wstring> &vecPaths, size_t threadCount = 0);
-        mapEntry getWordCount(const string& word);
+        PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
-        InvertedIndex();
+        InvertedIndex(boost::asio::thread_pool& _pool);
+        bool enqueueFileUpdate(const std::wstring& path);
+        bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();
         void saveIndex();
     };

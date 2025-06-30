@@ -52,3 +52,48 @@ size_t DocPaths::size() const {
     /** Функция возвращающая количество индексируемых файлов*/
     return mapHashDocPaths.size();
 }
+
+bool DocPaths::needUpdate(size_t hash,
+                          std::filesystem::file_time_type newTime) const
+{
+    // 1) нет такого файла в docPaths2 ⇒ точно надо
+    // 2) есть, но timestamp другой ⇒ тоже надо
+    auto it = std::find_if(
+            docPaths2.begin(), docPaths2.end(),
+            [hash](const auto& p){ return p.first == hash; });
+
+    if (it == docPaths2.end())      return true;        // файл новый
+    if (it->second != newTime)      return true;        // изменился
+
+    return false;                                       // актуален
+}
+
+void DocPaths::upsert(size_t hash,
+                      const std::wstring& path,
+                      std::filesystem::file_time_type newTime)
+{
+    // Обновляем/вставляем в mapHashDocPaths
+    mapHashDocPaths[hash] = path;
+
+    // Обновляем/вставляем в docPaths2
+    auto it = std::find_if(
+            docPaths2.begin(), docPaths2.end(),
+            [hash](const auto& p){ return p.first == hash; });
+
+    if (it != docPaths2.end())
+        docPaths2.erase(it);
+
+    docPaths2.insert({hash, newTime});
+}
+
+void DocPaths::erase(size_t hash)
+{
+    mapHashDocPaths.erase(hash);
+
+    auto it = std::find_if(
+            docPaths2.begin(), docPaths2.end(),
+            [hash](const auto& p){ return p.first == hash; });
+
+    if (it != docPaths2.end())
+        docPaths2.erase(it);
+}
