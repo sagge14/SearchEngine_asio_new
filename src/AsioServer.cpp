@@ -2,7 +2,6 @@
 #include "SearchServer.h"
 #include "SQLite/mySql.h"
 #include "SqlLogger.h"
-
 #include <iostream>
 #include <memory>
 #include <utility>

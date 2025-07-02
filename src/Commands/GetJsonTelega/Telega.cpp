@@ -4,7 +4,6 @@
 
 #include "Telega.h"
 #include "SQLite/mySql.h"
-#include <set>
 #include <codecvt>
 #include <string>
 #include <regex>
@@ -67,7 +66,7 @@ std::vector<std::string> Telega::getBases(const std::string &_dir) {
 
 std::list<std::map<std::string,std::string>> Telega::findBase(const std::string& _condition, TYPE _type, bool single) {
 
-    std::string bases_dir, isp_podp_key, kr_key, from_to_key;
+    std::string bases_dir, isp_podp_key, kr_key, from_to_key, blank_key;
     const decltype(getBases(TYPE{})) *base;
     std::list<std::map<std::string,std::string>> result{};
 
@@ -91,9 +90,15 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
     auto condition = "where " + _condition;
 
     if (_type== TYPE::VHOD)
-        {isp_podp_key = "Familia"; base = &Telega::b_prm;  kr_key = "PrilName1"; from_to_key= "FFrom";}
+        {
+        isp_podp_key = "Familia"; base = &Telega::b_prm;
+        kr_key = "PrilName1"; from_to_key= "FFrom";
+        blank_key = "Copyes2";
+        }
     if (_type == TYPE::ISHOD)
-        {isp_podp_key = "Copyes";  base = &Telega::b_prd;  kr_key = "FFrom5";    from_to_key = "FFrom1";}
+        {isp_podp_key = "Copyes";  base = &Telega::b_prd;  kr_key = "FFrom5";
+            blank_key = "Blank";
+            from_to_key = "FFrom1";}
 
 
     auto limitOpt = extractLimit(condition);
@@ -104,11 +109,11 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
             std::cout << base_name << std::endl;
             std::cout << condition << std::endl;
-            SQL_INST.excSql(base_name,
-                            "select `index`, ddata, " + from_to_key + ", TelNo, PodpNo, DataPodp, " +
-                            isp_podp_key + ", " + kr_key + ", PrilName, KolPril, DirectTo, FileName from ARCHIVE " +
-                            condition);
-
+            auto sql_qry = "select `index`, ddata, " + from_to_key + ", TelNo, PodpNo, DataPodp, " +
+                           isp_podp_key + ", " + kr_key + ", PrilName, KolPril, DirectTo, FileName, " + blank_key +", Edit, GdeSHT from ARCHIVE " +
+                           condition;
+            SQL_INST.excSql(base_name, sql_qry);
+          //  std::cout << "records :" << SQL_INST.size() << std::endl;
             if (!SQL_EMPTY) {
                 for (const auto& row : SQL_INST) {
                     result.push_back(row);
@@ -194,7 +199,9 @@ void Telega::initTelega(const std::map<std::string, std::string> &_record) {
             //auto gggg = conv2::to_string(ff);
             kr = type == TYPE::VHOD ? _record.at("PrilName1") : _record.at("FFrom5");
             tel_num = type == TYPE::VHOD ? _record.at("TelNo") : num; ;
-
+            blank = type ==  TYPE::VHOD ? _record.at("Copyes2") : _record.at("Blank"); ;
+            last_mesto = _record.at("Edit");
+            gde_sht = _record.at("GdeSHT");
             try
             {
                 auto tt = conv2::to_wstring(from_to);

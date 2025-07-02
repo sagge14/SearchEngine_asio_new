@@ -8,9 +8,6 @@
 #include <codecvt>
 #include "Interface.h"
 
-size_t get_dir_time;
-
-
 FileEvent merge(FileEvent old, FileEvent neu)
 {
     if (neu == FileEvent::Removed || neu == FileEvent::RenamedOld)
@@ -27,9 +24,6 @@ FileEvent merge(FileEvent old, FileEvent neu)
 
     return neu;                             // иначе последнее
 }
-
-
-
 
 namespace my_conv  {
     // Преобразуем std::wstring в UTF-8 std::string
@@ -214,8 +208,6 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
     for(const auto& fileInd: intersectionSetFiles(request))
         Results.emplace_back(fileInd, request, index, settings.exactSearch);
 
-   // this_thread::sleep_for(std::chrono::seconds(5));
-
     Results.sort();
 
     int i = 0;
@@ -229,8 +221,6 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
         i++;
         if(i == settings.maxResponse)
         {
-          //  if(!updateM.try_lock())
-         //       updateM.unlock();
 
             work = false;
             std::cout << "Request finish!!!" << endl;
@@ -301,104 +291,6 @@ void search_server::SearchServer::updateDocumentBase(const std::list<std::wstrin
 
 }
 
-
-void search_server::SearchServer::update()
-{
-    try
-    {
-        addToLog("update() → started");
-
-        if (index == nullptr)
-        {
-            addToLog("update() → index is null, creating new InvertedIndex");
-            std::cout << "Load index" << std::endl;
-            index = new inverted_index::InvertedIndex(pool_);
-            std::cout << "end load index" << std::endl;
-            addToLog("update() → index created");
-        }
-
-        while (true)
-        {
-            std::cout << "Waiting..." << settings.indTime << std::endl;
-            addToLog("update() → waiting for cv_start_scan_dirs");
-
-            static size_t i = 1;
-
-            std::unique_lock<std::mutex> lock2{updateM};
-            cv_start_scan_dirs.wait_for(lock2, std::chrono::seconds(settings.indTime), [this] {
-                return !work && must_start_update;
-            });
-
-            addToLog("update() → passed wait_for, starting scan iteration #" + std::to_string(i));
-
-            std::cout << "Start finding directories " << i << std::endl;
-            addToLog("update() → calling Interface::getAllFilesFromDirs");
-            docPaths = Interface::getAllFilesFromDirs(settings.dirs, settings.extensions, settings.excludeDirs);
-            addToLog("update() → getAllFilesFromDirs completed");
-
-            std::cout << "End finding directories " << i << std::endl;
-
-            addToLog("update() → locking searchM for update");
-            std::unique_lock<std::shared_mutex> lock{searchM};
-
-            addToLog("update() → waiting for !work");
-            cv_search_server.wait(lock, [this] {
-                return !work;
-            });
-
-            std::cout << "Update start " << i << std::endl;
-            addToLog("update() → updateDocumentBase starting");
-
-            update_is_running = true;
-            must_start_update = false;
-
-            this->updateDocumentBase(docPaths);
-            addToLog("update() → updateDocumentBase completed");
-
-            time = getTimeOfUpdate();
-            addToLog("update() → getTimeOfUpdate = " + std::to_string(time));
-
-            addToLog("Index database update completed! " +
-                     std::to_string(index->docPaths.size()) + " files, " +
-                     std::to_string(index->dictionary.size()) +
-
-                     " unique words in dictionary. Time of update " +
-                     std::to_string(time) + " seconds.");
-
-            update_is_running = false;
-
-            std::cout << "Update complete, notifying search " << i << std::endl;
-            addToLog("update() → notifying all search waiters");
-            cv_search_server.notify_all();
-
-            if (i % 10 == 0) {
-                addToLog("update() → calling index->saveIndex()");
-                index->compact();
-                index->saveIndex();
-                addToLog("update() → saveIndex completed");
-            }
-
-            ++i;
-        }
-    }
-    catch (const std::exception& e)
-    {
-        addToLog("Error in update thread: " + std::string(e.what()));
-        delete index;
-        index = nullptr;
-        throw;
-    }
-    catch (...)
-    {
-        addToLog("Unknown fatal error in update thread (non-std::exception).");
-        delete index;
-        index = nullptr;
-        throw;
-    }
-}
-
-
-
 void search_server::SearchServer::pushFileEvent(FileEvent evt,
                                  const std::wstring& path)
 {
@@ -420,6 +312,7 @@ void search_server::SearchServer::pushFileEvent(FileEvent evt,
 
 void search_server::SearchServer::flushPending()
 {
+    //std::wcout << L" - flushstart " << std::endl;
     std::queue<size_t> local;
 
     {   std::lock_guard lk(mtx_);
@@ -491,35 +384,16 @@ void search_server::SearchServer::initWatchers(const Settings& settings)
 
 
 
-search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::thread_pool& _pool) : time{}, index(), pool_{_pool}
+search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::io_context& _io_context) : time{}, index(), io_context{_io_context}
 {
+
     settings = (_settings);
     trustSettings();
 
     initWatchers(settings);
-
-
+    index = new inverted_index::InvertedIndex(io_context);
+    boost::asio::post(io_context, []{ std::cout << " SearchServer::SearchServer ASYNC TEST!\n"; });
     // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
-
-    auto updateFunc = [this]()
-    {
-        while (true)
-        {
-            try
-            {
-                update();
-            }
-            catch (const std::exception& e)
-            {
-                addToLog("Restarting update thread due to error: " + std::string(e.what()));
-                std::this_thread::sleep_for(std::chrono::seconds(5)); // Задержка перед перезапуском
-            }
-        }
-    };
-
-    threadUpdate = new std::thread(updateFunc);
-    threadUpdate->detach();
-    flushThread_ = std::thread(&SearchServer::flushLoop, this);
 
 }
 
@@ -535,11 +409,6 @@ void search_server::SearchServer::trustSettings() const {
 
     using convert_t = std::codecvt_utf8<wchar_t>;
     std::wstring_convert<convert_t, wchar_t> strconverter;
-
-    auto allFilesNotExist = [this](){
-        return all_of(settings.files.begin(),settings.files.end(), [](auto path) {
-                return !filesystem::exists(filesystem::path(path));});
-        };
 
     if(settings.name.empty())
         throw(myExp(ErrorCodes::NAME));
@@ -605,8 +474,6 @@ search_server::SearchServer::~SearchServer() {
     Деструктор класса*/
     dirWatchers_.clear();
     stopFlush_ = true;
-    if (flushThread_.joinable())
-        flushThread_.join();
     delete  index;
     delete  threadUpdate;
     delete  threadAsio;
@@ -635,13 +502,15 @@ void search_server::SearchServer::resume() {
         if(update_is_running || must_start_update)
             return;
 
-        must_start_update = true;
-        cv_start_scan_dirs.notify_one();
+    must_start_update = true;
+    updateStep();
+
 
 }
 
 
 bool search_server::SearchServer::getIsUpdateRuning() const {
+    std::cout << " get index wordT! - " << index->work << " "  <<true << endl;
     return index->work;
 }
 
@@ -747,16 +616,6 @@ search_server::Settings *search_server::Settings::getSettings() {
 
 }
 
-void search_server::SearchServer::flushLoop()
-{
-    using namespace std::chrono_literals;
-    while (!stopFlush_)
-    {
-        std::this_thread::sleep_for(5s);
-        std::cout << " - flushPending - !" << std::endl;
-        flushPending();                   // ❱❱❱ вызываем раз в 5 сек
-    }
-}
 
 /*  Проверяем, подходит ли путь под список settings.extensions.
     ""  в списке  →  разрешить файлы БЕЗ точки или с точкой в конце.         */
@@ -799,3 +658,42 @@ bool search_server::SearchServer::matchByExtensions(const std::wstring& path) co
     }
     return false;
 }
+
+
+void search_server::SearchServer::updateStep()
+{
+    std::unique_lock<std::mutex> lock2{updateM};
+    if (update_is_running || index->work) return; // Защита от гонок, если задача уже идет
+
+    addToLog("updateStep() → started");
+
+    if (index == nullptr)
+    {
+        index = new inverted_index::InvertedIndex(io_context);
+        addToLog("updateStep() → index created");
+    }
+
+    docPaths = Interface::getAllFilesFromDirs(settings.dirs, settings.extensions, settings.excludeDirs);
+
+    std::unique_lock<std::shared_mutex> lock{searchM};
+    cv_search_server.wait(lock, [this] { return !work; });
+
+    update_is_running = true;
+    must_start_update = false;
+
+    this->updateDocumentBase(docPaths);
+
+    time = getTimeOfUpdate();
+
+    addToLog("Index database update completed! " +
+             std::to_string(index->docPaths.size()) + " files, " +
+             std::to_string(index->dictionary.size()) +
+             " unique words in dictionary. Time of update " +
+             std::to_string(time) + " seconds.");
+
+    update_is_running = false;
+    must_start_update = false;
+    cv_search_server.notify_all();
+}
+
+

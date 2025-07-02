@@ -1,22 +1,22 @@
 #include <iostream>
 #include <thread>
 #include <vector>
-
 #include "SearchServer.h"
 #include "ConverterJSON.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "AsioServer.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
-
-#include <filesystem>
-
 #include "SqlLogger.h"
-
 #include <exception>
 #include <fstream>
-#include <io.h>
-#include <fcntl.h>
-#include <iostream>
+#include <string>
+#include "scheduler/PeriodicTaskManager.h"
+#include "scheduler/TaskID.h"
+#include "scheduler/UpdateIndexTask.h"
+#include "scheduler/PeriodicUpdateTask.h"
+#include "scheduler/FlushPendingTask.h"
+#include "scheduler/BackupTask.h"
+#include <windows.h>
 
 void myTerminateHandler() {
     std::ofstream log("fatal_crash.log", std::ios::app);
@@ -24,8 +24,8 @@ void myTerminateHandler() {
     std::abort(); // обязательно, иначе программа "зависнет"
 }
 
-#include <windows.h>
-#include <dbghelp.h>
+
+
 
 LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     std::ofstream log("crash.log", std::ios::app);
@@ -34,29 +34,6 @@ LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 
-
-#include <codecvt>
-namespace cc3  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
-}
-void writeBytesToFile(const std::vector<uint8_t>& bytes, const std::filesystem::path& filePath) {
-    std::ofstream outFile(filePath, std::ios::binary);
-    if (!outFile) {
-        throw std::runtime_error("Failed to open file for writing: " + filePath.string());
-    }
-    outFile.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    outFile.close();
-}
 int main() {
 
     using namespace std;
@@ -65,15 +42,13 @@ int main() {
     SetUnhandledExceptionFilter(myUnhandledFilter);
     std::locale::global(std::locale("Russian_Russia.866"));
 
-
-
-    boost::asio::thread_pool pool(std::thread::hardware_concurrency());
-
     auto settings = ConverterJSON::getSettings();
     TelegaWay::base_way_dir = "D:\\F12\\" + settings.year + ".db";
     TelegaWay::base_f12_dir = "D:\\F12\\base.db";
     TelegaWay::work_year = settings.year;
 
+
+    auto jobs = ConverterJSON::parseBackupJobs("Backup.json");
 
     SqlLogger::instance("log.db"); // инициализация
 
@@ -88,22 +63,36 @@ int main() {
     Telega::b_prm = Telega::getBases(Telega::TYPE::VHOD);
     Telega::b_prm = Telega::getBases(Telega::TYPE::ISHOD);
 
+
     try {
-        asio_server::Interface::setYear(settings.year);
-        search_server::SearchServer myServer(settings, pool);
         boost::asio::io_context io_context;
-        asio_server::Interface::setSearchServer(&myServer);
-
-        auto asioServer = std::make_shared<asio_server::AsioServer>(io_context, settings.port);
-
-        // Создание пула потоков
-        const size_t thread_pool_size = std::thread::hardware_concurrency();
+        [[maybe_unused]] auto work_guard = boost::asio::make_work_guard(io_context); // <--- !
         std::vector<std::thread> thread_pool;
-        for (size_t i = 0; i < thread_pool_size; ++i) {
+        for (size_t i = 0; i < std::thread::hardware_concurrency(); ++i) {
             thread_pool.emplace_back([&io_context]() {
                 io_context.run();
             });
         }
+
+        PeriodicTaskManager<TaskId> scheduler;
+        asio_server::Interface::setYear(settings.year);
+        search_server::SearchServer myServer(settings, io_context);
+        asio_server::Interface::setSearchServer(&myServer);
+
+        scheduler.addTask<FlushPendingTask>(TaskId::FlushPendingTask, io_context, std::chrono::seconds(5), &myServer);
+        scheduler.addTask<PeriodicUpdateTask>(TaskId::PeriodicUpdateTask, io_context, std::chrono::seconds(settings.indTime), &myServer);
+
+        for (const auto& group : jobs) {
+            scheduler.addTask<BackupTask>(
+                    TaskId::BackupTask,
+                    io_context,
+                    std::chrono::seconds(group.period_sec),
+                    group.backup_dir,
+                    group.targets
+            );
+        }
+
+        [[maybe_unused]] auto asioServer = std::make_shared<asio_server::AsioServer>(io_context, settings.port);
 
         string command;
 
@@ -126,12 +115,8 @@ int main() {
                 cout << "Unknown command" << endl;
             }
 
-            // Очистка экрана
-            // system("cls");
         }
 
-        pool.join();
-        // Ожидание завершения всех потоков
         for (auto& thread : thread_pool) {
             if (thread.joinable()) {
                 thread.join();
@@ -144,8 +129,6 @@ int main() {
         search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
     }
 
-    // Очистка экрана
-    // system("cls");
     std::cout << "---Bye, bye!---" << endl;
     system("pause");
 

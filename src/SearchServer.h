@@ -153,33 +153,29 @@ namespace search_server {
         std::queue<size_t>                    pendingQ_; // hash-и
         std::mutex                            mtx_;
 
-        boost::asio::io_context io_context;
+        boost::asio::io_context& io_context;
         asio_server::AsioServer *asioServer{};
 
         //FileWatcherManager watcherManager_;
 
         std::vector<std::unique_ptr<MultiDirWatcher>> dirWatchers_;
-        boost::asio::thread_pool& pool_;
 
         std::queue<PendingEvt>   pending_;      //  очередь
         std::unordered_set<size_t> pendingHash_;
           //  защита
-        void flushPending();                    //  обработать всё скопом
+
 
         mutable std::mutex updateM;
         mutable std::shared_mutex searchM;
         mutable std::mutex pendingMtx_;
 
-        std::thread        flushThread_;
         std::atomic<bool>  stopFlush_{false};
 
-        void flushLoop();                 // ← фоновая функция
 
         atomic<bool>update_is_running = false;
         atomic<bool>must_start_update = false;
 
         mutable std::condition_variable_any cv_search_server;
-        mutable std::condition_variable_any cv_start_scan_dirs;
 
         /** @param trustSettings функция проверки корректности настроек сервера.*
             @param checkHash функция для сравнения хэша последнего и очередного запроса.*
@@ -240,16 +236,16 @@ namespace search_server {
 
         void dictonaryToLog() const;
 
-        void update();
 
         bool getUpdateStatus() const;
 
-        explicit SearchServer(const Settings &settings, boost::asio::thread_pool& _pool);
-
-        //explicit SearchServer() = default;
+        explicit SearchServer(const Settings &settings, boost::asio::io_context& _io_context);
 
         void resume();
+        void flushPending();                    //  обработать всё скопом
 
+
+        void updateStep();
         ~SearchServer();
 
         /**

@@ -17,6 +17,7 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <boost/serialization/string.hpp>
+#include <boost/asio/io_context.hpp>
 #include "WordID.h"
 #include "PostingList.h"
 
@@ -134,7 +135,7 @@ namespace inverted_index {
         std::unordered_map<size_t, std::vector<uint32_t>> wordRefs;
         std::vector<PostingList> dictionary;
 
-        boost::asio::thread_pool& pool_;
+        boost::asio::io_context& io_;
 
         friend class search_server::SearchServer;
         friend class search_server::RelativeIndex;
@@ -145,7 +146,7 @@ namespace inverted_index {
 
         void fileIndexing(size_t _fileHash);
         void safeEraseFile(size_t hash);
-        void addToDictionary(const setLastWriteTimeFiles& ind, size_t threadCount = 0);
+        void addToDictionary(const setLastWriteTimeFiles& ind, std::function<void()> on_done);
         void delFromDictionary(const setLastWriteTimeFiles& del);
         void addToLog(const string &_s) const;
         void reconstructWordIts();
@@ -187,7 +188,7 @@ namespace inverted_index {
         void updateDocumentBase(const std::list<wstring> &vecPaths, size_t threadCount = 0);
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
-        InvertedIndex(boost::asio::thread_pool& _pool);
+        InvertedIndex(boost::asio::io_context& _io);
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();

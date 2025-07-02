@@ -23,6 +23,9 @@ struct Telega {
     std::string tel_num;
     std::string pril_name;
     std::string pril_count;
+    std::string blank;
+    std::string last_mesto;
+    std::string gde_sht;
     float rel;
 
     static inline std::vector<std::string> b_prm = {};
@@ -69,6 +72,9 @@ public:
         MOVE(rel);
         MOVE(pril_name);
         MOVE(pril_count);
+        MOVE(blank);
+        MOVE(last_mesto);
+        MOVE(gde_sht);
         return *this;
     }
     bool operator==(const Telega &other) const

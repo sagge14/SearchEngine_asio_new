@@ -72,76 +72,50 @@ void inverted_index::InvertedIndex::updateDocumentBase(const std::list<wstring> 
         throw;
     }
 
-    try {
-        addToLog("updateDocumentBase() → calling addToDictionary() with threadCount = " + std::to_string(threadCount));
-        addToDictionary(ind, threadCount);
-        addToLog("updateDocumentBase() → addToDictionary() done");
-    } catch (const std::exception& e) {
-        addToLog("updateDocumentBase() → exception in addToDictionary(): " + std::string(e.what()));
+    // Всё ниже — ТОЛЬКО асинхронно через callback!
+    addToLog("updateDocumentBase() → calling addToDictionary() with threadCount = " + std::to_string(threadCount));
+    addToDictionary(ind,  [this] {
         work = false;
-        throw;
-    }
+        addToLog("updateDocumentBase() → completed successfully (callback)");
 
-    work = false;
-    addToLog("updateDocumentBase() → completed successfully");
-    // ---------- после завершения пересканирования ----------
-    {
         std::ostringstream oss;
         oss << "updateDocumentBase() → completed successfully; "
-            << "dictionary="   << dictionary.size()    // уникальных слов
-            << ", wordRefs="   << wordRefs.size()      // файлов с posting'ами
+            << "dictionary="   << dictionary.size()
+            << ", wordRefs="   << wordRefs.size()
             << ", RAM="        << std::fixed << std::setprecision(1)
             << process_memory() / (1024.0 * 1024) << " MB";
         addToLog(oss.str());
-    }
-// --------------------------------------------------------
-
-
+    });
+    addToLog("updateDocumentBase() → addToDictionary() dispatched (async, wait for callback)");
 }
 
 
-void inverted_index::InvertedIndex::addToDictionary(const setLastWriteTimeFiles& ind, size_t _threadCount) {
-/** Индексирование файлов осуществляется в пуле потоков, количество потоков в пуле опеределяется
- * @param _threadCount. - если параметр пуст то выбирается по количеству ядер процессора,
- * если параметр больше количества файлов, то приравнивается количеству файлов. */
-/*
-    size_t threadCount = _threadCount ? _threadCount : thread::hardware_concurrency();
-    threadCount = docPaths.size() < threadCount ? docPaths.size() : threadCount;
 
-    auto oneInd = [this](size_t _hashFile)
-    {
-        fileIndexing(_hashFile);
-    };
+void inverted_index::InvertedIndex::addToDictionary(
+        const setLastWriteTimeFiles& ind,
+        std::function<void()> on_done // <-- КОЛБЕК
+) {
+    if (ind.empty()) {
+        if (on_done) on_done();
+        return;
+    }
 
-*/
-   // thread_pool pool(threadCount);
+    auto counter = std::make_shared<std::atomic<int>>(ind.size());
 
-    std::atomic<size_t> counter = ind.size();
-    std::promise<void> all_done;
-    auto all_done_future = all_done.get_future();
-    std::cout << "start add tusk in pool" << std::endl;
-    for(auto i:ind) {
+    for (auto i : ind) {
         auto hash_file = i.first;
-        boost::asio::post(pool_, [this, hash_file, &counter, &all_done]() {
-            std::cout << "tusk run" << hash_file << std::endl;
+     //   std::cout << "start task " << hash_file << endl;
+        boost::asio::post(io_, [this, hash_file, counter, on_done]() {
+
             fileIndexing(hash_file);
-            if (--counter == 0) {
-                all_done.set_value();
+            if (--(*counter) == 0 && on_done) {
+                // Гарантируем, что обработчик вызовется в том же io_context
+                boost::asio::post(io_, on_done);
             }
         });
     }
-    if (ind.empty())
-        all_done.set_value();
-
-    all_done_future.wait(); // <-- Здесь поток main заблокируется, пока все задачи не выполнятся
-
-
-/*
-    for(auto i:ind)
-        pool.add_task(oneInd,i.first);
-
-    pool.wait_all();*/
 }
+
 
 void inverted_index::InvertedIndex::fileIndexing(size_t _fileHash)
 {
@@ -425,7 +399,7 @@ inverted_index::InvertedIndex::~InvertedIndex() {
     saveIndex();
 }
 
-inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& _pool) : pool_{_pool} {
+inverted_index::InvertedIndex::InvertedIndex(boost::asio::io_context& _io) : io_(_io) {
     {
         // Проверка наличия файла с индексом
         if (std::filesystem::exists("inverted_index3.dat")) {
@@ -488,7 +462,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
                    << path << std::endl;
         return false;
     }
-
+    boost::asio::post(io_, []{ std::cout << "enqueueFileUpdate ASYNC TEST!\n"; });
     fs::file_time_type ts   = fs::last_write_time(path);
     size_t             hash = std::hash<std::wstring>{}(path);
 
@@ -513,7 +487,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
     }
 
     /* ── ставим пересчёт в пул ───────────────────── */
-    boost::asio::post(pool_, [this, hash, p = std::wstring(path)]()
+    boost::asio::post(io_, [this, hash, p = std::wstring(path)]()
     {
         try {
         //    std::wcout << L"[fileIndexing] start  " << p << std::endl;
@@ -542,7 +516,7 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
     /*  Ставим тяжёлую работу в общий thread_pool.
         Вся логика выполняется под mapMutex,
         поэтому posting-листы и wordRefs остаются согласованными.  */
-    boost::asio::post(pool_, [this, hash]()
+    boost::asio::post(io_, [this, hash]()
     {
         std::lock_guard<std::mutex> lock(mapMutex);
 
