@@ -74,8 +74,13 @@ void BackupTask::backupFile(const BackupTarget& target, const std::string& time_
         std::cerr << "Backup: Source file not found: " << target.src << std::endl;
         return;
     }
-    fs::path base_backup = backup_root_ / (target.src.filename().string() + "_backup");
-    fs::create_directories(base_backup.parent_path());
+
+    // Создаём уникальное имя для бэкапа: bases_archive.db3_base
+    auto fname = target.src.parent_path().filename().string() + "_" +
+                 target.src.filename().string() + "_base";
+    fs::path base_backup = backup_root_ / fname;
+
+    fs::create_directories(base_backup);
 
     try {
         if (!fs::exists(base_backup / target.src.filename())) {
@@ -87,12 +92,13 @@ void BackupTask::backupFile(const BackupTarget& target, const std::string& time_
         if (fs::last_write_time(target.src) <= fs::last_write_time(base_backup / target.src.filename()))
             return;
 
-        fs::path version_dir = backup_root_ / (target.src.filename().string() + "_" + time_str);
+        // Версионная папка
+        auto vname = target.src.parent_path().filename().string() + "_" +
+                     target.src.filename().string() + "_" + time_str;
+        fs::path version_dir = backup_root_ / vname;
         fs::create_directories(version_dir);
 
-        // Вот тут главное:
         fs::path dst = version_dir / target.src.filename();
-        fs::create_directories(dst.parent_path()); // <-- создаём папку для файла!
         fs::copy_file(target.src, dst, fs::copy_options::overwrite_existing);
 
         fs::copy_file(target.src, base_backup / target.src.filename(), fs::copy_options::overwrite_existing);

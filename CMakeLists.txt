@@ -18,7 +18,7 @@ include_directories(${MINIZIP_DIR}/include)
 link_directories(${MINIZIP_DIR}/lib)
 
 # Поиск Boost библиотек
-find_package(Boost 1.85 REQUIRED COMPONENTS system filesystem serialization)
+find_package(Boost 1.85 REQUIRED COMPONENTS system filesystem serialization headers)
 
 if(Boost_FOUND)
     message(STATUS "Boost_INCLUDE_DIRS: ${Boost_INCLUDE_DIRS}")
@@ -74,6 +74,7 @@ file(GLOB_RECURSE test_SRCS
 
 add_executable(SearchEngine_test ${test_SRCS})
 
+add_compile_definitions(BOOST_ASIO_HAS_CO_AWAIT)
 #add_definitions(-D_ITERATOR_DEBUG_LEVEL=0)
 
 # Линковка с библиотеками для тестов

@@ -34,13 +34,132 @@ LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 
+
+#include <iostream>
+#include <coroutine>
+#include <chrono>
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+
+using namespace std::chrono_literals;
+
+// === Минимальный планировщик ===
+
+std::queue<std::coroutine_handle<>> task_queue;
+std::mutex queue_mutex;
+std::condition_variable queue_cv;
+
+void schedule(std::coroutine_handle<> h) {
+    {
+        std::lock_guard lock(queue_mutex);
+        task_queue.push(h);
+    }
+    queue_cv.notify_one();
+}
+
+void run_loop() {
+    while (true) {
+        std::coroutine_handle<> h;
+        {
+            std::unique_lock lock(queue_mutex);
+            queue_cv.wait(lock, [] { return !task_queue.empty(); });
+            h = task_queue.front();
+            task_queue.pop();
+        }
+        if (h)
+            h.resume();
+    }
+}
+
+// === Awaitable Sleep ===
+
+struct SleepAwaitable {
+    int ms;
+    std::coroutine_handle<> continuation;
+
+    bool await_ready() const noexcept { return false; }
+
+    void await_suspend(std::coroutine_handle<> h) {
+        continuation = h;
+        std::thread([this]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            schedule(continuation);
+        }).detach();
+    }
+
+    void await_resume() const noexcept {}
+};
+
+// === Корутина-задача ===
+
+struct Task {
+    struct promise_type;
+    using handle_type = std::coroutine_handle<promise_type>;
+
+    Task(handle_type h) : coro(h) {}
+    Task(const Task&) = delete;
+    Task(Task&& t) noexcept : coro(t.coro) { t.coro = nullptr; }
+    ~Task() { if (coro) coro.destroy(); }
+
+    handle_type coro;
+
+    struct promise_type {
+        Task get_return_object() {
+            return Task{handle_type::from_promise(*this)};
+        }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+};
+
+// === Клиенты ===
+
+Task clientA() {
+    while (true) {
+        std::cout << "11 " << std::this_thread::get_id() << ")\n";
+        co_await SleepAwaitable{1000};
+        std::cout << "12\n";
+        co_await SleepAwaitable{500};
+    }
+}
+
+Task clientB() {
+    while (true) {
+        std::cout << "21 " << std::this_thread::get_id() << ")\n";
+        co_await SleepAwaitable{1500};
+        std::cout << "22\n";
+        co_await SleepAwaitable{500};
+    }
+}
+
+// === main ===
+
+
+
+
+
+
+
+
+
+
 int main() {
+    std::locale::global(std::locale("Russian_Russia.866"));
+    /*auto a = clientA();
+    auto b = clientB();
 
-    using namespace std;
+    schedule(a.coro);
+    schedule(b.coro);
 
+    run_loop();
+*/
     std::set_terminate(myTerminateHandler);
     SetUnhandledExceptionFilter(myUnhandledFilter);
-    std::locale::global(std::locale("Russian_Russia.866"));
+
 
     auto settings = ConverterJSON::getSettings();
     TelegaWay::base_way_dir = "D:\\F12\\" + settings.year + ".db";
@@ -91,7 +210,7 @@ int main() {
                     group.targets
             );
         }
-
+        using namespace std;
         [[maybe_unused]] auto asioServer = std::make_shared<asio_server::AsioServer>(io_context, settings.port);
 
         string command;
@@ -129,7 +248,7 @@ int main() {
         search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
     }
 
-    std::cout << "---Bye, bye!---" << endl;
+    std::cout << "---Bye, bye!---" << std::endl;
     system("pause");
 
     return 0;
