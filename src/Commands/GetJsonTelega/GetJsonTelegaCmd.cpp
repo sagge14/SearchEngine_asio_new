@@ -48,7 +48,7 @@ std::vector<uint8_t> GetJsonTelegaIshCmd::execute(const std::vector<uint8_t>& _d
 std::vector<uint8_t> GetSqlJsonAnswearCmd::execute(const std::vector<uint8_t>& _data) {
 
 
-    if(server_->getIsUpdateRuning())
+    if(server_->getIsUpdateRunning())
     {
         std::string update = "update";
         return std::vector<uint8_t>(update.begin(), update.end());
@@ -71,6 +71,10 @@ std::vector<uint8_t> GetSqlJsonAnswearCmd::execute(const std::vector<uint8_t>& _
     {
         auto fs_path = std::filesystem::path{std_str_file_path};
         auto num = Telega::getNumFromFileName(fs_path);
+
+        if(num.empty())
+            continue;
+
         auto type= Telega::getTypeFromDir(fs_path);
 
         if((set_num_type.insert({num,type}).second))

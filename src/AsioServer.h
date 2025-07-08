@@ -4,8 +4,6 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/experimental/channel.hpp>
-
-
 #include <boost/asio.hpp>
 #include <cstdint>
 #include <fstream>
@@ -76,22 +74,30 @@ namespace asio_server
         using WriteItem = std::variant<asio_server::Header, std::shared_ptr<std::vector<BYTE>>,
         std::filesystem::path>;
 
-
-       // std::mutex v_data_mutex;
-        Header header_{};
         tcp::socket socket_;
-        //std::mutex socket_mutex;
+        Header header_{};
+
         std::vector<BYTE> v_data_{};
-       // std::vector<BYTE> binFile_{};
         std::string request_;
         uint_fast32_t userId_{};
         std::string userName_ = "default_user";
-        boost::asio::experimental::channel<void(boost::system::error_code, WriteItem)> write_channel_;
+
+
         std::unique_ptr<std::ifstream> file_stream;
+
+        boost::asio::experimental::channel<void(boost::system::error_code, WriteItem)> write_channel_;
 
         void commandExec();
         bool trustCommand();
         std::string getRemoteIP() const;
+
+        template<typename T>
+        bool safe_send_to_channel(T&& item);
+
+        template<typename... Args>
+        bool safe_send_to_channel(Args&&... args) {
+            return (... && safe_send_to_channel(std::forward<Args>(args)));
+        }
 
         boost::asio::awaitable<void> readLoop();
         boost::asio::awaitable<void> writeLoop();
@@ -101,7 +107,7 @@ namespace asio_server
     public:
 
         void start();
-        explicit session(tcp::socket socket) : socket_(std::move(socket)), write_channel_(socket_.get_executor(), 100000){};
+        explicit session(tcp::socket socket) : socket_(std::move(socket)), write_channel_(socket_.get_executor(), 2000){};
        ~session();
 
     };
@@ -110,8 +116,6 @@ namespace asio_server
     {
     public:
         AsioServer(boost::asio::io_context& io_context, short port);
-        //boost::asio::io_context* io_context_;
-
 
     private:
         void do_accept();

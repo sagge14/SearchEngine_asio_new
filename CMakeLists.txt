@@ -56,7 +56,7 @@ include(GoogleTest)
 enable_testing()
 
 # Создание исполняемого файла для основного проекта
-add_executable(SearchEngine ${all_SRCS} main.cpp src/SerializationHelpers.h)
+add_executable(SearchEngine ${all_SRCS} main.cpp)
 
 
 # Линковка с библиотеками Boost, GoogleTest и nlohmann_json

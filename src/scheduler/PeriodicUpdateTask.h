@@ -2,7 +2,7 @@
 #pragma once
 #include "scheduler/AbstractScheduledTask.h"
 #include <memory>
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 
 class PeriodicUpdateTask : public AbstractScheduledTask {
     search_server::SearchServer *server_;

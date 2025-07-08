@@ -1,5 +1,5 @@
 #include "AsioServer.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 #include "SQLite/mySql.h"
 #include "SqlLogger.h"
 #include <iostream>
@@ -91,11 +91,17 @@ boost::asio::awaitable<void> asio_server::session::readLoop() {
             std::cout << "Received all data. Processing..." << std::endl;
             commandExec();
         }
+    } catch (const boost::system::system_error& e) {
+        if (e.code() == boost::asio::error::eof) {
+            search_server::SearchServer::addToLog("Клиент закрыл соединение (" + getRemoteIP() + ")");
+        } else {
+            search_server::SearchServer::addToLog(std::string("Ошибка в readLoop: ") + e.what());
+        }
 
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in readLoop: ") + e.what());
         socket_.close();
+        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
+
 }
 
 boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
@@ -127,10 +133,10 @@ boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
 
         boost::system::error_code ec;
         co_await boost::asio::async_write(socket_, boost::asio::buffer(*buffer), boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-
         if (ec) {
             search_server::SearchServer::addToLog("Ошибка при отправке: " + ec.message());
             socket_.close(); // <--- обязательно!
+            logutil::log(userName_,"EMPTY","DISCONNECT");
             co_return;
         }
 
@@ -139,19 +145,17 @@ boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
 
 void  asio_server::session::commandExec() {
     try {
+
         // Обработка команды
         std::vector<BYTE> answer;
         PersonalRequest personalRequest{};
         personalRequest.request_type = getTextCommand(header_.command);
-
-
 
         if (header_.command == COMMAND::SOMEERROR)
         {
             write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
             return;
         }
-
 
         if (header_.command == COMMAND::GETBINFILE)
         {
@@ -170,8 +174,10 @@ void  asio_server::session::commandExec() {
             }
             else
             {
+
                 file_size = std::filesystem::file_size(file_path);
                 header_.size = static_cast<std::size_t>(file_size);
+
                 write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
                 write_channel_.try_send(boost::system::error_code{}, file_path);
             }
@@ -179,6 +185,7 @@ void  asio_server::session::commandExec() {
         }
         else
         {
+
             if (header_.command == COMMAND::USER_REGISTRY)
             {
                 userName_ = std::string(v_data_.begin(), v_data_.end());
@@ -189,6 +196,7 @@ void  asio_server::session::commandExec() {
             {
                 answer = Interface::execCommand(header_.command, v_data_);
             }
+
             auto request = std::string(v_data_.begin(), v_data_.end());
             if(header_.command == COMMAND::LOAD_TLG_TO_SEND || header_.command == COMMAND::LOAD_RAZN)
                 personalRequest.request = getTextCommand(header_.command);
@@ -198,9 +206,7 @@ void  asio_server::session::commandExec() {
             header_.size = answer.size();
 
             write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
-            write_channel_.try_send(boost::system::error_code{}, std::make_shared<std::vector<BYTE>>(answer));         // потом сами данные
-
-         //   startWrite(answer);
+            write_channel_.try_send(boost::system::error_code{}, std::make_shared<std::vector<BYTE>>(answer)); // потом сами данные
 
         }
 
@@ -211,6 +217,7 @@ void  asio_server::session::commandExec() {
     } catch (const std::exception& e) {
         search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
         socket_.close();
+        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
 }
 
@@ -344,6 +351,7 @@ boost::asio::awaitable<void> asio_server::session::writeLoop() {
                 if (hdr.command == COMMAND::SOMEERROR) {
                     write_channel_.close();
                     socket_.close();
+                    logutil::log(userName_,"EMPTY","DISCONNECT");
                     co_return; // или break
                 }
 
@@ -358,9 +366,9 @@ boost::asio::awaitable<void> asio_server::session::writeLoop() {
     } catch (const std::exception& e) {
         search_server::SearchServer::addToLog(std::string("Exception in writeLoop: ") + e.what());
         socket_.close(); // <--- обязательно!
+        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
 }
-
 
 boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::filesystem::path& file_path)
 {
@@ -380,4 +388,16 @@ boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::fil
         co_return false;
     }
 
+}
+
+template<typename T>
+bool asio_server::session::safe_send_to_channel(T&& item) {
+    if (!write_channel_.try_send(boost::system::error_code{}, std::forward<T>(item))) {
+        asio_server::Header error_header;
+        error_header.command = asio_server::COMMAND::SOMEERROR;
+        error_header.size = 0;
+        write_channel_.try_send(boost::system::error_code{}, error_header);
+        return false;
+    }
+    return true;
 }

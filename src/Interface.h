@@ -30,9 +30,9 @@ public:
 
 
     static std::list<std::wstring> getAllFilesFromDir(const std::string& dir, const std::list<std::string>& ext);
-    static std::list<std::wstring> getAllFilesFromDirs(const std::list<std::string> dirs, const std::list<std::string> ext = std::list<std::string>{},
+    static std::list<std::wstring> getAllFilesFromDirs(const std::vector<std::string>& dirs, const std::vector<std::string>& ext = std::vector<std::string>{},
                                                        const std::vector<std::string> &excludeDirs = {});
 
-    static std::list<std::wstring> getAllFilesFromDir2(const std::string &dir, const std::list<std::string> &exts,
+    static std::list<std::wstring> getAllFilesFromDir2(const std::string &dir, const std::vector<std::string> &exts,
                                                        const std::vector<std::string> &excludeDirs = {});
 };

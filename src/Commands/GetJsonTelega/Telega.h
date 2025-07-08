@@ -47,7 +47,7 @@ public:
     };
 
 
-    static std::vector<std::string> getBases (const std::string& _dir);
+    [[maybe_unused]] static std::vector<std::string> getBases (const std::string& _dir);
     static std::list<std::map<std::string,std::string>> findBase (const std::string& condition, TYPE _type, bool single = false);
     static std::vector<std::string> getBases(TYPE _type);
     static Telega::TYPE getTypeFromDir(const std::filesystem::path& p);

@@ -3,7 +3,7 @@
 //
 
 #include "ConverterJSON.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 #include "Resolution.h"
 #include "scheduler/BackupTask.h"
 #include "Commands/GetAttachments/PrefixMap.h"

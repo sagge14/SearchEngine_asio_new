@@ -3,7 +3,7 @@
 //
 
 #include "Interface.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 std::list<std::wstring> Interface::getAllFilesFromDir(const std::string& dir, const std::list<std::string>& exts) {
 
     /**
@@ -71,7 +71,7 @@ std::list<std::wstring> Interface::getAllFilesFromDir(const std::string& dir, co
 
 std::list<std::wstring>
 Interface::getAllFilesFromDir2(const std::string& dir,
-                               const std::list<std::string>& exts,
+                               const std::vector<std::string>& exts,
                                const std::vector<std::string>& excludeDirs)
 {
     namespace fs = std::filesystem;
@@ -161,8 +161,8 @@ bool folderExists(const std::wstring& path)
 }
 
 
-std::list<std::wstring> Interface::getAllFilesFromDirs(const std::list<std::string> dirs,
-                                                       const std::list<std::string> ext,
+std::list<std::wstring> Interface::getAllFilesFromDirs(const std::vector<std::string>& dirs,
+                                                       const std::vector<std::string>& ext,
                                                        const std::vector<std::string>& excludeDirs) {
     std::list<std::wstring> result{};
 

@@ -37,7 +37,7 @@ std::vector<uint8_t> StartDictionaryUpdateCmd::execute(const std::vector<uint8_t
 {
     try
     {
-        server_->resume();
+        server_->flushUpdateAndSaveDictionary();
         return {1};
     }
     catch(...)
@@ -50,7 +50,6 @@ std::vector<uint8_t> StartDictionaryUpdateCmd::execute(const std::vector<uint8_t
 std::vector<uint8_t> PersonalSoloRequestCmd::execute(const std::vector<uint8_t> &data) {
 
     auto pr = PersonalRequest::deserializeFromBytes(data);
-
     return getAnswerBytes(pr.request);
 }
 
