@@ -27,6 +27,7 @@ public:
     AbstractScheduledTask(boost::asio::io_context& io, std::chrono::seconds period)
             : timer_(io), period_(period), io_(io) {}
 
+
     void start() {
         stopped_ = false;
         scheduleNext();

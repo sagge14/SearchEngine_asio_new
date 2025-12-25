@@ -78,15 +78,48 @@ add_compile_definitions(BOOST_ASIO_HAS_CO_AWAIT)
 #add_definitions(-D_ITERATOR_DEBUG_LEVEL=0)
 
 # Линковка с библиотеками для тестов
+add_definitions(-DUTF8PROC_STATIC=1)
 
+# Пути до библиотеки и заголовков
+target_include_directories(SearchEngine PRIVATE ${CMAKE_SOURCE_DIR}/utf8proc)
+target_link_directories(SearchEngine PRIVATE ${CMAKE_SOURCE_DIR}/utf8proc)
+target_compile_definitions(SearchEngine PRIVATE UTF8PROC_STATIC=1)
+target_link_libraries(SearchEngine PRIVATE utf8proc_static)
 
 target_link_libraries(SearchEngine_test PRIVATE gtest gtest_main nlohmann_json::nlohmann_json ${Boost_LIBRARIES} ws2_32 wsock32)
 
 option(TEST_MODE "option for debug" OFF)
 
+if (MSVC)
+    add_compile_options(/arch:AVX2)
+endif()
+
+
 if (TEST_MODE)
     add_definitions(-DTEST_MODE)
 endif(TEST_MODE)
 
+set(OUTPUT_DIR "${CMAKE_BINARY_DIR}/out")
+set(OUTPUT_NAME "SearchEngine") # или имя без расширения
+
+add_custom_command(
+        TARGET SearchEngine
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:SearchEngine>/out
+        COMMAND powershell -ExecutionPolicy Bypass
+        -File ${CMAKE_SOURCE_DIR}/copy_with_version.ps1
+        $<TARGET_FILE:SearchEngine>
+        $<TARGET_FILE_DIR:SearchEngine>/out
+        SearchEngine
+)
+
+
+if(MSVC)
+    add_definitions(-D_X86_)
+endif()
+
+
 # Добавление тестов
 gtest_discover_tests(SearchEngine_test)
+

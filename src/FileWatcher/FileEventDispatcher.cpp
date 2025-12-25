@@ -58,7 +58,7 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 
 void FileEventDispatcher::flushPending()
 {
-    std::wcout << L" - flushstart " << std::endl;
+   // std::wcout << L" - flushstart " << std::endl;
     std::queue<size_t> local;
 
     {   std::lock_guard lk(mtx_);

@@ -1,0 +1,10 @@
+^F:\SEARCHENGINE_ASIO_NEW\UTF8PROC-2.10.0\UTF8PROC-2.10.0\BUILD_X86\CMAKEFILES\0B636E1ECF416CD197F845F09886482E\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SF:/SearchEngine_asio_new/utf8proc-2.10.0/utf8proc-2.10.0 -BF:/SearchEngine_asio_new/utf8proc-2.10.0/utf8proc-2.10.0/build_x86 --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file F:/SearchEngine_asio_new/utf8proc-2.10.0/utf8proc-2.10.0/build_x86/utf8proc.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

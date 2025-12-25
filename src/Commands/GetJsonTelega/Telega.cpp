@@ -92,14 +92,20 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
     if (_type== TYPE::VHOD)
         {
-        isp_podp_key = "Familia"; base = &Telega::b_prm;
-        kr_key = "PrilName1"; from_to_key= "FFrom";
-        blank_key = "Copyes2";
+            isp_podp_key = "Familia";
+            base = &Telega::b_prm;
+            kr_key = "PrilName1";
+            from_to_key= "FFrom";
+            blank_key = "Copyes2";
         }
     if (_type == TYPE::ISHOD)
-        {isp_podp_key = "Copyes";  base = &Telega::b_prd;  kr_key = "FFrom5";
+        {
+            isp_podp_key = "Copyes";
+            base = &Telega::b_prd;
+            kr_key = "FFrom5";
             blank_key = "Blank";
-            from_to_key = "FFrom1";}
+            from_to_key = "FFrom1";
+        }
 
 
     auto limitOpt = extractLimit(condition);

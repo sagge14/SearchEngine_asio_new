@@ -1,9 +1,31 @@
 //
 // Created by Sg on 01.10.2023.
 //
-
+#include <vector>
+#include <codecvt>
+#include <locale>
+#include <filesystem>
+#include <string>
+#include <list>
+#include <cwctype>
 #include "Interface.h"
 #include "SearchServer/SearchServer.h"
+
+std::string wstring_to_utf85(const std::wstring& ws)
+{
+    std::string result;
+    utf8::utf16to8(ws.begin(), ws.end(), std::back_inserter(result));
+    return result;
+}
+
+std::string utf8_to_wstring(const std::wstring& ws)
+{
+    std::string result;
+    utf8::utf8to16(ws.begin(), ws.end(), std::back_inserter(result));
+    return result;
+}
+
+
 std::list<std::wstring> Interface::getAllFilesFromDir(const std::string& dir, const std::list<std::string>& exts) {
 
     /**
@@ -62,12 +84,52 @@ std::list<std::wstring> Interface::getAllFilesFromDir(const std::string& dir, co
 }
 
 
-#include <vector>
-#include <codecvt>
-#include <locale>
-#include <filesystem>
-#include <string>
-#include <list>
+
+
+void logScanError(const std::wstring& path, const std::string& msg)
+{
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+
+    std::ofstream out("scan_errors.log", std::ios::app);
+    if (!out) return;
+
+    out << my::utf8(path) << " | " << msg << '\n';
+}
+
+bool matchExtension(const std::wstring& fileName,
+                    const std::vector<std::string>& exts)
+{
+    if (exts.empty())
+        return true;
+
+    for (const auto& extUtf8 : exts)
+    {
+        std::wstring ext = std::filesystem::u8path(extUtf8).wstring();
+
+        if (ext.empty())
+        {
+            if (fileName.find(L'.') == std::wstring::npos)
+                return true;
+        }
+        else
+        {
+            if (fileName.size() < ext.size())
+                continue;
+
+            if (std::equal(fileName.end() - ext.size(),
+                           fileName.end(),
+                           ext.begin(),
+                           [](wchar_t a, wchar_t b)
+                           {
+                               return std::towlower(a) == std::towlower(b);
+                           }))
+                return true;
+        }
+    }
+    return false;
+}
+
 
 std::list<std::wstring>
 Interface::getAllFilesFromDir2(const std::string& dir,
@@ -75,83 +137,83 @@ Interface::getAllFilesFromDir2(const std::string& dir,
                                const std::vector<std::string>& excludeDirs)
 {
     namespace fs = std::filesystem;
-    using convert_t = std::codecvt_utf8<wchar_t>;
-    std::wstring_convert<convert_t, wchar_t> toWide;
 
-    const fs::path root = toWide.from_bytes(dir);
     std::list<std::wstring> out;
+    fs::path root = fs::u8path(dir);
 
-    /* ---------- опции обхода ---------- */
-    auto opts = fs::directory_options::skip_permission_denied
-                | fs::directory_options::follow_directory_symlink;
+    auto opts = fs::directory_options::skip_permission_denied;
 
     std::error_code ec;
     fs::recursive_directory_iterator it(root, opts, ec), end;
 
+    if (ec)
+    {
+        logScanError(root.wstring(), ec.message());
+        return out;
+    }
+
     /* ---------- обход ---------- */
     for (; it != end; it.increment(ec))
     {
-        /* если во время increment возникла ошибка – пропускаем элемент */
-        if (ec) { ec.clear(); continue; }
+        if (ec)
+        {
+            logScanError(it->path().wstring(), ec.message());
+            ec.clear();
+            continue;
+        }
 
         const fs::directory_entry& de = *it;
 
-        /* --- 1. исключённые каталоги -------------------------------- */
+        /* --- каталоги / исключения --- */
         if (de.is_directory(ec))
         {
             if (ec) { ec.clear(); continue; }
 
             const std::wstring wDir = de.path().wstring();
 
-            bool excluded = std::any_of(excludeDirs.begin(), excludeDirs.end(),
-                                        [&wDir](const std::string& excl)
-                                        {
-                                            using convert_t = std::codecvt_utf8<wchar_t>;
-                                            std::wstring_convert<convert_t, wchar_t> conv;
-                                            return wDir.find(conv.from_bytes(excl)) == 0;
-                                        });
+            bool excluded = false;
+            for (const auto& exclUtf8 : excludeDirs)
+            {
+                fs::path exclPath = fs::u8path(exclUtf8);
+                if (wDir.find(exclPath.wstring()) != std::wstring::npos)
+                {
+                    excluded = true;
+                    break;
+                }
+            }
 
             if (excluded)
             {
-                it.disable_recursion_pending();   // не заходить глубже
-                continue;
+                it.disable_recursion_pending();
             }
-            continue;                             // папка нас не интересует
+            continue;
         }
 
-        /* --- 2. только regular_file --------------------------------- */
-        if (!de.is_regular_file(ec)) { ec.clear(); continue; }
-
-        /* --- 3. размер > 10 байт ------------------------------------ */
-        auto fsize = de.file_size(ec);
-        if (ec || fsize < 10) { ec.clear(); continue; }
-
-        /* --- 4. проверка расширения --------------------------------- */
-        const std::string fileName = de.path().string();
-        auto matchExt = [&fileName](const std::string& ext) -> bool
+        /* --- только файлы --- */
+        if (!de.is_regular_file(ec))
         {
-            if (ext.empty())
-                return fileName.find('.') == std::string::npos;     // «без точки»
+            ec.clear();
+            continue;
+        }
 
-            if (ext.size() > fileName.size()) return false;
+        /* --- размер --- */
+        auto size = de.file_size(ec);
+        if (ec || size < 10)
+        {
+            ec.clear();
+            continue;
+        }
 
-            return std::equal(fileName.end() - ext.size(),
-                              fileName.end(),
-                              ext.begin(),
-                              [](char a, char b)
-                              { return std::tolower(a) == std::tolower(b); });
-        };
+        /* --- расширение --- */
+        const std::wstring fname = de.path().filename().wstring();
+        if (!matchExtension(fname, exts))
+            continue;
 
-        bool okExt = exts.empty() ||
-                     std::any_of(exts.begin(), exts.end(), matchExt);
-
-        if (okExt)
-            out.push_back(de.path().wstring());
+        out.push_back(de.path().wstring());
     }
 
-    return out;      // NRVO, явный move не нужен
+    return out;
 }
-
 
 
 bool folderExists(const std::wstring& path)
@@ -161,26 +223,33 @@ bool folderExists(const std::wstring& path)
 }
 
 
-std::list<std::wstring> Interface::getAllFilesFromDirs(const std::vector<std::string>& dirs,
-                                                       const std::vector<std::string>& ext,
-                                                       const std::vector<std::string>& excludeDirs) {
-    std::list<std::wstring> result{};
+std::vector<std::wstring>
+Interface::getAllFilesFromDirs(const std::vector<std::string>& dirs,
+                               const std::vector<std::string>& ext,
+                               const std::vector<std::string>& excludeDirs)
+{
+    std::vector<std::wstring> result;
+    namespace fs = std::filesystem;
 
     for (const auto& dirStr : dirs)
     {
-        std::wstring wDir = std::filesystem::u8path(dirStr).wstring();
+        fs::path p = fs::u8path(dirStr);
 
-        if (!folderExists(wDir)) {
-            search_server::SearchServer::addToLog("Missing dir: " + dirStr);
+        if (!folderExists(p.wstring()))
+        {
+            search_server::addToLog("Missing dir: " + dirStr);
             continue;
         }
 
-        auto list = getAllFilesFromDir2(dirStr, ext, excludeDirs); // предполагаем, что эта функция уже возвращает list<wstring>
-        list.sort();
-        result.sort();
-        result.merge(list);
+        auto list = getAllFilesFromDir2(dirStr, ext, excludeDirs);
+
+        result.insert(result.end(),
+                      std::make_move_iterator(list.begin()),
+                      std::make_move_iterator(list.end()));
+
     }
 
     return result;
 }
+
 

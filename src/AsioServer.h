@@ -24,39 +24,62 @@ namespace asio_server
     using namespace boost::asio::ip;
     using namespace std;
 /** ------------------------COMMAND-------------------------- **/
-    enum class COMMAND : uint_fast64_t
-    {
-        SOMEERROR = 0,
-        SOLOREQUEST,
-        FILETEXT,
-        JSONREGUEST,
-        ADDRESOLUTION,
-        UPDATE,
-        GETRESOLUTIONS,
-        GETRESOLUTION,
-        GETDOCS,
-        GETDOC,
-        GETSQLJSONANSWEAR,
-        GETBINFILE,
-        GET_VH_TELEGI_FROM_SQL,
-        GET_ISH_TELEGI_FROM_SQL,
-        START_UPDATE_BASE,
-        LOAD_TLG_TO_SEND,
-        GET_MESSAGE,
-        USER_REGISTRY,
-        PING,
-        GET_VH_TELEGA_WAY,
-        GET_ISH_TELEGA_WAY,
-        GET_OPIS_BASE,
-        LOAD_RAZN,
-        GET_ATTACHMENTS,
-        END_COMMAND,
-        //--------------------
-        SAVE_MESSAGE_TO = 2781032419,
-        //--------------------
+// Список только имён
+#define COMMAND_LIST \
+    X(SOMEERROR) \
+    X(SOLOREQUEST) \
+    X(FILETEXT) \
+    X(JSONREGUEST) \
+    X(ADDRESOLUTION) \
+    X(UPDATE) \
+    X(GETRESOLUTIONS) \
+    X(GETRESOLUTION) \
+    X(GETDOCS) \
+    X(GETDOC) \
+    X(GETSQLJSONANSWEAR) \
+    X(GETBINFILE) \
+    X(GET_VH_TELEGI_FROM_SQL) \
+    X(GET_ISH_TELEGI_FROM_SQL) \
+    X(START_UPDATE_BASE) \
+    X(LOAD_TLG_TO_SEND) \
+    X(GET_MESSAGE) \
+    X(USER_REGISTRY) \
+    X(PING) \
+    X(GET_VH_TELEGA_WAY) \
+    X(GET_ISH_TELEGA_WAY) \
+    X(GET_OPIS_BASE) \
+    X(LOAD_RAZN) \
+    X(GET_ATTACHMENTS) \
+    X(GET_ISH_PDTV) \
+    X(GET_TELEGA_ATACHMENTS) \
+    X(GET_SINGLE_ATACHMENT) \
+    X(END_COMMAND) \
+
+// enum
+    enum class COMMAND : uint_fast64_t {
+        #define X(name) name,
+                COMMAND_LIST
+        #undef X
+        SAVE_MESSAGE_TO = 2781032419
     };
 
-    std::string getTextCommand(COMMAND command);
+// функция enum → string
+    inline const char* to_string(COMMAND cmd) {
+        switch (cmd) {
+        #define X(name) case COMMAND::name: return #name;
+                    COMMAND_LIST
+        #undef X
+                    default:
+                return "UNKNOWN COMMAND";
+        }
+    }
+
+
+// Твой метод
+    inline std::string getTextCommand(COMMAND command) {
+        return to_string(command);
+    }
+
 
     struct Header
     {

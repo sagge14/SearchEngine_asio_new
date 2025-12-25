@@ -41,39 +41,7 @@ namespace my_conv  {
 
 
 search_server::setFileInd search_server::SearchServer::intersectionSetFiles(const set<string> &request) const {
-    /**
-     * Если сервер работает в режиме "точного поиска" @param 'settings.exactSearch' ==  true:
-     *  В основе работы функции математическое понятие пересечения множеств (std::set)
-     *  В начале мы проверяем каждое слово из запроса @param request на наличие в словаре @param freqDictionary
-     *  и составляем лист @param wordList обьектов @param Word который хранит в себе все слова запроса и
-     *  соответствующее каждому слову количество файлов где оно встречается.
-     *
-     *  Если слово из запроса @param request не найдено в @param freqDictionary - то возвращается
-     *  пустое множество - "return {}" и работа функции прекращается.
-     *
-     *  Далее @param wordList сортируется по возрастанию количества документов в которых встречается поисковое слово,
-     *  чтобы в начале списка были самые редкие слова, встречающиеся в наименьшем количеств документов.
-     *
-     *  Далее выполняются пересечения множеств @param setFileInd - соответствующих каждому поисковому слову,
-     *  получаемых с помощью лямбда-функции @param getSetFromMap из карты (std::map) @param freqDictionary  -
-     *  где по КЛЮЧУ КАРТЫ (поисковое слово) содержится map<size_t,size_t> где first - это индекс файла, а second
-     *  количество сколько раз КЛЮЧ КАРТЫ @param freqDictionary содержится в файле с индексом first.
-     *
-     *  Сначала выполняется пересечения самых маленьких множеств фаловых индексов @param setFileInd
-     *  соответствующих самым редким словам, т.к. для таких множеств самая большая вероятность непересекаемости,
-     *  что позволит быстрее выявить отсутствие файлов содержащих все слова поискового запроса.
-     *
-     *  В цикле while выполняется пересечение всех множеств @param setFileInd соответствующих
-     *  словам поискового запроса начиная с самих маленьких т.к. мы сделали перед этим "wordList.sort()"
-     *  и возвращается результат этого пресечения @param result - множество @param setFileInd индексов файлов содержащих
-     *  все слова из поискового запроса @param request - оно может быть пустым если пересечений не найдено, значит
-     *  документов содержащих все слова из запроса - нет!
-     *
-     * Если сервер работает в режиме обычного поиска @param 'settings.exactSearch' ==  false
-     * (необязательно все слова запроса должны содержаться в файле-результате):
-     *  Просто находим все документы содержащие хотябы одно слово из запроса, обьединяем их в множество
-     *  @param setFileInd @param result возвращаем результат :)
-     **/
+
 
     if(request.empty())
         return {};
@@ -85,8 +53,8 @@ search_server::setFileInd search_server::SearchServer::intersectionSetFiles(cons
     {
         setFileInd s;
 
-        /* ───── новый путь ───── */
-        if (const auto* post = index->tryGetPosting(word))
+            auto post = index->getPostingCopyByWord(word);
+        if (post)
         {
             std::cout << "[NEW] " << word << '\n';          // ← ВРЕМЕННЫЙ ЛОГ
             for (const auto& [fileId, _] : *post)
@@ -95,26 +63,16 @@ search_server::setFileInd search_server::SearchServer::intersectionSetFiles(cons
         }
         return {};
 
-        /* ───── старый путь ──── */
-        /*
-        auto it = index->freqDictionary.find(word);
-        if (it != index->freqDictionary.end())
-        {
-            std::cout << "[OLD] " << word << '\n';          // ← ВРЕМЕННЫЙ ЛОГ
-            for (const auto& [fileId, _] : it->second)
-                s.insert(fileId);
-        }
-        return s;
-         */
     };
 
 
 
     for (const auto& word : request)
     {
-        /* 1.  Сначала пробуем найти posting-лист
-               через новый индекс (dictionary).          */
-        if (const auto* post = index->tryGetPosting(word); post)
+
+        auto post = index->getPostingCopyByWord(word);
+
+        if (post)
         {
             wordList.emplace_back(word, post->size());
         }
@@ -281,26 +239,29 @@ listAnswers search_server::SearchServer::getAllAnswers(const vector<string>& req
     return out;
 }
 
-void search_server::SearchServer::updateDocumentBase(const std::list<std::wstring> & _docPaths) {
+void search_server::SearchServer::updateDocumentBase(const std::vector<std::wstring> & _docPaths) {
     /**
     Запускаем обновление базы индексов, записываем в @param time сколько времени уйдет на индексацию. */
 
     time = inverted_index::perf_timer<chrono::milliseconds>::duration([this,_docPaths]() {
-        this->index->updateDocumentBase(_docPaths, settings.threadCount);
+        std::future<void> fut = this->index->updateDocumentBase(_docPaths);
+
+        // ЖДЁМ полного завершения (compact, save, batch commits, всё!)
+        fut.get();
         }).count();
 
 }
 
 
-search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::io_context& _io_context) : time{},
-index(), io_context{_io_context}
+search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::io_context& _io_context, boost::asio::io_context& _io_commit) : time{},
+index(), io_context{_io_context}, io_commit{_io_commit}
 {
 
     settings = (_settings);
     trustSettings();
 
   //  initWatchers(settings);
-    index = new inverted_index::InvertedIndex(io_context);
+    index = new inverted_index::InvertedIndex(io_context, io_commit);
     boost::asio::post(io_context, []{ std::cout << " SearchServer::SearchServer ASYNC TEST!\n"; });
     // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
 
@@ -356,7 +317,7 @@ bool search_server::SearchServer::checkHash(bool resetHash) const {
     return check;
 }
 
-void search_server::SearchServer::addToLog(const string &s) {
+void search_server::addToLog(const string &s) {
     /**
     Функция для записи информации работе сервера в лог-файл*/
     static std::mutex logMutex;
@@ -367,7 +328,7 @@ void search_server::SearchServer::addToLog(const string &s) {
     strftime( dataTime, sizeof(dataTime),"%H:%M:%S %Y-%m-%d", localtime(&now));
 
     std::lock_guard<std::mutex> myLock(logMutex);
-    logFile.open("log.log", ios::app);
+    logFile.open("server_log.log", ios::app);
     logFile << "[" << dataTime << "] " << s + ";" << endl;
     logFile.close();
 
@@ -438,12 +399,13 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
     using convert_t = std::codecvt_utf8<wchar_t>;
     std::wstring_convert<convert_t, wchar_t> strconverter;
 
-    filePath = strconverter.to_bytes(_index->docPaths.at(_fileInd));
+    const std::wstring& wpath = _index->docPaths.pathById(_fileInd);
+    filePath = strconverter.to_bytes(wpath);
 
     auto checkWordAndFileInd = [_index, _fileInd](const std::string& w)
     {
-        if (const auto* post = _index->tryGetPosting(w))
-            return post->find(_fileInd) != nullptr;  // true, если найдено
+        if (auto post = _index->getPostingCopyByWord(w) ; post)
+            return true;
 
         return false;
     };
@@ -454,7 +416,7 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
     {
         if (_exactSearch || checkWordAndFileInd(word))
         {
-            if (const auto* post = _index->tryGetPosting(word))
+            if (auto post = _index->getPostingCopyByWord(word); post)
             {
                 if (const uint16_t* p = post->find(_fileInd))
                     sum += *p;
@@ -523,48 +485,121 @@ search_server::Settings *search_server::Settings::getSettings() {
 }
 
 
+void search_server::logState(const std::string& where,
+              bool update_is_running,
+              bool work,
+              bool index_work)
+{
+    addToLog(
+            where +
+            " | update_is_running=" + std::to_string(update_is_running) +
+            " work=" + std::to_string(work) +
+            " index->work=" + std::to_string(index_work)
+    );
+}
+
 
 
 
 void search_server::SearchServer::updateStep()
 {
+    addToLog("updateStep() ENTER");
+
     std::unique_lock<std::mutex> lock2{updateM};
-    if (update_is_running || index->work) return; // Защита от гонок, если задача уже идет
+
+    logState("before guards", update_is_running, work, index != nullptr && index->work.load());
+
+    if (update_is_running || (index && index->work))
+    {
+        addToLog("updateStep() EXIT: already running");
+        return;
+    }
 
     addToLog("updateStep() → started");
 
     if (index == nullptr)
     {
-        index = new inverted_index::InvertedIndex(io_context);
+        index = new inverted_index::InvertedIndex(io_context, io_commit);
         addToLog("updateStep() → index created");
     }
 
-    docPaths = Interface::getAllFilesFromDirs(settings.dirs, settings.extensions, settings.excludeDirs);
+    /* ---------- СКАНИРОВАНИЕ ---------- */
+    addToLog("updateStep() → scan start");
 
-    std::unique_lock<std::shared_mutex> lock{searchM};
-    cv_search_server.wait(lock, [this] { return !work; });
+    docPaths = Interface::getAllFilesFromDirs(
+            settings.dirs,
+            settings.extensions,
+            settings.excludeDirs
+    );
 
+    addToLog("updateStep() → scan done, files=" +
+             std::to_string(docPaths.size()));
+
+    /* ---------- ОЖИДАНИЕ ПОИСКА ---------- */
+    addToLog("updateStep() → wait search stop");
+
+    {
+        std::unique_lock<std::shared_mutex> lock{searchM};
+
+        bool ok = cv_search_server.wait_for(
+                lock,
+                std::chrono::seconds(10),
+                [this] { return !work; }
+        );
+
+        addToLog(std::string("updateStep() → wait done, result=") +
+                 (ok ? "OK" : "TIMEOUT") +
+                 " work=" + std::to_string(work));
+    }
+
+    /* ---------- СТАРТ ОБНОВЛЕНИЯ ---------- */
     update_is_running = true;
     must_start_update = false;
 
-    this->updateDocumentBase(docPaths);
+    logState("before updateDocumentBase", update_is_running, work, index->work);
+
+
+    std::future<void> fut = std::async(
+            std::launch::async,
+            &search_server::SearchServer::updateDocumentBase,
+            this,
+            docPaths
+    );
+
+    addToLog("updateStep() → updateDocumentBase started");
+
+    /* ---------- ОЖИДАНИЕ ИНДЕКСАЦИИ ---------- */
+    addToLog("updateStep() → waiting updateDocumentBase");
+
+    fut.wait();
+
+    addToLog("updateStep() → updateDocumentBase finished");
+
+    /* ---------- ФИНАЛ ---------- */
     index->compact();
+    addToLog("updateStep() → compact done");
+
     index->saveIndex();
+    addToLog("updateStep() → saveIndex done");
+
     time = getTimeOfUpdate();
-
-
 
     addToLog("Index database update completed! " +
              std::to_string(index->docPaths.size()) + " files, " +
              std::to_string(index->dictionary.size()) +
-             " unique words in dictionary. Time of update " +
-             std::to_string(time) + " seconds.");
+             " unique words. Time " +
+             std::to_string(time) + " sec");
 
     update_is_running = false;
     must_start_update = false;
+
     cv_search_server.notify_all();
 
+    logState("updateStep() EXIT", update_is_running, work, index->work);
 }
+
+
+
 
 void search_server::SearchServer::addFileToIndex(const std::wstring& path) {
     if(!index)

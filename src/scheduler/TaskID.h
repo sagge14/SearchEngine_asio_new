@@ -4,7 +4,7 @@ enum class TaskId {
     FlushPendingTask,
     PeriodicUpdateTask,
     BackupTask,
-    ReserveChecker,
-    EventNotifier,
+    DelayEventTickTask,
+    DelayOpisBaseUpdateTask,
     // ... расширяй по необходимости
 };

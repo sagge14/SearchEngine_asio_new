@@ -9,8 +9,13 @@
 #include "SQLite/mySQLite.h"
 #include "Commands/SearchServer/SearchServerCmd.h"
 #include "Commands/PersonalRequest.h"
+#include "nlohmann/json.hpp"
+
+namespace nh = nlohmann;
 
 class SqlLogger {
+
+
 public:
     // Получение экземпляра Singleton
     static SqlLogger& instance(const std::string& dbPath = "");
@@ -18,13 +23,15 @@ public:
     // Асинхронное добавление логов
     void logRequest(const PersonalRequest& request);
 
+    void logJson(const nh::json& jsonSettings);
+
     // Удалить копирование
     SqlLogger(const SqlLogger&) = delete;
     SqlLogger& operator=(const SqlLogger&) = delete;
 
 private:
     // Приватный конструктор и деструктор
-    SqlLogger(const std::string& dbPath);
+    explicit SqlLogger(const std::string& dbPath);
     ~SqlLogger();
 
     void initializeDatabase();
@@ -42,7 +49,7 @@ private:
 };
 
 namespace logutil {
-    inline void log(PersonalRequest pr) {
+    inline void log(const PersonalRequest& pr) {
         try {
             SqlLogger::instance().logRequest(pr);
         } catch (...) {

@@ -5,7 +5,7 @@
 #include <string>
 #include <boost/asio/thread_pool.hpp>
 #include <memory>
-#include "FileWatcher.h"      // Предыдущий FileWatcher (с enum FileEvent и колбэком)
+#include "FileWatcher/FileWatcher.h"      // Предыдущий FileWatcher (с enum FileEvent и колбэком)
 
 class FileWatcherManager {
 public:

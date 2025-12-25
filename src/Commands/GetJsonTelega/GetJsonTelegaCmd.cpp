@@ -34,7 +34,7 @@ std::vector<uint8_t> GetJsonTelegaCmd::getSqlJsonTelega(const std::vector<uint8_
 
     std::string jsonString = jsonTelegi.dump();
 
-    return std::vector<uint8_t>(jsonString.begin(), jsonString.end());
+    return {jsonString.begin(), jsonString.end()};
 }
 
 std::vector<uint8_t> GetJsonTelegaVhCmd::execute(const std::vector<uint8_t>& _data)

@@ -2,6 +2,8 @@
 
 #include <string>
 #include <vector>
+#include "robin_hood.h"
+#include <mutex>
 #include <unordered_map>
 #include <cstdint>
 #include <boost/serialization/access.hpp>
@@ -16,6 +18,7 @@
    ────────────────────────────────────────────────────────────── */
 class WordIdManager
 {
+
 public:
     /** Вернуть ID, добавив слово при первом обращении */
     uint32_t getId(const std::string& word);
@@ -37,8 +40,12 @@ public:
         ar & word2id_;      // хранить не обязательно, но удобно
         ar & id2word_;
     }
+    void rebuild(std::unordered_map<std::string, uint32_t>&& new_word2id,
+                 std::vector<std::string>&& new_id2word);
 
 private:
     std::unordered_map<std::string, uint32_t> word2id_;   // прямой словарь
+    robin_hood::unordered_map<std::string, uint32_t> wordToIdFast;
+
     std::vector<std::string>                  id2word_;   // обратный
 };

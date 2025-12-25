@@ -24,6 +24,14 @@ namespace search_server {
     };
 
 
+    void logState(const std::string& where,
+                  bool update_is_running,
+                  bool work,
+                  bool index_work);
+
+    void addToLog(const string &s);
+
+
     enum class ErrorCodes {
         NAME,
         THREADCOUNT,
@@ -94,7 +102,7 @@ namespace search_server {
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
         bool exactSearch;
-        bool hideMode;
+        bool hideMode{};
         int threadCount{};
         int port{};
         size_t indTime{};
@@ -133,12 +141,13 @@ namespace search_server {
         mutable atomic<bool> work{};
         hash<string> hashRequest;
         inverted_index::InvertedIndex *index{};
-        std::list<wstring> docPaths{};
+        std::vector<wstring> docPaths{};
         Settings settings{};
         size_t time{};
 
 
         boost::asio::io_context& io_context;
+        boost::asio::io_context& io_commit;
 
         mutable std::mutex updateM;
         mutable std::shared_mutex searchM;
@@ -178,7 +187,7 @@ namespace search_server {
             @param showSettings функция отображения информации о текущих настройках сервера.*
             @param myExp исключения выбрасываемые сервером.*/
 
-        static void addToLog(const string &s);
+
 
         void addFileToIndex(const std::wstring& path);
         void removeFileFromIndex(const std::wstring& path);
@@ -203,7 +212,7 @@ namespace search_server {
 
         size_t getTimeOfUpdate() const;
 
-        void updateDocumentBase(const std::list<std::wstring> &docPaths);
+        void updateDocumentBase(const std::vector<std::wstring> &docPaths);
 
         void showSettings() const;
 
@@ -211,7 +220,7 @@ namespace search_server {
 
         bool getUpdateStatus() const;
 
-        explicit SearchServer(const Settings &settings, boost::asio::io_context& _io_context);
+        explicit SearchServer(const Settings &settings, boost::asio::io_context& _io_context, boost::asio::io_context& _io_commit);
 
         void flushUpdateAndSaveDictionary();
 

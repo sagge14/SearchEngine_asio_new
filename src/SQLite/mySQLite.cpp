@@ -31,6 +31,7 @@ void mySQLite::connect(const std::string& base_dir) {
         sqlite3_close(db);
         throw std::runtime_error("Failed to open database: " + dir);
     }
+    sqlite3_busy_timeout(db, 3000);
 }
 
 void mySQLite::close() {
@@ -38,18 +39,6 @@ void mySQLite::close() {
     if (db) {
         sqlite3_close(db);
         db = nullptr;
-    }
-}
-
-void mySQLite::execSql(const std::string& sql) {
-    std::lock_guard<std::mutex> lock(dbMutex);
-    list.clear();
-
-    int rc = sqlite3_exec(db, sql.c_str(), callback, this, &zErrMsg);
-    if (rc != SQLITE_OK) {
-        std::string errMsg = zErrMsg;
-        sqlite3_free(zErrMsg);
-        throw std::runtime_error("SQL execution failed: " + errMsg);
     }
 }
 
@@ -81,3 +70,56 @@ size_t mySQLite::size() const {
     std::lock_guard<std::mutex> lock(listMutex);
     return list.size();
 }
+
+void mySQLite::execSql(const std::string& sql)
+{
+    std::lock_guard<std::mutex> lock(dbMutex);
+    list.clear();
+
+    int rc = sqlite3_exec(db, sql.c_str(), callback, this, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        std::string errMsg = zErrMsg;
+        sqlite3_free(zErrMsg);
+        throw std::runtime_error("SQL execution failed: " + errMsg);
+    }
+
+    /* курсор ставим на начало свежего результата */
+    std::lock_guard<std::mutex> l(listMutex);
+    cur_ = list.begin();
+}
+
+void mySQLite::first()
+{
+    std::lock_guard<std::mutex> l(listMutex);
+    cur_ = list.begin();
+}
+
+void mySQLite::next()
+{
+    std::lock_guard<std::mutex> l(listMutex);
+    if (cur_ != list.end()) ++cur_;
+}
+
+bool mySQLite::eof() const
+{
+    std::lock_guard<std::mutex> l(listMutex);
+    return cur_ == list.end();
+}
+
+const mySQLite::Row& mySQLite::current() const
+{
+    std::lock_guard<std::mutex> l(listMutex);
+    if (cur_ == list.end())
+        throw std::out_of_range("cursor is at end");
+    return *cur_;
+}
+
+const std::string& mySQLite::value(const std::string& field) const
+{
+    return current().at(field);   // если нет поля — std::out_of_range
+}
+
+/* итераторы только-чтение, потокобезопасность на совести вызывающего */
+mySQLite::const_iterator mySQLite::begin() const { return list.cbegin(); }
+mySQLite::const_iterator mySQLite::end()   const { return list.cend(); }
+

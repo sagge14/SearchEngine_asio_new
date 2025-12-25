@@ -19,8 +19,13 @@
 #include <boost/serialization/unordered_map.hpp>
 #include <boost/serialization/string.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/experimental/channel.hpp>
+#include <boost/asio/strand.hpp>
+#include <future>
 #include "WordID.h"
 #include "PostingList.h"
+#include "robin_hood.h"
+#include "OEMtoUpper.h"
 
 
 
@@ -34,19 +39,21 @@ namespace search_server
 
 namespace inverted_index {
 
+
+
     using namespace std;
 
-    class hashFunction;
+    using FileId = uint32_t;
     typedef unordered_map<size_t, size_t> mapEntry;
     typedef map<size_t, vector<unordered_map<string,mapEntry>::iterator>> mapDictionaryIterators;
 
-
+/*
     class OEMtoUpper
     {
 
     public:
         inline static std::map<char,char> mapChar = {};
-        OEMtoUpper(const std::string p)
+        explicit OEMtoUpper(const std::string p)
         {
             std::ifstream file(p, std::ios::binary);
 
@@ -79,6 +86,8 @@ namespace inverted_index {
     };
 
 
+*/
+
 
     template<typename Time = chrono::seconds, typename Clock = chrono::high_resolution_clock>
     struct perf_timer {
@@ -98,46 +107,96 @@ namespace inverted_index {
 
     class InvertedIndex {
 
-        /** @param work для проверки выполнения в текущий момент времени переиндексации базы 'freqDictionary'.
-            @param freqDictionary база индексов.
-            @param docPaths пути индексируемых файлов.
-            @param mapMutex мьютекс для разделенного доступа потоков к базе индексов 'freqDictionary', во время
-            выполнения индексирования базы.*
-            @param logMutex мьютекс для разделения доступа между потоками к файлу 'logFile'.
-            @param logFile файл для хранения информации о работе сервера. */
+        struct PostingBatch {
+            FileId fileId;
+            std::vector<std::pair<std::string, uint32_t>> list;
+            std::shared_ptr<std::promise<void>> promise;
+        };
+
+        static void pingIo(boost::asio::io_context& ctx, const char* name);
 
 
-        // В public-секции InvertedIndex
-        const PostingList* tryGetPosting(const std::string& w) const
+        std::optional<PostingList> getPostingCopyByWord(const std::string& w) const;
+
+
+        struct Chunk {
+            std::vector<PostingList> bucket;
+            std::shared_mutex mutex;
+
+            Chunk() : bucket(CHUNK_SIZE) {}
+        };
+
+        struct PostingTask {
+            FileId   fileId;
+            uint32_t wordId;
+            uint32_t count;
+        };
+
+        struct FileFuture
         {
-            uint32_t wid;
-            if (!wordIds.tryGet(w, wid))
-                return nullptr;
-            if (wid >= dictionary.size())
-                return nullptr;
-            const PostingList* post = &dictionary[wid];
-            return post->empty() ? nullptr : post;
+            FileId id;
+            std::wstring path;
+            std::future<void> fut;
+        };
+
+
+        static constexpr size_t CHUNK_SIZE = 4096;
+
+
+        PostingList& getPostingList(uint32_t wid)
+        {
+            size_t chunkIndex = wid / CHUNK_SIZE;
+            size_t localIndex = wid % CHUNK_SIZE;
+
+            if (chunkIndex >= dictionaryChunks.size())
+                dictionaryChunks.resize(chunkIndex + 1);
+
+            if (!dictionaryChunks[chunkIndex])
+                dictionaryChunks[chunkIndex] = std::make_unique<Chunk>();
+
+            return dictionaryChunks[chunkIndex]->bucket[localIndex];
         }
 
+        [[maybe_unused]] std::shared_mutex& mutexForWord(uint32_t wid)
+        {
+            size_t chunkIndex = wid / CHUNK_SIZE;
+            if (chunkIndex >= dictionaryChunks.size())
+                dictionaryChunks.resize(chunkIndex + 1);
 
+            if (!dictionaryChunks[chunkIndex])
+                dictionaryChunks[chunkIndex] = std::make_unique<Chunk>();
+
+            return dictionaryChunks[chunkIndex]->mutex;
+        }
+
+        void commitSingleWord(const PostingTask& t);
+
+
+        std::vector<std::unique_ptr<Chunk>> dictionaryChunks;
 
 
         atomic<bool> work{};
         DocPaths docPaths;
-        mutable mutex mapMutex;
-        mutable mutex logMutex;
-        mutable ofstream logFile;
-       // unordered_map<string, mapEntry> freqDictionary;
-     //   mapDictionaryIterators wordIts;
 
-        using mapEntry = std::unordered_map<size_t, size_t>;   // fileId → count
-      //  std::vector<mapEntry> dictionary;    // НОВЫЙ контейнер (WordID → posting list)
-        WordIdManager wordIds;               // то, что добавили на шаге 1
-        std::unordered_map<size_t, std::vector<uint32_t>> wordRefs;
-        std::vector<PostingList> dictionary;
+        mutable mutex mapMutex;
+        mutable mutex resizeDicMutex;
+        mutable mutex logMutex;
+
 
         boost::asio::io_context& io_;
+        boost::asio::io_context& io_commit_;
+        boost::asio::strand<boost::asio::io_context::executor_type> strand_;
 
+
+        using mapEntry = std::unordered_map<size_t, size_t>;   // fileId → count
+        WordIdManager wordIds;               // то, что добавили на шаге 1
+
+        std::unordered_map<size_t, std::vector<uint32_t>> wordRefs;
+
+        mutable std::vector<PostingList> dictionary;
+
+
+        void safeEraseFileInternal(FileId fileId);
         friend class search_server::SearchServer;
         friend class search_server::RelativeIndex;
 
@@ -145,22 +204,39 @@ namespace inverted_index {
             @param allFilesIndexing функция индексирования всех файлов из mapHashDocPaths.
             @param addToLog функция добавление в 'logFile' инфрормации о работе сервера. */
 
-        void fileIndexing(size_t _fileHash);
-        void safeEraseFile(size_t hash);
-        void addToDictionary(const setLastWriteTimeFiles& ind, const std::function<void()>& on_done);
-        void delFromDictionary(const setLastWriteTimeFiles& del);
-        void addToLog(const string &_s) const;
+        void fileIndexing(FileId fileId, std::shared_ptr<std::promise<void>> promise);
+        void safeEraseFile(FileId hash);
+
+
+        void delFromDictionary(const std::vector<FileId>& list);
+
+        void commitChunkMap(
+                const std::unordered_map<size_t, std::vector<PostingTask>>& chunkMap);
+
+        void rebuildDictionaryFromChunks();
+        void rebuildChunksFromDictionary();
+
+        static void addToLog(const string &_s) ;
         void reconstructWordIts();
         void compact();
+        void fixDictionaryHoles();
+
+        // InvertedIndex.h (внутри class InvertedIndex, в private-секции)
+
+        void applyBatchInStrand(PostingBatch batch);
+        void processBatch(const PostingBatch& batch);
+
         friend class boost::serialization::access;
 
         template<class Archive>
-        void save(Archive & ar, const unsigned int version) const {
+        void save(Archive & ar, const unsigned int version)  const {
             std::lock_guard<std::mutex> lock(mapMutex);
             ar & dictionary;
             ar & wordIds;
             ar & docPaths;
         }
+
+        std::condition_variable update_end;
 
         template<class Archive>
         void load(Archive & ar, const unsigned int version) {
@@ -168,7 +244,8 @@ namespace inverted_index {
             ar & dictionary;
             ar & wordIds;
             ar & docPaths;
-            reconstructWordIts();
+            rebuildChunksFromDictionary();   // ← добавляем
+            reconstructWordIts();            // работает по dictionaryChunks
         }
 
         BOOST_SERIALIZATION_SPLIT_MEMBER()
@@ -182,14 +259,15 @@ namespace inverted_index {
             где first - это индекс файла, а second - количество сколько раз 'word'
             содержится в файле с индексом first - функция используется только для тестирования */
 
-        void updateDocumentBase(const std::list<wstring> &vecPaths, size_t threadCount = 0);
+
+        std::future<void> updateDocumentBase(const std::vector<wstring> &vecPaths);
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
-        InvertedIndex(boost::asio::io_context& _io);
+        explicit InvertedIndex(boost::asio::io_context& _io, boost::asio::io_context& io_commit);
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();
-        void saveIndex();
+        void saveIndex() const;
     };
 
 }
