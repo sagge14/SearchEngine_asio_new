@@ -24,88 +24,168 @@
 
 using boost::asio::ip::tcp;
 
-void asio_server::session::start() {
-
+void asio_server::session::start()
+{
     auto self = shared_from_this();
-    boost::asio::co_spawn(
-            socket_.get_executor(),
-            [self]() -> boost::asio::awaitable<void> {
+    auto ex = socket_.get_executor();
 
+    boost::asio::co_spawn(
+            ex,
+            [self]() -> boost::asio::awaitable<void> {
                 co_await self->readLoop();
             },
-            boost::asio::detached
+            [self](const std::exception_ptr& eptr) {
+                if (eptr) {
+                    try { std::rethrow_exception(eptr); }
+                    catch (const std::exception& e) {
+                        search_server::addToLog(std::string("readLoop failed: ") + e.what());
+                    }
+                }
+                self->stop("readLoop finished");
+            }
     );
 
     boost::asio::co_spawn(
-            socket_.get_executor(),
+            ex,
             [self]() -> boost::asio::awaitable<void> {
                 co_await self->writeLoop();
             },
-            boost::asio::detached
+            [self](const std::exception_ptr& eptr) {
+                if (eptr) {
+                    try { std::rethrow_exception(eptr); }
+                    catch (const std::exception& e) {
+                        search_server::addToLog(std::string("writeLoop failed: ") + e.what());
+                    }
+                }
+                self->stop("writeLoop finished");
+            }
     );
-
 }
 
-asio_server::session::~session()
+
+boost::asio::awaitable<void> asio_server::session::readLoop()
 {
     try {
-        boost::system::error_code ec;
-        if (socket_.is_open()) {
-            socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-            socket_.close(ec);
-        }
-        logutil::log(userName_,"EMPTY","DISCONNECT");
-    } catch (...) {
-        // безопасно игнорируем любые исключения
-    }
-}
-
-boost::asio::awaitable<void> asio_server::session::readLoop() {
-    try {
-        std::cout << "Connect\t\t" + getRemoteIP() << std::endl;
         search_server::addToLog("Connect\t\t" + getRemoteIP());
 
-        while (socket_.is_open()) {
-            // --- Чтение заголовка ---
-            co_await boost::asio::async_read(socket_, boost::asio::buffer(&header_, sizeof(header_)), boost::asio::use_awaitable);
+        while (!stopped_ && socket_.is_open()) {
 
-            if (!trustCommand()) {
-                header_.command = COMMAND::SOMEERROR;
-                search_server::addToLog("Received from\t" + getRemoteIP() + "\tcommand\t'" + getTextCommand(header_.command) + "'");
-                commandExec();
+            co_await boost::asio::async_read(
+                    socket_, boost::asio::buffer(&header_, sizeof(header_)),
+                    boost::asio::use_awaitable);
+
+            // 1) лимит размера
+            constexpr std::size_t MAX_PAYLOAD = 1000 * 1024 * 1024; // 1GB
+            if (header_.size > MAX_PAYLOAD) {
+                search_server::addToLog("Too big payload from " + getRemoteIP());
+                // отправить SOMEERROR без commandExec
+                asio_server::Header err{};
+                err.command = COMMAND::SOMEERROR;
+                err.size = 0;
+                write_channel_.try_send(boost::system::error_code{}, err);
                 co_return;
             }
 
-            std::cout << "Header read\t" + getRemoteIP() << std::endl;
-            search_server::addToLog("Header read\t" + getRemoteIP());
+            // 2) валидация команды
+            if (!trustCommand()) {
+                asio_server::Header err{};
+                err.command = COMMAND::SOMEERROR;
+                err.size = 0;
+                write_channel_.try_send(boost::system::error_code{}, err);
+                co_return;
+            }
 
-            v_data_.clear();
-            v_data_.resize(header_.size);
+            v_data_.assign(header_.size, 0);
 
             std::size_t total_read = 0;
             while (total_read < header_.size) {
-                std::size_t to_read = std::min(static_cast<size_t>(max_length), static_cast<size_t>(header_.size - total_read));
+                std::size_t to_read = std::min<std::size_t>(max_length, header_.size - total_read);
                 std::size_t bytes = co_await socket_.async_read_some(
-                        boost::asio::buffer(v_data_.data() + total_read, to_read), boost::asio::use_awaitable);
-
+                        boost::asio::buffer(v_data_.data() + total_read, to_read),
+                        boost::asio::use_awaitable);
                 total_read += bytes;
             }
 
-            std::cout << "Received all data. Processing..." << std::endl;
             commandExec();
         }
-    } catch (const boost::system::system_error& e) {
-        if (e.code() == boost::asio::error::eof) {
-            search_server::addToLog("Клиент закрыл соединение (" + getRemoteIP() + ")");
-        } else {
-            search_server::addToLog(std::string("Ошибка в readLoop: ") + e.what());
-        }
-
-        socket_.close();
-        logutil::log(userName_,"EMPTY","DISCONNECT");
+    }
+    catch (const boost::system::system_error& e) {
+        if (e.code() == boost::asio::error::eof)
+            search_server::addToLog("Client closed (" + getRemoteIP() + ")");
+        else
+            search_server::addToLog(std::string("readLoop error: ") + e.what());
     }
 
+    co_return;
 }
+
+
+
+void asio_server::session::stop(const char* why)
+{
+    // идемпотентно
+    if (stopped_.exchange(true)) return;
+
+    search_server::addToLog(std::string("Session stop: ") + why + " " + getRemoteIP());
+
+    boost::system::error_code ec;
+
+    // 1) закрыть канал, чтобы writeLoop вышел из async_receive
+    write_channel_.close();
+
+    // 2) закрыть сокет
+    if (socket_.is_open()) {
+        socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        socket_.close(ec);
+    }
+
+    // 3) логировать DISCONNECT один раз
+    logutil::log(userName_, "EMPTY", "DISCONNECT");
+}
+
+
+boost::asio::awaitable<void> asio_server::session::writeLoop()
+{
+    try {
+        while (!stopped_ && socket_.is_open()) {
+            boost::system::error_code ec;
+            WriteItem item;
+            std::tie(ec, item) =
+                    co_await write_channel_.async_receive(boost::asio::as_tuple(boost::asio::use_awaitable));
+
+            if (ec) break; // channel closed => выходим
+
+            if (auto hdr = std::get_if<asio_server::Header>(&item)) {
+                co_await boost::asio::async_write(socket_, boost::asio::buffer(hdr, sizeof(*hdr)),
+                                                  boost::asio::use_awaitable);
+            }
+            else if (auto buf = std::get_if<std::shared_ptr<std::vector<BYTE>>>(&item)) {
+                co_await boost::asio::async_write(socket_, boost::asio::buffer(**buf),
+                                                  boost::asio::use_awaitable);
+            }
+            else if (auto p = std::get_if<std::filesystem::path>(&item)) {
+                if (co_await openFileStream(*p))
+                    co_await sendNextFileChunk();
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        search_server::addToLog(std::string("writeLoop exception: ") + e.what());
+    }
+
+    co_return;
+}
+
+
+asio_server::session::~session()
+{
+    boost::system::error_code ec;
+    if (socket_.is_open()) {
+        socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        socket_.close(ec);
+    }
+}
+
 
 boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
 
@@ -220,11 +300,11 @@ void  asio_server::session::commandExec() {
         v_data_.clear();
     } catch (const std::exception& e) {
         search_server::addToLog(std::string("Exception in commandExec: ") + e.what());
-      //  header_.command = COMMAND::SOMEERROR;
-        //write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+        header_.command = COMMAND::SOMEERROR;
+        write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
 
-       // socket_.close();
-       // logutil::log(userName_,"EMPTY","DISCONNECT");
+        socket_.close();
+        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
 }
 
@@ -312,39 +392,7 @@ asio_server::AsioServer::AsioServer(boost::asio::io_context &io_context, short p
     do_accept();
 }
 
-boost::asio::awaitable<void> asio_server::session::writeLoop() {
-    try {
-        while (socket_.is_open()) {
-            boost::system::error_code ec;
-            WriteItem item;
-            std::tie(ec, item) = co_await write_channel_.async_receive(boost::asio::as_tuple(boost::asio::use_awaitable));
-            if (ec) break;
 
-            if (std::holds_alternative<asio_server::Header>(item)) {
-                const asio_server::Header& hdr = std::get<asio_server::Header>(item);
-                co_await boost::asio::async_write(socket_, boost::asio::buffer(&hdr, sizeof(hdr)), boost::asio::use_awaitable);
-
-                if (hdr.command == COMMAND::SOMEERROR) {
-                 //   write_channel_.close();
-                //    socket_.close();
-                 //   logutil::log(userName_,"EMPTY","DISCONNECT");
-                    co_return; // или break
-                }
-
-            } else if (std::holds_alternative<std::shared_ptr<std::vector<BYTE>>>(item)) {
-                auto buf = std::get<std::shared_ptr<std::vector<BYTE>>>(item);
-                co_await boost::asio::async_write(socket_, boost::asio::buffer(*buf), boost::asio::use_awaitable);
-            } else if (std::holds_alternative<std::filesystem::path>(item)) {
-                if(co_await openFileStream(std::get<std::filesystem::path>(item)))
-                    co_await sendNextFileChunk();
-            }
-        }
-    } catch (const std::exception& e) {
-        search_server::addToLog(std::string("Exception in writeLoop: ") + e.what());
-        socket_.close(); // <--- обязательно!
-        logutil::log(userName_,"EMPTY","DISCONNECT");
-    }
-}
 
 boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::filesystem::path& file_path)
 {

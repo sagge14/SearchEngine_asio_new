@@ -74,8 +74,6 @@ namespace asio_server
         }
     }
 
-
-// Твой метод
     inline std::string getTextCommand(COMMAND command) {
         return to_string(command);
     }
@@ -104,6 +102,7 @@ namespace asio_server
         std::string request_;
         uint_fast32_t userId_{};
         std::string userName_ = "default_user";
+        std::atomic_bool stopped_{false};
 
 
         std::unique_ptr<std::ifstream> file_stream;
@@ -113,6 +112,7 @@ namespace asio_server
         void commandExec();
         bool trustCommand();
         std::string getRemoteIP() const;
+        void stop(const char* why);
 
         template<typename T>
         bool safe_send_to_channel(T&& item);
