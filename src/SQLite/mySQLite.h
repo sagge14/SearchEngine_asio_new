@@ -29,7 +29,27 @@ public:
     bool empty() const;
     size_t size() const;
 
+    using Row              = std::map<std::string,std::string>;
+    using RowList          = std::list<Row>;
+    using const_iterator   = RowList::const_iterator;
+
+    /* --- «квери-подобные» новинки --- */
+    void first();                 // курсор → первый ряд
+    void next();                  // курсор++
+    [[nodiscard]] bool eof() const;  // достигнут конец?
+    [[nodiscard]] const Row& current() const; // текущий ряд
+
+    /* STL-итераторы (для range-for) */
+    [[nodiscard]] const_iterator begin() const;
+    [[nodiscard]] const_iterator end() const;
+
+    /* Быстрый доступ к полю текущего ряда */
+    [[nodiscard]] const std::string& value(const std::string& field) const;
+
 private:
     void connect(const std::string& base_dir);
     void close();
+
+    /* новый член-состояние курсора */
+    const_iterator                cur_{list.cend()};
 };

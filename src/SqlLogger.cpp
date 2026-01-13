@@ -228,5 +228,23 @@ SqlLogger& SqlLogger::instance(const std::string& dbPath) {
     return *instance_;
 }
 
+void SqlLogger::logJson(const nh::json& json_log) {
+    auto table_name = json_log.value("table_name", "");
+
+    if(table_name.empty())
+    {
+        //log error in file
+        return;
+    }
+
+    auto fields = json_log.value("fields", nh::json::array());
+    if(fields.empty())
+    {
+        //log error in file
+        return;
+    }
+
+}
+
 
 

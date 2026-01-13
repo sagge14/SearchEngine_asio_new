@@ -9,12 +9,15 @@
 #include <iostream>
 class Command {
 protected:
-    bool log = false;
+  //  bool log = false;
 public:
-    void doLogg(bool _log) {log =_log;}
+  //  void doLogg(bool _log) {log =_log;}
     virtual ~Command() = default;
     virtual std::vector<uint8_t> execute(const std::vector<uint8_t>& data) = 0;
+    virtual void log() {};
 };
+
+
 
 
 #endif //SEARCHENGINE_TEST_COMMAND_H

@@ -1,0 +1,14 @@
+//
+// Created by Sg on 12.07.2025.
+//
+
+#ifndef SEARCHENGINE_DELAYEDEVENT_H
+#define SEARCHENGINE_DELAYEDEVENT_H
+
+
+// Например:
+
+
+
+
+#endif //SEARCHENGINE_DELAYEDEVENT_H

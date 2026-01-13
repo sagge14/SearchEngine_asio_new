@@ -7,6 +7,7 @@
 #include <iostream>
 #include <vector>
 #include <boost/serialization/access.hpp>
+#include "nlohmann/json.hpp"
 
 namespace boost::archive {
     class portable_binary_oarchive;

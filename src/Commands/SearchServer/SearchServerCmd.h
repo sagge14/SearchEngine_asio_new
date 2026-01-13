@@ -5,7 +5,7 @@
 #ifndef SEARCHENGINE_TEST_SEARCHSERVERCMD_H
 #define SEARCHENGINE_TEST_SEARCHSERVERCMD_H
 #include "Commands/Command.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 
 class SearchServerCmd : public Command {
 protected:

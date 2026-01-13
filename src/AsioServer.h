@@ -1,5 +1,9 @@
 #pragma once
-
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/experimental/channel.hpp>
 #include <boost/asio.hpp>
 #include <cstdint>
 #include <fstream>
@@ -8,6 +12,7 @@
 #include <map>
 #include <queue>
 #include <Commands/Command.h>
+
 
 namespace search_server
 {
@@ -19,112 +24,61 @@ namespace asio_server
     using namespace boost::asio::ip;
     using namespace std;
 /** ------------------------COMMAND-------------------------- **/
-    enum class COMMAND : uint_fast64_t
-    {
-        SOMEERROR = 0,
-        SOLOREQUEST,
-        FILETEXT,
-        JSONREGUEST,
-        ADDRESOLUTION,
-        UPDATE,
-        GETRESOLUTIONS,
-        GETRESOLUTION,
-        GETDOCS,
-        GETDOC,
-        GETSQLJSONANSWEAR,
-        GETBINFILE,
-        GET_VH_TELEGI_FROM_SQL,
-        GET_ISH_TELEGI_FROM_SQL,
-        START_UPDATE_BASE,
-        LOAD_TLG_TO_SEND,
-        GET_MESSAGE,
-        USER_REGISTRY,
-        PING,
-        GET_VH_TELEGA_WAY,
-        GET_ISH_TELEGA_WAY,
-        GET_OPIS_BASE,
-        LOAD_RAZN,
-        GET_ATTACHMENTS,
-        END_COMMAND,
-        //--------------------
-        SAVE_MESSAGE_TO = 2781032419,
-        //--------------------
+// Список только имён
+#define COMMAND_LIST \
+    X(SOMEERROR) \
+    X(SOLOREQUEST) \
+    X(FILETEXT) \
+    X(JSONREGUEST) \
+    X(ADDRESOLUTION) \
+    X(UPDATE) \
+    X(GETRESOLUTIONS) \
+    X(GETRESOLUTION) \
+    X(GETDOCS) \
+    X(GETDOC) \
+    X(GETSQLJSONANSWEAR) \
+    X(GETBINFILE) \
+    X(GET_VH_TELEGI_FROM_SQL) \
+    X(GET_ISH_TELEGI_FROM_SQL) \
+    X(START_UPDATE_BASE) \
+    X(LOAD_TLG_TO_SEND) \
+    X(GET_MESSAGE) \
+    X(USER_REGISTRY) \
+    X(PING) \
+    X(GET_VH_TELEGA_WAY) \
+    X(GET_ISH_TELEGA_WAY) \
+    X(GET_OPIS_BASE) \
+    X(LOAD_RAZN) \
+    X(GET_ATTACHMENTS) \
+    X(GET_ISH_PDTV) \
+    X(GET_TELEGA_ATACHMENTS) \
+    X(GET_SINGLE_ATACHMENT) \
+    X(END_COMMAND) \
+
+// enum
+    enum class COMMAND : uint_fast64_t {
+        #define X(name) name,
+                COMMAND_LIST
+        #undef X
+        SAVE_MESSAGE_TO = 2781032419
     };
 
-    std::string getTextCommand(COMMAND command);
-/** ------------------------FILE_START------------------------ **/
-    template<class T>
-    class File
-    {
-        T data;
-        size_t hvost{};
-
-    public:
-
-        static const size_t block_size = 64 * 1024;
-
-        auto getBlocksCount() const;
-        auto getSizeInBytes() const { return data.size(); };
-
-        std::vector<BYTE> operator[](int col) const;
-
-        File(T _data);
-        File(filesystem::path p);
-    };
-
-    template<class T>
-    File<T>::File(filesystem::path p) {
-        std::ifstream file(p, std::ios::binary);
-        if(!file.is_open())
-            return;
-        // Stop eating new lines in binary mode!!!
-        file.unsetf(std::ios::skipws);
-        // get its size:
-        size_t fileSize;
-        file.seekg(0, std::ios::end);
-        fileSize = file.tellg();
-        file.seekg(0, std::ios::beg);
-        // reserve capacity
-        hvost = fileSize % block_size;
-        data.reserve(fileSize );
-        // read the data:
-        data.insert(data.begin(),
-                    std::istream_iterator<BYTE>(file),
-                    std::istream_iterator<BYTE>());
-
+// функция enum → string
+    inline const char* to_string(COMMAND cmd) {
+        switch (cmd) {
+        #define X(name) case COMMAND::name: return #name;
+                    COMMAND_LIST
+        #undef X
+                    default:
+                return "UNKNOWN COMMAND";
+        }
     }
 
-    template<class T>
-    std::vector<BYTE> File<T>::operator[](int col) const {
-            size_t start, end;
-
-            if(col == getBlocksCount() - 1 && hvost > 0)
-                end = hvost;
-            else
-                end = block_size;
-
-
-            start = col * block_size;
-            auto first = data.begin() + start ;
-            auto last = first + end;
-
-            return std::move(std::vector<BYTE>(first, last));
+    inline std::string getTextCommand(COMMAND command) {
+        return to_string(command);
     }
 
-    template<class T>
-    File<T>::File(T _data) {
-        std::swap(data, _data);
-        hvost = data.size() % block_size;
-    }
 
-    template<class T>
-    auto File<T>::getBlocksCount() const {
-            if(hvost > 0)
-                return data.size() / block_size + 1;
-            else
-                return data.size() / block_size;
-    }
-/** ------------------------FILE_END------------------------ **/
     struct Header
     {
         uint_fast64_t size{};
@@ -138,44 +92,45 @@ namespace asio_server
 
         enum { max_length = 64 * 1024 };
 
+        using WriteItem = std::variant<asio_server::Header, std::shared_ptr<std::vector<BYTE>>,
+        std::filesystem::path>;
 
-        std::mutex v_data_mutex;
-        Header header_{};
         tcp::socket socket_;
-        std::mutex socket_mutex;
-        unsigned char data_[max_length]{};
+        Header header_{};
+
         std::vector<BYTE> v_data_{};
-        std::vector<BYTE> binFile_{};
         std::string request_;
         uint_fast32_t userId_{};
         std::string userName_ = "default_user";
-        std::queue<std::shared_ptr<std::vector<BYTE>>> writeQueue;
-        bool isWriting = false;
+        std::atomic_bool stopped_{false};
+
+
         std::unique_ptr<std::ifstream> file_stream;
 
-        void doWrite();
-
-
+        boost::asio::experimental::channel<void(boost::system::error_code, WriteItem)> write_channel_;
 
         void commandExec();
-        void writeHeader();
         bool trustCommand();
-        void readHeader();
-        void readData();
         std::string getRemoteIP() const;
+        void stop(const char* why);
 
-        void writeToSocket(const std::string& str);
+        template<typename T>
+        bool safe_send_to_channel(T&& item);
 
-        void sendNextFileChunk();
+        template<typename... Args>
+        bool safe_send_to_channel(Args&&... args) {
+            return (... && safe_send_to_channel(std::forward<Args>(args)));
+        }
 
-        template<class T>
-        [[maybe_unused]] void writeToSocket(const File<T>& f);
-        void writeToSocket(const std::filesystem::path& file_path);
+        boost::asio::awaitable<void> readLoop();
+        boost::asio::awaitable<void> writeLoop();
+        boost::asio::awaitable<void> sendNextFileChunk();
+        boost::asio::awaitable<bool> openFileStream(const std::filesystem::path& file_path);
 
     public:
 
         void start();
-        explicit session(tcp::socket socket) : socket_(std::move(socket)){};
+        explicit session(tcp::socket socket) : socket_(std::move(socket)), write_channel_(socket_.get_executor(), 2000){};
        ~session();
 
     };
@@ -184,8 +139,6 @@ namespace asio_server
     {
     public:
         AsioServer(boost::asio::io_context& io_context, short port);
-        //boost::asio::io_context* io_context_;
-
 
     private:
         void do_accept();

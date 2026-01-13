@@ -5,7 +5,7 @@
 #ifndef SEARCHENGINE_TEST_GETJSONTELEGACMD_H
 #define SEARCHENGINE_TEST_GETJSONTELEGACMD_H
 
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 #include "Telega.h"
 
 class GetJsonTelegaCmd : public Command {

@@ -4,10 +4,10 @@
 
 #include "Telega.h"
 #include "SQLite/mySql.h"
-#include <set>
 #include <codecvt>
 #include <string>
 #include <regex>
+#include <sstream>
 #include <optional>
 
 namespace conv2
@@ -37,7 +37,7 @@ Telega::Telega(const std::map<std::string, std::string>& _record, TYPE _type, fl
 
 }
 
-std::vector<std::string> Telega::getBases(const std::string &_dir) {
+[[maybe_unused]] std::vector<std::string> Telega::getBases(const std::string &_dir) {
     {
         /**
         Функция получения всех файлов из дирректории @param dir и ее подпапках, исключая имена папок */
@@ -67,7 +67,7 @@ std::vector<std::string> Telega::getBases(const std::string &_dir) {
 
 std::list<std::map<std::string,std::string>> Telega::findBase(const std::string& _condition, TYPE _type, bool single) {
 
-    std::string bases_dir, isp_podp_key, kr_key, from_to_key;
+    std::string bases_dir, isp_podp_key, kr_key, from_to_key, blank_key;
     const decltype(getBases(TYPE{})) *base;
     std::list<std::map<std::string,std::string>> result{};
 
@@ -91,9 +91,21 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
     auto condition = "where " + _condition;
 
     if (_type== TYPE::VHOD)
-        {isp_podp_key = "Familia"; base = &Telega::b_prm;  kr_key = "PrilName1"; from_to_key= "FFrom";}
+        {
+            isp_podp_key = "Familia";
+            base = &Telega::b_prm;
+            kr_key = "PrilName1";
+            from_to_key= "FFrom";
+            blank_key = "Copyes2";
+        }
     if (_type == TYPE::ISHOD)
-        {isp_podp_key = "Copyes";  base = &Telega::b_prd;  kr_key = "FFrom5";    from_to_key = "FFrom1";}
+        {
+            isp_podp_key = "Copyes";
+            base = &Telega::b_prd;
+            kr_key = "FFrom5";
+            blank_key = "Blank";
+            from_to_key = "FFrom1";
+        }
 
 
     auto limitOpt = extractLimit(condition);
@@ -101,13 +113,21 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
     try {
         for (const auto &base_name: *base) {
+            
+            std::ostringstream ss;
+            ss << "select `index`, ddata, "
+               << from_to_key
+               << ", TelNo, PodpNo, DataPodp, "
+               << isp_podp_key
+               << ", " << kr_key
+               << ", PrilName, KolPril, DirectTo, FileName, "
+               << blank_key
+               << ", Edit, GdeSHT from ARCHIVE "
+               << condition;
 
-            std::cout << base_name << std::endl;
-            std::cout << condition << std::endl;
-            SQL_INST.excSql(base_name,
-                            "select `index`, ddata, " + from_to_key + ", TelNo, PodpNo, DataPodp, " +
-                            isp_podp_key + ", " + kr_key + ", PrilName, KolPril, DirectTo, FileName from ARCHIVE " +
-                            condition);
+            auto sql_qry = ss.str();
+
+            SQL_INST.excSql(base_name, sql_qry);
 
             if (!SQL_EMPTY) {
                 for (const auto& row : SQL_INST) {
@@ -132,7 +152,10 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
         auto getYearNow = [] (){
         char dataTime[20];
         time_t now = std::time(nullptr);
-        strftime(dataTime, sizeof(dataTime), "%Y", localtime(&now));
+        struct tm tm_buf{};
+        localtime_s(&tm_buf, &now); // Потокобезопасная версия
+        strftime(dataTime, sizeof(dataTime), "%Y", &tm_buf);
+
         return std::string{dataTime};
     };
 
@@ -153,15 +176,17 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
 
     for(int i = 12; i >= 0; i--)
     {
-        auto base_name = bases_dir + "\\METH_BASES\\" + ms[i] + "-" + Telega::year + ".db3";
-    //    std::cout << base_name << std::endl;
+
+        std::ostringstream oss;
+        oss << bases_dir << "\\METH_BASES\\" << ms[i] << "-" << Telega::year << ".db3";
+        auto base_name = oss.str();
+
         if (!std::filesystem::exists(base_name))
         {
-            std::cout << base_name << " - not exist -" << std::endl;
             continue;
         }
         res.push_back(base_name);
-    //    std::cout << base_name << std::endl;
+
     }
 
     if(res.empty() && getYearNow() != Telega::year)
@@ -190,11 +215,11 @@ void Telega::initTelega(const std::map<std::string, std::string> &_record) {
             pril_name = _record.at("PrilName");
             pril_count = _record.at("KolPril");
             isp = type == TYPE::VHOD ? _record.at("Familia") : _record.at("Copyes");
-            //auto ff = conv2::to_wstring(isp);
-            //auto gggg = conv2::to_string(ff);
             kr = type == TYPE::VHOD ? _record.at("PrilName1") : _record.at("FFrom5");
-            tel_num = type == TYPE::VHOD ? _record.at("TelNo") : num; ;
-
+            tel_num = type == TYPE::VHOD ? _record.at("TelNo") : num;
+            blank = type ==  TYPE::VHOD ? _record.at("Copyes2") : _record.at("Blank");
+            last_mesto = _record.at("Edit");
+            gde_sht = _record.at("GdeSHT");
             try
             {
                 auto tt = conv2::to_wstring(from_to);
@@ -216,8 +241,14 @@ void Telega::initTelega(const std::map<std::string, std::string> &_record) {
 std::string Telega::getNumFromFileName(const std::filesystem::path& path)
 {
     auto fn = path.filename().string();
-    return fn.substr(0,fn.find_last_of('.') > 0 ? fn.find_last_of('.') : fn.length());
+    size_t dot_pos = fn.find_last_of('.');
+    std::string num = fn.substr(0, (dot_pos != std::string::npos) ? dot_pos : fn.length());
 
+    // Проверка: вся ли строка состоит из цифр
+    if (!num.empty() && std::all_of(num.begin(), num.end(), ::isdigit))
+        return num;
+    else
+        return {};
 }
 
 Telega::Telega(const std::filesystem::path& _p, float _rel) : Telega(TYPE::NOTTG, _p, _rel) {

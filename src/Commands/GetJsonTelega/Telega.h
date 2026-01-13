@@ -23,6 +23,9 @@ struct Telega {
     std::string tel_num;
     std::string pril_name;
     std::string pril_count;
+    std::string blank;
+    std::string last_mesto;
+    std::string gde_sht;
     float rel;
 
     static inline std::vector<std::string> b_prm = {};
@@ -44,7 +47,7 @@ public:
     };
 
 
-    static std::vector<std::string> getBases (const std::string& _dir);
+    [[maybe_unused]] static std::vector<std::string> getBases (const std::string& _dir);
     static std::list<std::map<std::string,std::string>> findBase (const std::string& condition, TYPE _type, bool single = false);
     static std::vector<std::string> getBases(TYPE _type);
     static Telega::TYPE getTypeFromDir(const std::filesystem::path& p);
@@ -69,6 +72,9 @@ public:
         MOVE(rel);
         MOVE(pril_name);
         MOVE(pril_count);
+        MOVE(blank);
+        MOVE(last_mesto);
+        MOVE(gde_sht);
         return *this;
     }
     bool operator==(const Telega &other) const

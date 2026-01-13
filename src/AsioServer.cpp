@@ -1,8 +1,7 @@
 #include "AsioServer.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 #include "SQLite/mySql.h"
 #include "SqlLogger.h"
-
 #include <iostream>
 #include <memory>
 #include <utility>
@@ -18,320 +17,255 @@
 #include "Commands/ServiceCommands/PingCmd.h"
 #include "Commands/GetTelegaWay/GetTelegaWayCmd.h"
 #include "Commands/GetAttachments/GetAttachmentsCmd.h"
-
+#include "Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.h"
+#include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
+#include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include <mutex>
-
 
 using boost::asio::ip::tcp;
 
-void asio_server::session::start() {
-    readHeader();
+void asio_server::session::start()
+{
+    auto self = shared_from_this();
+    auto ex = socket_.get_executor();
+
+    boost::asio::co_spawn(
+            ex,
+            [self]() -> boost::asio::awaitable<void> {
+                co_await self->readLoop();
+            },
+            [self](const std::exception_ptr& eptr) {
+                if (eptr) {
+                    try { std::rethrow_exception(eptr); }
+                    catch (const std::exception& e) {
+                        search_server::addToLog(std::string("readLoop failed: ") + e.what());
+                    }
+                }
+                self->stop("readLoop finished");
+            }
+    );
+
+    boost::asio::co_spawn(
+            ex,
+            [self]() -> boost::asio::awaitable<void> {
+                co_await self->writeLoop();
+            },
+            [self](const std::exception_ptr& eptr) {
+                if (eptr) {
+                    try { std::rethrow_exception(eptr); }
+                    catch (const std::exception& e) {
+                        search_server::addToLog(std::string("writeLoop failed: ") + e.what());
+                    }
+                }
+                self->stop("writeLoop finished");
+            }
+    );
 }
+
+
+boost::asio::awaitable<void> asio_server::session::readLoop()
+{
+    try {
+        search_server::addToLog("Connect\t\t" + getRemoteIP());
+
+        while (!stopped_ && socket_.is_open()) {
+
+            co_await boost::asio::async_read(
+                    socket_, boost::asio::buffer(&header_, sizeof(header_)),
+                    boost::asio::use_awaitable);
+
+            // 1) лимит размера
+            constexpr std::size_t MAX_PAYLOAD = 1000 * 1024 * 1024; // 1GB
+            if (header_.size > MAX_PAYLOAD) {
+                search_server::addToLog("Too big payload from " + getRemoteIP());
+                // отправить SOMEERROR без commandExec
+                asio_server::Header err{};
+                err.command = COMMAND::SOMEERROR;
+                err.size = 0;
+                write_channel_.try_send(boost::system::error_code{}, err);
+                co_return;
+            }
+
+            // 2) валидация команды
+            if (!trustCommand()) {
+                asio_server::Header err{};
+                err.command = COMMAND::SOMEERROR;
+                err.size = 0;
+                write_channel_.try_send(boost::system::error_code{}, err);
+                co_return;
+            }
+
+            v_data_.assign(header_.size, 0);
+
+            std::size_t total_read = 0;
+            while (total_read < header_.size) {
+                std::size_t to_read = std::min<std::size_t>(max_length, header_.size - total_read);
+                std::size_t bytes = co_await socket_.async_read_some(
+                        boost::asio::buffer(v_data_.data() + total_read, to_read),
+                        boost::asio::use_awaitable);
+                total_read += bytes;
+            }
+
+            commandExec();
+        }
+    }
+    catch (const boost::system::system_error& e) {
+        if (e.code() == boost::asio::error::eof)
+            search_server::addToLog("Client closed (" + getRemoteIP() + ")");
+        else
+            search_server::addToLog(std::string("readLoop error: ") + e.what());
+    }
+
+    co_return;
+}
+
+
+
+void asio_server::session::stop(const char* why)
+{
+    // идемпотентно
+    if (stopped_.exchange(true)) return;
+
+    search_server::addToLog(std::string("Session stop: ") + why + " " + getRemoteIP());
+
+    boost::system::error_code ec;
+
+    // 1) закрыть канал, чтобы writeLoop вышел из async_receive
+    write_channel_.close();
+
+    // 2) закрыть сокет
+    if (socket_.is_open()) {
+        socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        socket_.close(ec);
+    }
+
+    // 3) логировать DISCONNECT один раз
+    logutil::log(userName_, "EMPTY", "DISCONNECT");
+}
+
+
+boost::asio::awaitable<void> asio_server::session::writeLoop()
+{
+    try {
+        while (!stopped_ && socket_.is_open()) {
+            boost::system::error_code ec;
+            WriteItem item;
+            std::tie(ec, item) =
+                    co_await write_channel_.async_receive(boost::asio::as_tuple(boost::asio::use_awaitable));
+
+            if (ec) break; // channel closed => выходим
+
+            if (auto hdr = std::get_if<asio_server::Header>(&item)) {
+                co_await boost::asio::async_write(socket_, boost::asio::buffer(hdr, sizeof(*hdr)),
+                                                  boost::asio::use_awaitable);
+            }
+            else if (auto buf = std::get_if<std::shared_ptr<std::vector<BYTE>>>(&item)) {
+                co_await boost::asio::async_write(socket_, boost::asio::buffer(**buf),
+                                                  boost::asio::use_awaitable);
+            }
+            else if (auto p = std::get_if<std::filesystem::path>(&item)) {
+                if (co_await openFileStream(*p))
+                    co_await sendNextFileChunk();
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        search_server::addToLog(std::string("writeLoop exception: ") + e.what());
+    }
+
+    co_return;
+}
+
 
 asio_server::session::~session()
 {
-    try {
-        boost::system::error_code ec;
-        if (socket_.is_open()) {
-            socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-            socket_.close(ec);
-        }
-        logutil::log(userName_,"EMPTY","DISCONNECT");
-    } catch (...) {
-        // безопасно игнорируем любые исключения
+    boost::system::error_code ec;
+    if (socket_.is_open()) {
+        socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        socket_.close(ec);
     }
 }
 
-void asio_server::session::readHeader() {
-    auto self(shared_from_this());
-    try {
-        if (socket_.is_open()) {
-            std::cout << "Connect\t\t" + getRemoteIP() << std::endl;
-            search_server::SearchServer::addToLog("Connect\t\t" + getRemoteIP());
 
-            socket_.async_read_some(boost::asio::buffer(&header_, sizeof(header_)),
-                                    [this, self](boost::system::error_code ec, std::size_t length) {
-                                        try {
-                                            if (!ec && trustCommand()) {
-                                                std::cout << "Header read\t" + getRemoteIP() << std::endl;
-                                                search_server::SearchServer::addToLog("Header read\t" + getRemoteIP());
-                                                readData();
-                                            } else {
-                                                header_.command = COMMAND::SOMEERROR;
-                                                search_server::SearchServer::addToLog("Received from\t" + getRemoteIP() + "\tcommand\t'" + getTextCommand(header_.command) + "'");
-                                                writeHeader();
-                                                std::cout << "Socket off - - \t" + getRemoteIP() << std::endl;
-                                                search_server::SearchServer::addToLog("Socket off\t" + getRemoteIP());
-                                            }
-                                        } catch (const std::exception& e) {
-                                            search_server::SearchServer::addToLog(std::string("Exception in readHeader: ") + e.what());
-                                            socket_.close();
-                                        }
-                                    });
-        } else {
-            search_server::SearchServer::addToLog("Socket is not open when trying to read header.");
-        }
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in readHeader: ") + e.what());
-        socket_.close();
-    }
-}
+boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
 
-void asio_server::session::readData() {
-    auto self(shared_from_this());
-
-    try {
-        std::size_t to_read = std::min(static_cast<size_t>(header_.size - v_data_.size()), static_cast<size_t>(max_length));
-        v_data_.resize(v_data_.size() + to_read);
-
-        socket_.async_read_some(boost::asio::buffer(v_data_.data() + v_data_.size() - to_read, to_read),
-                                [this, self, to_read](boost::system::error_code ec, std::size_t length) {
-                                    try {
-                                        if (!ec) {
-                                            if (length > to_read) {
-                                                std::cerr << "Error: read more than expected!" << std::endl;
-                                                socket_.close();
-                                                return;
-                                            }
-                                            std::lock_guard<std::mutex> lock(v_data_mutex);
-                                            v_data_.resize(v_data_.size() - to_read + length);
-
-                                            auto now = std::chrono::system_clock::now();
-                                            std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-                                            std::tm now_tm = *std::localtime(&now_time);
-
-                                            // Форматирование времени и даты
-                                            char buffer[80];
-                                            std::strftime(buffer, sizeof(buffer), "%H:%M:%S %d.%m.%Y", &now_tm);
-
-                                            if (v_data_.size() < header_.size) {
-                                                // Вывод с датой и временем
-                                             //   std::cout << "Received from\t" + getRemoteIP() + "\tcommand '" + getTextCommand(header_.command) << " " << std::to_string(to_read) << " " << v_data_.size() << "\tat " << buffer << std::endl;
-                                                readData();
-                                            } else {
-                                            //    std::cout << "Received from\t" + getRemoteIP() + "\tcommand '" + getTextCommand(header_.command) << " " << std::to_string(to_read) << " " << v_data_.size() << "\tat " << buffer << std::endl;
-                                                std::cout << "Received all data. Processing..." << std::endl;
-                                                commandExec();
-                                            }
-                                        } else {
-                                            header_.command = COMMAND::SOMEERROR;
-                                            std::cerr << "Error on receive: " << ec.message() << std::endl;
-                                            socket_.close();
-                                        }
-                                    } catch (const std::exception& e) {
-                                        search_server::SearchServer::addToLog(std::string("Exception in readData: ") + e.what());
-                                        socket_.close();
-                                    }
-                                });
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in readData: ") + e.what());
-        socket_.close();
-    }
-}
-
-/*
-template<>
-void asio_server::session::writeToSocket(const File<std::vector<BYTE>>& _data) {
-    auto self(shared_from_this());
-
-    for(int i = 0; i < _data.getBlocksCount(); i++) {
-        auto count = _data[i].size();
-        boost::asio::async_write(socket_, boost::asio::buffer(_data[i], count),
-                                 [this, self, count](boost::system::error_code ec, std::size_t ) {
-                                     if (!ec) {
-                                         search_server::SearchServer::addToLog("Request to\t" + getRemoteIP() + "\tcommand\t'" + getTextCommand(header_.command) +
-                                                                               "'\tsize " +  std::to_string(count) + "\tbytes");
-                                     } else {
-                                         std::cerr << "Error on send: " << ec.message() << std::endl;
-                                     }
-                                 });
-    }
-
-    readHeader();
-}*/
-
-
-
-
-
-template<>
-void asio_server::session::writeToSocket(const File<std::vector<BYTE>>& _data) {
-    auto self(shared_from_this());
-
-    try {
-        boost::asio::post(socket_.get_executor(), [this, self, _data]() {
-            {
-                std::lock_guard<std::mutex> lock(socket_mutex);
-                for (int i = 0; i < _data.getBlocksCount(); ++i) {
-                    auto buffer = std::make_shared<std::vector<BYTE>>(_data[i]);
-                    writeQueue.push(buffer);
-                    search_server::SearchServer::addToLog("Queued buffer of size " + std::to_string(buffer->size()) + " for client: " + getRemoteIP());
-                }
-            }
-
-            search_server::SearchServer::addToLog("Starting buffer processing for client: " + getRemoteIP());
-            doWrite();
-        });
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in writeToSocket: ") + e.what());
-        socket_.close();
-    }
-}
-
-void asio_server::session::writeToSocket(const std::filesystem::path& file_path)
-{
-    auto self(shared_from_this());
-
-    try {
-        boost::asio::post(socket_.get_executor(), [this, self, file_path]() {
-            try {
-                file_stream = std::make_unique<std::ifstream>(file_path, std::ios::binary);
-                if (!file_stream->is_open()) {
-                    search_server::SearchServer::addToLog("Не удалось открыть файл: " + file_path.string());
-                    socket_.close();
-                    return;
-                }
-
-                search_server::SearchServer::addToLog("Начинаем потоковую отправку: " + file_path.string());
-                sendNextFileChunk(); // старт отправки
-            }
-            catch (const std::exception& ex) {
-                search_server::SearchServer::addToLog(std::string("Ошибка при открытии файла: ") + ex.what());
-                socket_.close();
-            }
-        });
-    }
-    catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in writeToSocket: ") + e.what());
-        socket_.close();
-    }
-}
-
-void asio_server::session::sendNextFileChunk()
-{
     constexpr std::size_t blockSize = 64 * 1024;
 
+    if (!socket_.is_open()) {
+        search_server::addToLog("Соединение прервано, отправка отменена");
+        co_return;
+    }
+
     if (!file_stream || !file_stream->is_open()) {
-        search_server::SearchServer::addToLog("Файл не открыт для отправки");
-        return;
+        search_server::addToLog("Файл не открыт для отправки");
+        co_return ;
     }
 
-    auto buffer = std::make_shared<std::vector<BYTE>>(blockSize);
-    file_stream->read(reinterpret_cast<char*>(buffer->data()), blockSize);
-    std::streamsize bytesRead = file_stream->gcount();
+    while(file_stream && file_stream->is_open()) {
 
-    if (bytesRead <= 0) {
-        search_server::SearchServer::addToLog("Файл полностью отправлен");
-        return;
-    }
 
-    buffer->resize(bytesRead);
-    {
-        std::lock_guard<std::mutex> lock(socket_mutex);
-        writeQueue.push(buffer);
-    //    search_server::SearchServer::addToLog("Буфер размером " + std::to_string(bytesRead) + " добавлен в очередь отправки");
-    }
+        auto buffer = std::make_shared<std::vector<BYTE>>(blockSize);
+        file_stream->read(reinterpret_cast<char *>(buffer->data()), blockSize);
+        std::streamsize bytesRead = file_stream->gcount();
 
-    doWrite(); // отправляем этот блок
-
-    // Постим следующее чтение
-    auto self(shared_from_this());
-    boost::asio::post(socket_.get_executor(), [this, self]() {
-        sendNextFileChunk();
-    });
-}
-
-void asio_server::session::doWrite() {
-    auto self(shared_from_this());
-
-    try {
-     //   search_server::SearchServer::addToLog("Entering doWrite for client: " + getRemoteIP());
-
-        std::lock_guard<std::mutex> lock(socket_mutex);
-        if (isWriting || writeQueue.empty()) {
-        //    search_server::SearchServer::addToLog("Write process already in progress or write queue is empty for client: " + getRemoteIP());
-            return;
+        if (bytesRead <= 0) {
+            search_server::addToLog("Файл полностью отправлен");
+            co_return;
         }
 
-        isWriting = true;
-       // search_server::SearchServer::addToLog("Set isWriting to true for client: " + getRemoteIP());
+        buffer->resize(bytesRead);
 
-        auto buffer = writeQueue.front();
-        writeQueue.pop();
+        boost::system::error_code ec;
+        co_await boost::asio::async_write(socket_, boost::asio::buffer(*buffer), boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        if (ec) {
+            search_server::addToLog("Ошибка при отправке: " + ec.message());
+            socket_.close(); // <--- обязательно!
+            logutil::log(userName_,"EMPTY","DISCONNECT");
+            co_return;
+        }
 
-      //  search_server::SearchServer::addToLog("Writing buffer of size " + std::to_string(buffer->size()) + " for client: " + getRemoteIP());
-
-        boost::asio::async_write(socket_, boost::asio::buffer(*buffer),
-                                 [this, self, buffer](boost::system::error_code ec, std::size_t length) {
-                                     try {
-                                         if (!ec) {
-                                    //         search_server::SearchServer::addToLog("Successfully wrote buffer of size " + std::to_string(length) + " for client: " + getRemoteIP());
-                                             {
-                                                 std::lock_guard<std::mutex> lock(socket_mutex);
-                                                 isWriting = false;
-                                 //                search_server::SearchServer::addToLog("Set isWriting to false for client: " + getRemoteIP());
-                                             }
-                                             doWrite();
-                                         } else {
-                                             std::cerr << "Error on send: " << ec.message() << std::endl;
-                                             search_server::SearchServer::addToLog("Error on send: " + ec.message() + " for client: " + getRemoteIP());
-                                             {
-                                                 std::lock_guard<std::mutex> lock(socket_mutex);
-                                                 isWriting = false;
-                                        //         search_server::SearchServer::addToLog("Set isWriting to false due to error for client: " + getRemoteIP());
-                                             }
-                                             socket_.close();
-                                         }
-                                     } catch (const std::exception& e) {
-                                         search_server::SearchServer::addToLog(std::string("Exception in async_write: ") + e.what());
-                                         socket_.close();
-                                     }
-                                 });
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in doWrite: ") + e.what());
-        socket_.close();
     }
 }
 
-template<>
-[[maybe_unused]] void asio_server::session::writeToSocket(const File<std::string>& _data) {
-    auto self(shared_from_this()); // Захват shared_ptr для гарантии времени жизни объекта
-
-    for(int i = 0; i < _data.getBlocksCount(); i++) {
-        auto count = _data[i].size();
-        boost::asio::async_write(socket_, boost::asio::buffer(_data[i], count),
-                                 [this, self, count](boost::system::error_code ec, std::size_t /*length*/) { // Захват self
-                                     if (!ec) {
-                                         search_server::SearchServer::addToLog("Request to\t" + getRemoteIP() + "\tcommand\t'" + getTextCommand(header_.command) +
-                                                                               "'\tsize " + std::to_string(count) + "\tbytes");
-                                     } else {
-                                         std::cerr << "Error on send: " << ec.message() << std::endl; // Обработка ошибки отправки
-                                     }
-                                 });
-    }
-    readHeader(); // Переход к чтению заголовка после завершения записи
-}
-
-
-void asio_server::session::commandExec() {
+void  asio_server::session::commandExec() {
     try {
+
         // Обработка команды
         std::vector<BYTE> answer;
         PersonalRequest personalRequest{};
         personalRequest.request_type = getTextCommand(header_.command);
 
-        if (header_.command == COMMAND::GETBINFILE) {
+        if (header_.command == COMMAND::SOMEERROR)
+        {
+            write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+            return;
+        }
+
+        if (header_.command == COMMAND::GETBINFILE)
+        {
             // answer содержит путь к файлу (в виде std::vector<BYTE>, но это строка пути)
             std::string pathStr(v_data_.begin(), v_data_.end());
             personalRequest.request = pathStr;
             std::filesystem::path file_path(pathStr);
 
             // Устанавливаем размер вручную — получим размер файла
-            std::uintmax_t file_size = std::filesystem::file_size(file_path);
-            header_.size = static_cast<std::size_t>(file_size);
 
-            writeHeader();
-            writeToSocket(file_path);
+            std::uintmax_t file_size;
+            if(!exists(file_path))
+            {
+                header_.command = COMMAND::SOMEERROR;
+                write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+            }
+            else
+            {
+
+                file_size = std::filesystem::file_size(file_path);
+                header_.size = static_cast<std::size_t>(file_size);
+
+                write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+                write_channel_.try_send(boost::system::error_code{}, file_path);
+            }
+
         }
         else
         {
@@ -346,53 +280,33 @@ void asio_server::session::commandExec() {
             {
                 answer = Interface::execCommand(header_.command, v_data_);
             }
+
             auto request = std::string(v_data_.begin(), v_data_.end());
             if(header_.command == COMMAND::LOAD_TLG_TO_SEND || header_.command == COMMAND::LOAD_RAZN)
                 personalRequest.request = getTextCommand(header_.command);
             else
                 personalRequest.request  = request.empty() ? "EMPTY" : request;
 
-
             header_.size = answer.size();
-            writeHeader();
-            writeToSocket(File<std::vector<BYTE>>(answer));
+
+            write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+            write_channel_.try_send(boost::system::error_code{}, std::make_shared<std::vector<BYTE>>(answer)); // потом сами данные
+
         }
 
         personalRequest.user_name = userName_;
         logutil::log(personalRequest);
 
         v_data_.clear();
-        readHeader();
     } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
+        search_server::addToLog(std::string("Exception in commandExec: ") + e.what());
+        header_.command = COMMAND::SOMEERROR;
+        write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+
         socket_.close();
+        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
 }
-
-
-
-void asio_server::session::writeHeader() {
-    auto self(shared_from_this());
-    try {
-        boost::asio::async_write(socket_, boost::asio::buffer(&header_, sizeof(Header)),
-                                 [this, self](boost::system::error_code ec, std::size_t /*length*/) {
-                                     if (!ec) {
-                                         if (header_.command == COMMAND::SOMEERROR) {
-                                             socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-                                             socket_.close(ec);
-                                             header_ = Header{};
-                                         }
-                                     } else {
-                                         search_server::SearchServer::addToLog("Error on write header: " + ec.message());
-                                         socket_.close();
-                                     }
-                                 });
-    } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in writeHeader: ") + e.what());
-        socket_.close();
-    }
-}
-
 
 std::string asio_server::session::getRemoteIP() const {
     boost::asio::ip::tcp::endpoint remote_ep = socket_.remote_endpoint();
@@ -400,23 +314,6 @@ std::string asio_server::session::getRemoteIP() const {
 
     return remote_ad.to_string();
 }
-
-void asio_server::session::writeToSocket(const std::string& str) {
-    auto self(shared_from_this()); // Захват shared_ptr для гарантии времени жизни объекта
-
-    boost::asio::async_write(socket_, boost::asio::buffer(str, str.size()),
-                             [this, self](boost::system::error_code ec, std::size_t /*length*/) { // Захват self
-                                 if (!ec) {
-                                     search_server::SearchServer::addToLog("Request to\t" + getRemoteIP() + "\tcommand\t'" + getTextCommand(header_.command) +
-                                                                           "'\tsize " + std::to_string(header_.size) + "\tbytes");
-
-                                     readHeader(); // Переход к чтению заголовка после завершения записи
-                                 } else {
-                                     std::cerr << "Error on send: " << ec.message() << std::endl; // Обработка ошибки отправки
-                                 }
-                             });
-}
-
 
 bool asio_server::session::trustCommand() {
     try {
@@ -433,47 +330,11 @@ bool asio_server::session::trustCommand() {
         header_.command = COMMAND::SOMEERROR;
         return false;
     } catch (const std::exception& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in trustCommand: ") + e.what());
+        search_server::addToLog(std::string("Exception in trustCommand: ") + e.what());
         header_.command = COMMAND::SOMEERROR;
         return false;
     }
 }
-
-std::string asio_server::getTextCommand(COMMAND command) {
-
-
-    static const std::unordered_map<COMMAND, std::string> commandMap = {
-            {COMMAND::JSONREGUEST, "JSON request"},
-            {COMMAND::FILETEXT, "FILE text"},
-            {COMMAND::SOLOREQUEST, "SINGLE request"},
-            {COMMAND::ADDRESOLUTION, "ADD_RESOLUTION"},
-            {COMMAND::UPDATE, "UPDATE"},
-            {COMMAND::GETBINFILE, "GET_BIN_FILE"},
-            {COMMAND::GETRESOLUTION, "GET_RESOLUTION"},
-            {COMMAND::LOAD_TLG_TO_SEND, "LOAD_TLG_TO_SEND"},
-            {COMMAND::SOMEERROR, "ERROR :("},
-            {COMMAND::GETRESOLUTIONS, "GET_RESOLUTIONS"},
-            {COMMAND::GETDOCS, "GET_DOCUMENTS"},
-            {COMMAND::GETDOC, "GET_DOCUMENT"},
-            {COMMAND::GETSQLJSONANSWEAR, "GET_SQL_JSON_ANSWER"},
-            {COMMAND::GET_VH_TELEGI_FROM_SQL, "GET_INCOMING_TELEGRAMS_FROM_SQL"},
-            {COMMAND::GET_ISH_TELEGI_FROM_SQL, "GET_OUTGOING_TELEGRAMS_FROM_SQL"},
-            {COMMAND::START_UPDATE_BASE, "START_UPDATE_BASE"},
-            {COMMAND::SAVE_MESSAGE_TO, "SAVE_MESSAGE_TO"},
-            {COMMAND::END_COMMAND, "END"},
-            {COMMAND::GET_MESSAGE, "GET_MESSAGE"},
-            {COMMAND::USER_REGISTRY, "AUTHORIZATION"},
-            {COMMAND::LOAD_RAZN, "LOAD_RAZN"},
-            {COMMAND::GET_OPIS_BASE, "GET_OPIS_BASE"},
-            {COMMAND::PING, "PING"}
-    };
-
-
-    auto it = commandMap.find(command);
-        return it != commandMap.end() ? it->second : "UNKNOWN COMMAND";
-}
-
-
 
 void asio_server::Interface::setSearchServer(search_server::SearchServer *_server) {
     searchServer_ = _server;
@@ -494,6 +355,9 @@ void asio_server::Interface::setSearchServer(search_server::SearchServer *_serve
     cmdMap[COMMAND::GET_VH_TELEGA_WAY] = std::make_unique<GetTelegaWayVhCmd>();
     cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){ return GetFileCmd::downloadFileByPath("D:\\OPIS_ADMIN\\" + year_ + ".db"); });
     cmdMap[COMMAND::GET_ATTACHMENTS] = std::make_unique<GetAttachmentsCmd>();
+    cmdMap[COMMAND::GET_ISH_PDTV] = std::make_unique<GetIshTelegaPdtvCommand>();
+    cmdMap[COMMAND::GET_TELEGA_ATACHMENTS] = std::make_unique<GetTelegaAttachmentsCmd>();
+    cmdMap[COMMAND::GET_SINGLE_ATACHMENT] = std::make_unique<GetTelegaSingleAttachmentCmd>();
 }
 
 std::vector<uint8_t> asio_server::Interface::execCommand(asio_server::COMMAND _command, std::vector<uint8_t> &_request) {
@@ -526,4 +390,38 @@ asio_server::AsioServer::AsioServer(boost::asio::io_context &io_context, short p
         : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
     mySql::init("JURNAL.db3");
     do_accept();
+}
+
+
+
+boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::filesystem::path& file_path)
+{
+    try {
+        file_stream = std::make_unique<std::ifstream>(file_path, std::ios::binary);
+        if (!file_stream->is_open()) {
+            search_server::addToLog("Не удалось открыть файл: " + file_path.string());
+          //  socket_.close();
+            co_return false;
+        }
+        search_server::addToLog("Начинаем потоковую отправку: " + file_path.string());
+        co_return true;
+    }
+    catch (const std::exception& ex) {
+        search_server::addToLog(std::string("Ошибка при открытии файла: ") + ex.what());
+       // socket_.close();
+        co_return false;
+    }
+
+}
+
+template<typename T>
+bool asio_server::session::safe_send_to_channel(T&& item) {
+    if (!write_channel_.try_send(boost::system::error_code{}, std::forward<T>(item))) {
+        asio_server::Header error_header;
+        error_header.command = asio_server::COMMAND::SOMEERROR;
+        error_header.size = 0;
+        write_channel_.try_send(boost::system::error_code{}, error_header);
+        return false;
+    }
+    return true;
 }

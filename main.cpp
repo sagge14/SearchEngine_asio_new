@@ -1,149 +1,330 @@
+// ============================================================================
+// main.cpp — Search Server entry point
+// ============================================================================
+
+
+// ============================================================================
+// STL
+// ============================================================================
 #include <iostream>
 #include <thread>
-#include <vector>
+#include <string>
+#include <fstream>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <ctime>
 
-#include "SearchServer.h"
+
+// ============================================================================
+// Windows networking (REQUIRED before windows.h)
+// ============================================================================
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+// ============================================================================
+// Platform / OS
+// ============================================================================
+#include <windows.h>
+
+// ============================================================================
+// Boost / Asio
+// ============================================================================
+#include <boost/asio.hpp>
+
+
+// ============================================================================
+// Infrastructure / Utils
+// ============================================================================
+#include "ContextRuntime.h"
 #include "ConverterJSON.h"
-#include "SQLite/mySQLite.h"
-#include "md5/md5Hasher.h"
-#include "Commands/GetJsonTelega/Telega.h"
+#include "SqlLogger.h"
+#include "OEMtoCase.h"
+#include "Interface.h"
+
+
+// ============================================================================
+// Search Server
+// ============================================================================
+#include "SearchServer/SearchServer.h"
 #include "AsioServer.h"
+
+
+// ============================================================================
+// FileWatcher
+// ============================================================================
+#include "FileWatcher/FileEventDispatcher.h"
+#include "FileWatcher/Commands/IndexCommands.h"
+#include "FileWatcher/Commands/OpdateOpisBaseCommand/RecordProcessor.h"
+
+
+// ============================================================================
+// Telega / Business logic
+// ============================================================================
+#include "Commands/GetJsonTelega/Telega.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
 
-#include "nlohmann/json.hpp"
-#include "Commands/SaveMessage/Message.h"
-#include "MyStrings/myWstring.h"
-#include <filesystem>
 
-#include "SqlLogger.h"
+// ============================================================================
+// Scheduler / Tasks
+// ============================================================================
+#include "scheduler/PeriodicTaskManager.h"
+#include "scheduler/TaskID.h"
+#include "scheduler/UpdateIndexTask.h"
+#include "scheduler/PeriodicUpdateTask.h"
+#include "scheduler/FlushPendingTask.h"
+#include "scheduler/BackupTask.h"
+#include "scheduler/DelayEventTickTask.h"
 
-#include <exception>
-#include <fstream>
 
-void myTerminateHandler() {
-    std::ofstream log("fatal_crash.log", std::ios::app);
-    log << "[FATAL] Server terminated due to unhandled exception!" << std::endl;
-    std::abort(); // обязательно, иначе программа "зависнет"
+// ============================================================================
+// Using / Macros
+// ============================================================================
+using namespace std::chrono_literals;
+
+#define LG(...) StartLog::instance().write(__VA_ARGS__)
+
+
+// ============================================================================
+// Debug / Raw logging
+// ============================================================================
+void rawLog(const std::string& msg)
+{
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+
+    std::ofstream f("io_ping.log", std::ios::app);
+    if (!f) return;
+
+    auto now = std::time(nullptr);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", std::localtime(&now));
+
+    f << "[" << buf << "] " << msg << "\n";
 }
 
-#include <windows.h>
-#include <dbghelp.h>
+void pingIoRaw(boost::asio::io_context& ctx, const char* name)
+{
+    std::cout << "[PING post -> " << name << "]\n";
+    boost::asio::post(ctx, [name]() {
+        std::cout << "[PING executed <- " << name << "]\n";
+    });
+}
 
-LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* ExceptionInfo) {
+
+// ============================================================================
+// Crash / Termination handlers
+// ============================================================================
+void myTerminateHandler()
+{
+    std::ofstream log("fatal_crash.log", std::ios::app);
+    log << "[FATAL] Server terminated due to unhandled exception!\n";
+    std::abort();
+}
+
+LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* info)
+{
     std::ofstream log("crash.log", std::ios::app);
-    log << "[SEH] Exception code: 0x" << std::hex << ExceptionInfo->ExceptionRecord->ExceptionCode << std::endl;
+    log << "[SEH] Exception code: 0x"
+        << std::hex << info->ExceptionRecord->ExceptionCode << "\n";
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
 
-
-#include <codecvt>
-namespace cc3  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
+// ============================================================================
+// Helpers
+// ============================================================================
+void clearIndexingDebugLog()
+{
+    std::ofstream log("indexing_debug.log");
+    log << "== Новый запуск индексации ==\n";
 }
-void writeBytesToFile(const std::vector<uint8_t>& bytes, const std::filesystem::path& filePath) {
-    std::ofstream outFile(filePath, std::ios::binary);
-    if (!outFile) {
-        throw std::runtime_error("Failed to open file for writing: " + filePath.string());
-    }
-    outFile.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    outFile.close();
-}
-int main() {
 
-    using namespace std;
-/**/
+
+// ============================================================================
+// main()
+// ============================================================================
+int main()
+{
+    // ------------------------------------------------------------------------
+    // Load settings
+    // ------------------------------------------------------------------------
+    auto settings = ConverterJSON::getSettings();
+    LG("Settings loaded");
+
+    clearIndexingDebugLog();
+    LG("Indexing debug log cleared");
+
+    // ------------------------------------------------------------------------
+    // Platform / locale init
+    // ------------------------------------------------------------------------
+    OEMtoCase::init("OEM866.INI");
+    OEMtoUpper::init("OEM866.INI");
+
+    RecordProcessor::setDefaultDirs(
+            "D:\\BASES\\ARCHIVE.DB3",
+            "D:\\BASES_PRD\\ARCHIVE.DB3",
+            "D:\\OPIS_ADMIN\\2025.DB",
+            "PRM",
+            "PRD"
+    );
+
+    setlocale(LC_ALL, "Russian_Russia.866");
+    std::locale::global(std::locale("Russian_Russia.866"));
+
     std::set_terminate(myTerminateHandler);
     SetUnhandledExceptionFilter(myUnhandledFilter);
 
-    auto settings = ConverterJSON::getSettings();
+    LG("Platform initialized");
+
+    // ------------------------------------------------------------------------
+    // IO runtime
+    // ------------------------------------------------------------------------
+    ContextRuntime runtime(settings.threadCount);
+    runtime.start();
+    LG("IO contexts started");
+
+    // ------------------------------------------------------------------------
+    // Console mode
+    // ------------------------------------------------------------------------
+    if (settings.hideMode) {
+        ShowWindow(GetConsoleWindow(), SW_HIDE);
+        LG("Console hidden");
+    }
+
+    // ------------------------------------------------------------------------
+    // Telega init
+    // ------------------------------------------------------------------------
     TelegaWay::base_way_dir = "D:\\F12\\" + settings.year + ".db";
     TelegaWay::base_f12_dir = "D:\\F12\\base.db";
-    TelegaWay::work_year = settings.year;
-    std::locale::global(std::locale("Russian_Russia.866"));
+    TelegaWay::work_year   = settings.year;
 
-    SqlLogger::instance("log.db"); // инициализация
+    Telega::year          = settings.year;
+    Telega::prd_base_dir  = settings.prd_base_dir;
+    Telega::prm_base_dir  = settings.prm_base_dir;
+    Telega::b_prm         = Telega::getBases(Telega::TYPE::ISHOD);
 
-    if (settings.hideMode) {
-        HWND hWnd = GetConsoleWindow();
-        ShowWindow(hWnd, SW_HIDE);
+    LG("Telega initialized");
+
+    // ------------------------------------------------------------------------
+    // Logger
+    // ------------------------------------------------------------------------
+    SqlLogger::instance("log.db");
+    LG("SqlLogger started");
+
+    // ------------------------------------------------------------------------
+    // Search server
+    // ------------------------------------------------------------------------
+    search_server::SearchServer server(
+            settings,
+            runtime.index(),
+            runtime.commit()
+    );
+
+    asio_server::Interface::setYear(settings.year);
+    asio_server::Interface::setSearchServer(&server);
+
+    LG("SearchServer created");
+
+    // ------------------------------------------------------------------------
+    // Scheduler & FileWatcher
+    // ------------------------------------------------------------------------
+    PeriodicTaskManager<TaskId> scheduler;
+
+    FileEventDispatcher dispatcher(
+            settings.dirs,
+            settings.extensions,
+            runtime.scheduler()
+    );
+
+    dispatcher.registerCommand(
+            FileEvent::Added,
+            std::make_unique<AddFileCommand<TaskId>>(server, scheduler, settings.extensions)
+    );
+
+    dispatcher.registerCommand(
+            FileEvent::Removed,
+            std::make_unique<RemoveFileCommand>(server)
+    );
+
+    scheduler.addTask<FlushPendingTask2>(
+            TaskId::FlushPendingTask,
+            runtime.scheduler(),
+            7s,
+            dispatcher
+    );
+
+    scheduler.addTask<PeriodicUpdateTask>(
+            TaskId::PeriodicUpdateTask,
+            runtime.scheduler(),
+            std::chrono::seconds(settings.indTime),
+            &server
+    );
+
+    scheduler.addTask<DelayEventTickTask<TaskId>>(
+            TaskId::DelayEventTickTask,
+            runtime.scheduler(),
+            2s,
+            scheduler
+    );
+
+    // ------------------------------------------------------------------------
+    // Backup tasks
+    // ------------------------------------------------------------------------
+    auto jobs = ConverterJSON::parseBackupJobs("Backup.json");
+    for (const auto& job : jobs) {
+        scheduler.addTask<BackupTask>(
+                TaskId::BackupTask,
+                runtime.scheduler(),
+                std::chrono::seconds(job.period_sec),
+                job.backup_dir,
+                job.targets
+        );
     }
 
-    Telega::year = settings.year;
-    Telega::prd_base_dir = settings.prd_base_dir;
-    Telega::prm_base_dir = settings.prm_base_dir;
-    Telega::b_prm = Telega::getBases(Telega::TYPE::VHOD);
-    Telega::b_prm = Telega::getBases(Telega::TYPE::ISHOD);
+    LG("Scheduler initialized");
 
+    // ------------------------------------------------------------------------
+    // Asio server
+    // ------------------------------------------------------------------------
+    [[maybe_unused]]
+    auto asioServer = std::make_shared<asio_server::AsioServer>(
+            runtime.net(),
+            settings.port
+    );
+
+    LG("AsioServer started");
+
+    // ------------------------------------------------------------------------
+    // Console loop
+    // ------------------------------------------------------------------------
     try {
-        asio_server::Interface::setYear(settings.year);
-        search_server::SearchServer myServer(settings);
-        boost::asio::io_context io_context;
-        asio_server::Interface::setSearchServer(&myServer);
-
-        auto asioServer = std::make_shared<asio_server::AsioServer>(io_context, settings.port);
-
-        // Создание пула потоков
-        const size_t thread_pool_size = std::thread::hardware_concurrency();
-        std::vector<std::thread> thread_pool;
-        for (size_t i = 0; i < thread_pool_size; ++i) {
-            thread_pool.emplace_back([&io_context]() {
-                io_context.run();
-            });
-        }
-
-        string command;
-
+        std::string cmd;
         while (true) {
-            cout << "---Search Engine is started!---" << endl;
-            cout << "----Search Engine work now!----" << endl;
-            cout << "------------- Menu ------------" << endl;
-            cout << "'1' for exit." << endl;
-            cout << "-------------------------------" << endl;
-            cout << "Enter the command: ";
+            std::cout << "\n--- Search Engine running ---\n"
+                      << "1 — exit\n> ";
+            std::cin >> cmd;
 
-            cin >> command;
-            cin.clear();
-
-            if (command == "1") {
-                cout << "Stopping server..." << endl;
-                io_context.stop();
+            if (cmd == "1") {
+                dispatcher.stopAll();
+                scheduler.stopAll();
                 break;
-            } else {
-                cout << "Unknown command" << endl;
-            }
-
-            // Очистка экрана
-            // system("cls");
-        }
-
-        // Ожидание завершения всех потоков
-        for (auto& thread : thread_pool) {
-            if (thread.joinable()) {
-                thread.join();
             }
         }
-
-    } catch (ConverterJSON::myExp& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
-    } catch (search_server::SearchServer::myExp& e) {
-        search_server::SearchServer::addToLog(std::string("Exception in commandExec: ") + e.what());
+    }
+    catch (const std::exception& e) {
+        LG("Fatal exception: ", e.what());
     }
 
-    // Очистка экрана
-    // system("cls");
-    std::cout << "---Bye, bye!---" << endl;
-    system("pause");
+    // ------------------------------------------------------------------------
+    // Shutdown
+    // ------------------------------------------------------------------------
+    runtime.stop();
+    LG("Runtime stopped");
 
+    std::cout << "--- Bye ---\n";
+    system("pause");
     return 0;
 }

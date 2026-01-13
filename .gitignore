@@ -4,6 +4,12 @@ lib/
 minizip/
 other/
 
+# utf8proc
+utf8proc/
+utf8proc-*/
+utf8proc-*.zip
+
+
 # бинарные файлы и библиотеки
 *.exe
 *.dll

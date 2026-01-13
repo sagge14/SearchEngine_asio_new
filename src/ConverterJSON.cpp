@@ -3,8 +3,9 @@
 //
 
 #include "ConverterJSON.h"
-#include "SearchServer.h"
+#include "SearchServer/SearchServer.h"
 #include "Resolution.h"
+#include "scheduler/BackupTask.h"
 #include "Commands/GetAttachments/PrefixMap.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #define TO_JSON(J, S) J[#S] = val.S;
@@ -139,6 +140,50 @@ std::string ConverterJSON::putAnswers(const listAnswers& answers, const std::str
     jsonFileSettings.close();
     return move(ss);
 }
+
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <filesystem>
+
+std::vector<BackupGroup> ConverterJSON::parseBackupJobs(const std::string& path) {
+
+    std::ifstream file(path);
+    std::vector<BackupGroup> groups;
+    nh::json jsonData;
+    try {
+        jsonData = nh::json::parse(file);
+    } catch (...) {
+        return groups;
+    }
+
+    if (!jsonData.contains("BackupJobs") || !jsonData["BackupJobs"].is_array())
+        return groups;
+
+    for (const auto& groupJson : jsonData["BackupJobs"]) {
+        try {
+            BackupGroup group;
+            group.backup_dir = groupJson.at("backup_dir").get<std::string>();
+            group.period_sec = groupJson.value("period_sec", 3600);
+            if (!groupJson.contains("targets") || !groupJson["targets"].is_array())
+                continue;
+
+            for (const auto& entry : groupJson["targets"]) {
+                BackupTarget t;
+                t.src = entry.at("src").get<std::string>();
+                t.max_versions = entry.value("max_versions", 5);
+                t.is_directory = entry.value("is_directory", false);
+                group.targets.push_back(std::move(t));
+            }
+            if (!group.targets.empty())
+                groups.push_back(std::move(group));
+        } catch (...) {
+            continue;
+        }
+    }
+    return groups;
+}
+
 
 std::vector<std::string> ConverterJSON::getRequestsFromString(const std::string &jsonString) {
 
@@ -302,6 +347,9 @@ void to_json(nh::json& jsonTelega, const Telega &val)
     TO_JSON(jsonTelega, kr)
     TO_JSON(jsonTelega, pril_name)
     TO_JSON(jsonTelega, pril_count)
+    TO_JSON(jsonTelega, blank)
+    TO_JSON(jsonTelega, gde_sht)
+    TO_JSON(jsonTelega, last_mesto)
 }
 void from_json(const nh::json& jsonTelega, Telega &val)
 {
@@ -318,6 +366,9 @@ void from_json(const nh::json& jsonTelega, Telega &val)
     FROM_JSON(jsonTelega, kr)
     FROM_JSON(jsonTelega, pril_name)
     FROM_JSON(jsonTelega, pril_count)
+    FROM_JSON(jsonTelega, blank)
+    FROM_JSON(jsonTelega, gde_sht)
+    FROM_JSON(jsonTelega, last_mesto)
 }
 
 
