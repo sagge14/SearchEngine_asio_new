@@ -9,7 +9,7 @@
 #include "Commands/SaveMessage/Message.h"
 
 class GetAttachmentsCmd : public Command {
-    void deleteDirectory(const std::filesystem::path& dirPath);
+    static void deleteDirectory(const std::filesystem::path& dirPath);
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
 };

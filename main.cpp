@@ -166,7 +166,7 @@ int main()
     RecordProcessor::setDefaultDirs(
             "D:\\BASES\\ARCHIVE.DB3",
             "D:\\BASES_PRD\\ARCHIVE.DB3",
-            "D:\\OPIS_ADMIN\\2025.DB",
+            "D:\\OPIS_ADMIN\\" + settings.year + ".DB",
             "PRM",
             "PRD"
     );

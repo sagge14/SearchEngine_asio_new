@@ -31,12 +31,12 @@ std::vector<uint8_t> GetAttachmentsCmd::execute(const std::vector<uint8_t> &data
         path = pm.getPath(user_name);
     }catch(...)
     {
-        return std::vector<uint8_t>(message.begin(),message.end());
+        return {message.begin(),message.end()};
     }
 
      if(!std::filesystem::exists(path)) {
         message = "Net prilojeniy!";
-        return std::vector<uint8_t>(message.begin(),message.end());
+        return {message.begin(),message.end()};
     }
 
     Message m = Message::loadFromDirectory(path);
