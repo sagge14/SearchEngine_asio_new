@@ -223,10 +223,10 @@ int main()
             runtime.commit()
     );
 
+    LG("SearchServer created");
+
     asio_server::Interface::setYear(settings.year);
     asio_server::Interface::setSearchServer(&server);
-
-    LG("SearchServer created");
 
     // ------------------------------------------------------------------------
     // Scheduler & FileWatcher
@@ -289,9 +289,9 @@ int main()
     // ------------------------------------------------------------------------
     // Asio server
     // ------------------------------------------------------------------------
-    [[maybe_unused]]
     auto asioServer = std::make_shared<asio_server::AsioServer>(
             runtime.net(),
+            runtime.cpu_pool(),
             settings.port
     );
 

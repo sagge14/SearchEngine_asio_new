@@ -388,7 +388,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
                             {
                                 using namespace std::chrono_literals;
 
-                                if (ff.fut.wait_for(6s) != std::future_status::ready)
+                                if (ff.fut.wait_for(60s) != std::future_status::ready)
                                 {
                                     logIndexError(ff.path, "TIMEOUT waiting file future (60s)");
                                     continue; // или break; если хочешь аварийно завершать весь апдейт

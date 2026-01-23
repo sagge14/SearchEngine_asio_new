@@ -2,10 +2,10 @@
 // Created by Sg on 31.08.2025.
 //
 #include "nlohmann/json.hpp"
-#include "SQLite/mySql.h"
-#include <string>
+#include "SQLite/SQLiteConnectionManager.h"
 #include "GetTelegaAttachments.h"
 
+#include <string>
 #include <codecvt>
 #include <locale>
 
@@ -51,11 +51,14 @@ std::vector<uint8_t> GetTelegaAttachmentsCmd::execute(const std::vector<uint8_t>
     std::string attachments_names;
     std::string attachments_dir;
 
-    for (const auto &base_name: *base) {
-        SQL_INST.excSql(base_name, sql_qry);
-        if (!SQL_EMPTY) {
-            attachments_names = SQL_FRONT_VALUE(PrilName);
-            attachments_dir   = SQL_FRONT_VALUE(DirectTo);
+    for (const auto& base_name : *base) {
+        auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+        db->execSql(sql_qry);
+
+        if (!db->empty()) {
+            const auto& row = *db->begin();
+            attachments_names = row.at("PrilName");
+            attachments_dir   = row.at("DirectTo");
             break;
         }
     }

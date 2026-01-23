@@ -32,4 +32,4 @@ namespace boost::serialization {
             boost::serialization::split_free(ar, t, version);
         }
 
-    } // namespace boost
+} // namespace boost

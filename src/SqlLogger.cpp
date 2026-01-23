@@ -152,6 +152,7 @@ std::pair<std::string, std::string> SqlLogger::getCurrentDateTime() {
 
 // Метод для обработки очереди
 void SqlLogger::processQueue() {
+
     while (!stopWorker) {
         std::unique_lock<std::mutex> lock(queueMutex);
         queueCondVar.wait(lock, [this] { return !logQueue.empty() || stopWorker; });
@@ -159,7 +160,7 @@ void SqlLogger::processQueue() {
         while (!logQueue.empty()) {
             PersonalRequest request = logQueue.front();
             logQueue.pop();
-            lock.unlock();  // Разблокируем, чтобы другие потоки могли добавлять в очередь
+            lock.unlock();
 
             std::cout << "- new " << summarizeSql(request.request) << std::endl;
 
@@ -175,22 +176,13 @@ void SqlLogger::processQueue() {
                 return result;
             };
 
-            // 1. Перекодируем оригинальный запрос (если он из ANSI)
-            // Перед использованием request.request
             if (isLikelyFilePath(request.request)) {
                 request.request = win1251ToUtf8(request.request);
             } else if (request.request_type == "GET_SQL_JSON_ANSWER") {
                 request.request = oem866ToUtf8(request.request);
             }
 
-
-
-// 2. Получаем краткую форму запроса
             request.request = summarizeSql(request.request);
-
-
-// 4. Экранируем кавычки (если ещё не делал)
-
 
             std::string escapedRequestText = escapeQuotes(request.request);
             std::string escapedUser = escapeQuotes(request.user_name);

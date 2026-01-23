@@ -2,12 +2,10 @@
 // Created by Sg on 25.08.2025.
 //
 #include "nlohmann/json.hpp"
-#include "SQLite/mySql.h"
-#include <string>
 #include "GetIshTelegaPdtvCommand.h"
 #include "Commands/GetJsonTelega/Telega.h"
-
-
+#include "SQLite/SQLiteConnectionManager.h"
+#include <string>
 
 
 std::vector<uint8_t> GetIshTelegaPdtvCommand::execute(const std::vector<uint8_t>& _data)
@@ -27,10 +25,11 @@ std::vector<uint8_t> GetIshTelegaPdtvCommand::execute(const std::vector<uint8_t>
     try {
         for (const auto &base_name: *base) {
 
-            SQL_INST.excSql(base_name, sql_qry);
+            auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+            db->execSql(sql_qry);
 
-            if (!SQL_EMPTY) {
-                for (const auto& row : SQL_INST) {
+            if (!db->empty()) {
+                for (const auto& row : *db) {
                     result.push_back(row);
                 }
             }
@@ -43,5 +42,5 @@ std::vector<uint8_t> GetIshTelegaPdtvCommand::execute(const std::vector<uint8_t>
 
     std::string jsonString = jsonTelegi.dump();
     std::cout << jsonString << std::endl;
-    return std::vector<uint8_t>(jsonString.begin(), jsonString.end());
+    return {jsonString.begin(), jsonString.end()};
 }

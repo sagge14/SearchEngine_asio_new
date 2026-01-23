@@ -3,7 +3,7 @@
 //
 
 #include "TelegaWay.h"
-#include "SQLite/mySql.h"
+#include "SQLite/SQLiteConnectionManager.h"
 #include <chrono>
 #include <ctime>
 
@@ -42,19 +42,23 @@ std::string getCurrentTime() {
     std::string type_str = _type == Telega::TYPE::VHOD ? "1" : "2";
     auto condition = "where type = " + type_str + " and number = " + num;
 
-    SQL_INST.excSql(base_way_dir,
-                    "select * from way " +  condition);
+    auto db_way = SQLiteConnectionManager::instance().getConnection(base_way_dir);
+    db_way->execSql("select * from way " +  condition);
 
-    if (!SQL_EMPTY)
-        std::copy(SQL_INST.begin(), SQL_INST.end(), std::back_inserter(result_way));
+    if (!db_way->empty())
+        std::copy(db_way->begin(), db_way->end(), std::back_inserter(result_way));
 
     const std::string currentYear = getCurrentYear();
 
 
     condition = "where type = " + type_str + " and number = " + num + " and print = 0";
-    SQL_INST.excSql(base_f12_dir,
-                    "select * from tab " +  condition);
-    if (SQL_EMPTY)
+
+    auto db_f12 = SQLiteConnectionManager::instance().getConnection(base_way_dir);
+    db_way->execSql("select * from way " +  condition);
+
+    db_f12->execSql( "select * from tab " +  condition);
+
+    if (db_f12->empty())
         return;
 
     std::map<std::string, std::string> empty_map;
@@ -62,7 +66,7 @@ std::string getCurrentTime() {
     empty_map["number"] = num;
     empty_map["ddate"]   = getCurrentDate();
     empty_map["ttime"]   = getCurrentTime();
-    empty_map["kuda"]   = "L-k:" + SQL_FRONT_VALUE(GdeSht);
+    empty_map["kuda"]   = "L-k:"+ db_f12->getFront().at("GdeSht");
     empty_map["type"]   = type_str;
     empty_map["ind"]    = "0";
     empty_map["str"]    = "-";

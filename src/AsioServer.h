@@ -96,6 +96,7 @@ namespace asio_server
         std::filesystem::path>;
 
         tcp::socket socket_;
+        boost::asio::thread_pool& cpu_pool_;
         Header header_{};
 
         std::vector<BYTE> v_data_{};
@@ -103,13 +104,14 @@ namespace asio_server
         uint_fast32_t userId_{};
         std::string userName_ = "default_user";
         std::atomic_bool stopped_{false};
+        std::atomic<bool> command_running_{false};
 
 
         std::unique_ptr<std::ifstream> file_stream;
 
         boost::asio::experimental::channel<void(boost::system::error_code, WriteItem)> write_channel_;
 
-        void commandExec();
+        boost::asio::awaitable<void> commandExec();
         bool trustCommand();
         std::string getRemoteIP() const;
         void stop(const char* why);
@@ -130,19 +132,30 @@ namespace asio_server
     public:
 
         void start();
-        explicit session(tcp::socket socket) : socket_(std::move(socket)), write_channel_(socket_.get_executor(), 2000){};
+        explicit session(tcp::socket socket, boost::asio::thread_pool& cpu_pool)
+            :socket_(std::move(socket))
+            ,cpu_pool_(cpu_pool)
+            ,write_channel_(socket_.get_executor(), 1){};
        ~session();
 
     };
 
     class AsioServer
     {
-    public:
-        AsioServer(boost::asio::io_context& io_context, short port);
+        public:
+            AsioServer(
+                    boost::asio::io_context& net_io,
+                    boost::asio::thread_pool& cpu_pool,
+                    unsigned short port
+            );
 
-    private:
-        void do_accept();
-        tcp::acceptor acceptor_;
+        private:
+
+            void do_accept();
+
+            boost::asio::io_context& net_io_;
+            boost::asio::thread_pool& cpu_pool_;
+            tcp::acceptor acceptor_;
     };
 /** ------------------------session_END------------------------ **/
 

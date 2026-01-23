@@ -54,7 +54,6 @@ public:
     static std::vector<std::string> getRequestsFromString(const std::string& jsonString);
     static std::vector<BackupGroup> parseBackupJobs(const std::string& jsonString = "Backup.json");
     static std::string putAnswers(const listAnswers& answers, const std::string& jsonPath = "Answers.json");
-
     static void saveAttachPrefixLogin(const PrefixMap &pm, const std::filesystem::path &path);
 };
 

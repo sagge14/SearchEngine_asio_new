@@ -56,8 +56,8 @@
         // 4. Поверх toupper накатываем OEM соответствия s1[i] -> s2[i],
         //    точный аналог mapChar.insert({s1[i], s2[i]})
         for (size_t i = 0; i < n; ++i) {
-            unsigned char from = static_cast<unsigned char>(s1[i]);
-            unsigned char to   = static_cast<unsigned char>(s2[i]);
+            auto from = static_cast<unsigned char>(s1[i]);
+            auto to   = static_cast<unsigned char>(s2[i]);
             table[from] = to;
         }
 

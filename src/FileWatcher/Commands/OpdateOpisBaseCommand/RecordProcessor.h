@@ -1,6 +1,6 @@
 // record_processor.h
 #pragma once
-#include "SQLite/mySql.h"
+#include "SQLite/SQLiteConnectionManager.h"
 #include "utils_help.h"
 #include "PodrIgnore.h"
 #include "NumberSets.h"

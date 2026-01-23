@@ -274,8 +274,6 @@ void ConverterJSON::saveAttachPrefixLogin(const PrefixMap& pm, const std::filesy
     std::string str_prefix = cc2::wstringToUtf8(pm.prefix);
     jsonFile["prefix"] = str_prefix;
 
-
-
     // Преобразуем карту map_ обратно в строковый формат
     std::map<std::string, std::string> str_map;
     for (const auto& [key, value] : pm.map_) {

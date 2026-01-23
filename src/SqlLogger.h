@@ -23,7 +23,7 @@ public:
     // Асинхронное добавление логов
     void logRequest(const PersonalRequest& request);
 
-    void logJson(const nh::json& jsonSettings);
+    void logJson(const nh::json& jsonString);
 
     // Удалить копирование
     SqlLogger(const SqlLogger&) = delete;

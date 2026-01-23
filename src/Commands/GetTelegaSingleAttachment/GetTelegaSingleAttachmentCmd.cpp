@@ -6,7 +6,7 @@
 #include "Commands/GetJsonTelega/Telega.h"
 
 #include "nlohmann/json.hpp"
-#include "SQLite/mySql.h"
+#include "SQLite/SQLiteConnectionManager.h"
 #include <string>
 
 #include <codecvt>
@@ -55,14 +55,19 @@ std::vector<uint8_t> GetTelegaSingleAttachmentCmd::execute(const std::vector<uin
     std::string attachments_names;
     std::string attachments_dir;
 
-    for (const auto &base_name: *base) {
-        SQL_INST.excSql(base_name, sql_qry);
-        if (!SQL_EMPTY) {
-            attachments_names = SQL_FRONT_VALUE(PrilName);
-            attachments_dir   = SQL_FRONT_VALUE(DirectTo);
+    for (const auto& base_name : *base) {
+        auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+        db->execSql(sql_qry);
+
+        if (!db->empty()) {
+            const auto& row = *db->begin();   // первый результат
+
+            attachments_names = row.at("PrilName");
+            attachments_dir   = row.at("DirectTo");
             break;
         }
     }
+
 
     nh::json jres;
 

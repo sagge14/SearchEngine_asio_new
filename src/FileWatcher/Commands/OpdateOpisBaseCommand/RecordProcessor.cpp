@@ -8,8 +8,8 @@
 #include <regex>
 #include <algorithm>
 #include <sstream>
+#include <iostream>
 #include <utf8cpp/utf8.h>
-#include "Interface.h"
 
 void logKrDebug(const std::string& msg) {
     static std::mutex logMutex;

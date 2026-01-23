@@ -1,6 +1,6 @@
 #include "AsioServer.h"
 #include "SearchServer/SearchServer.h"
-#include "SQLite/mySql.h"
+#include "SQLite/SQLiteConnectionManager.h"
 #include "SqlLogger.h"
 #include <iostream>
 #include <memory>
@@ -21,6 +21,7 @@
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
 #include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include <mutex>
+#include <boost/concept_check.hpp>
 
 using boost::asio::ip::tcp;
 
@@ -106,7 +107,33 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                 total_read += bytes;
             }
 
-            commandExec();
+            if (command_running_.exchange(true)) {
+                asio_server::Header err{};
+                err.command = COMMAND::SOMEERROR;
+                err.size = 0;
+                write_channel_.try_send(boost::system::error_code{}, err);
+                co_return;
+            }
+
+            co_spawn(
+                    cpu_pool_,
+                    [self = shared_from_this()]() -> boost::asio::awaitable<void> {
+                        try {
+                            co_await self->commandExec();
+                        } catch (const std::exception& e) {
+                            search_server::addToLog(
+                                    std::string("commandExec failed: ") + e.what()
+                            );
+                        }
+
+                        self->command_running_ = false;
+                        co_return;
+                    },
+                    boost::asio::detached
+            );
+
+
+
         }
     }
     catch (const boost::system::system_error& e) {
@@ -216,29 +243,35 @@ boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
         buffer->resize(bytesRead);
 
         boost::system::error_code ec;
-        co_await boost::asio::async_write(socket_, boost::asio::buffer(*buffer), boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        co_await boost::asio::async_write(
+                socket_,
+                boost::asio::buffer(buffer->data(), static_cast<size_t>(bytesRead)),
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec)
+        );
+
         if (ec) {
-            search_server::addToLog("Ошибка при отправке: " + ec.message());
-            socket_.close(); // <--- обязательно!
-            logutil::log(userName_,"EMPTY","DISCONNECT");
+            search_server::addToLog("sendNextFileChunk write error: " + ec.message());
+            stop("file send error");
             co_return;
         }
+
 
     }
 }
 
-void  asio_server::session::commandExec() {
+boost::asio::awaitable<void>  asio_server::session::commandExec() {
     try {
 
         // Обработка команды
         std::vector<BYTE> answer;
         PersonalRequest personalRequest{};
         personalRequest.request_type = getTextCommand(header_.command);
+        boost::system::error_code ec;
 
         if (header_.command == COMMAND::SOMEERROR)
         {
-            write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
-            return;
+            write_channel_.try_send(boost::system::error_code{}, header_);
+            co_return;
         }
 
         if (header_.command == COMMAND::GETBINFILE)
@@ -254,7 +287,8 @@ void  asio_server::session::commandExec() {
             if(!exists(file_path))
             {
                 header_.command = COMMAND::SOMEERROR;
-                write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+                write_channel_.try_send(boost::system::error_code{}, header_);
+                co_return;
             }
             else
             {
@@ -262,8 +296,8 @@ void  asio_server::session::commandExec() {
                 file_size = std::filesystem::file_size(file_path);
                 header_.size = static_cast<std::size_t>(file_size);
 
-                write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
-                write_channel_.try_send(boost::system::error_code{}, file_path);
+                co_await write_channel_.async_send(ec, header_, boost::asio::use_awaitable);
+                co_await write_channel_.async_send(ec, file_path, boost::asio::use_awaitable);
             }
 
         }
@@ -289,9 +323,8 @@ void  asio_server::session::commandExec() {
 
             header_.size = answer.size();
 
-            write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
-            write_channel_.try_send(boost::system::error_code{}, std::make_shared<std::vector<BYTE>>(answer)); // потом сами данные
-
+            co_await write_channel_.async_send(ec, header_, boost::asio::use_awaitable);
+            co_await write_channel_.async_send(ec, std::make_shared<std::vector<BYTE>>(answer), boost::asio::use_awaitable);
         }
 
         personalRequest.user_name = userName_;
@@ -302,9 +335,6 @@ void  asio_server::session::commandExec() {
         search_server::addToLog(std::string("Exception in commandExec: ") + e.what());
         header_.command = COMMAND::SOMEERROR;
         write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
-
-        socket_.close();
-        logutil::log(userName_,"EMPTY","DISCONNECT");
     }
 }
 
@@ -380,18 +410,23 @@ void asio_server::AsioServer::do_accept() {
     acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
                 if (!ec)
-                    std::make_shared<session>(std::move(socket))->start();
+                    std::make_shared<session>(std::move(socket), cpu_pool_)->start();
 
                 do_accept();
             });
 }
 
-asio_server::AsioServer::AsioServer(boost::asio::io_context &io_context, short port)
-        : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
-    mySql::init("JURNAL.db3");
+asio_server::AsioServer::AsioServer(
+        boost::asio::io_context& net_io,
+        boost::asio::thread_pool& cpu_pool,
+        unsigned short port
+)
+        : net_io_(net_io)
+        , cpu_pool_(cpu_pool)
+        , acceptor_(net_io_, tcp::endpoint(tcp::v4(), port))
+{
     do_accept();
 }
-
 
 
 boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::filesystem::path& file_path)

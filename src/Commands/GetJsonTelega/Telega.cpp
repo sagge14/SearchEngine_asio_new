@@ -3,12 +3,13 @@
 //
 
 #include "Telega.h"
-#include "SQLite/mySql.h"
+#include "SQLite/SQLiteConnectionManager.h"
 #include <codecvt>
 #include <string>
 #include <regex>
 #include <sstream>
 #include <optional>
+#include <iostream>
 
 namespace conv2
 {
@@ -127,10 +128,11 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
             auto sql_qry = ss.str();
 
-            SQL_INST.excSql(base_name, sql_qry);
+            auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+            db->execSql(sql_qry);
 
-            if (!SQL_EMPTY) {
-                for (const auto& row : SQL_INST) {
+            if (!db->empty()) {
+                for (const auto& row : *db) {
                     result.push_back(row);
                     ++collected;
                     if (limitOpt && collected >= *limitOpt)
