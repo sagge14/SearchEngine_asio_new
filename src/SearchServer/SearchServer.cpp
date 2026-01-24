@@ -253,16 +253,15 @@ void search_server::SearchServer::updateDocumentBase(const std::vector<std::wstr
 }
 
 
-search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::io_context& _io_context, boost::asio::io_context& _io_commit) : time{},
-index(), io_context{_io_context}, io_commit{_io_commit}
+search_server::SearchServer::SearchServer(const Settings& _settings , boost::asio::thread_pool& cpu_pool, boost::asio::io_context& _io_commit) : time{},
+index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
 {
 
     settings = (_settings);
     trustSettings();
 
   //  initWatchers(settings);
-    index = new inverted_index::InvertedIndex(io_context, io_commit);
-    boost::asio::post(io_context, []{ std::cout << " SearchServer::SearchServer ASYNC TEST!\n"; });
+    index = new inverted_index::InvertedIndex(cpu_pool_, io_commit);
     // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
 
 }
@@ -519,7 +518,7 @@ void search_server::SearchServer::updateStep()
 
     if (index == nullptr)
     {
-        index = new inverted_index::InvertedIndex(io_context, io_commit);
+        index = new inverted_index::InvertedIndex(cpu_pool_, io_commit);
         addToLog("updateStep() → index created");
     }
 

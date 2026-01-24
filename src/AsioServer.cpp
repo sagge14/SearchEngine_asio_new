@@ -109,7 +109,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
 
             if (command_running_.exchange(true)) {
                 asio_server::Header err{};
-                err.command = COMMAND::SOMEERROR;
+                err.command = COMMAND::SERVER_BUSY_ERROR;
                 err.size = 0;
                 write_channel_.try_send(boost::system::error_code{}, err);
                 co_return;
@@ -267,6 +267,15 @@ boost::asio::awaitable<void>  asio_server::session::commandExec() {
         PersonalRequest personalRequest{};
         personalRequest.request_type = getTextCommand(header_.command);
         boost::system::error_code ec;
+
+        /*
+        boost::asio::steady_timer timer(
+                co_await boost::asio::this_coro::executor
+        );
+
+        timer.expires_after(5s);   // ← сколько держать сервер занятым
+        co_await timer.async_wait(boost::asio::use_awaitable);
+         */
 
         if (header_.command == COMMAND::SOMEERROR)
         {

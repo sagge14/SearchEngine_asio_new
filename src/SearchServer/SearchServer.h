@@ -146,7 +146,7 @@ namespace search_server {
         size_t time{};
 
 
-        boost::asio::io_context& io_context;
+        boost::asio::thread_pool& cpu_pool_;
         boost::asio::io_context& io_commit;
 
         mutable std::mutex updateM;
@@ -220,7 +220,7 @@ namespace search_server {
 
         bool getUpdateStatus() const;
 
-        explicit SearchServer(const Settings &settings, boost::asio::io_context& _io_context, boost::asio::io_context& _io_commit);
+        explicit SearchServer(const Settings &settings, boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit);
 
         void flushUpdateAndSaveDictionary();
 

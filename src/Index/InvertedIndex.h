@@ -183,8 +183,8 @@ namespace inverted_index {
         mutable mutex logMutex;
 
 
-        boost::asio::io_context& io_;
         boost::asio::io_context& io_commit_;
+        boost::asio::thread_pool& cpu_pool_;
         boost::asio::strand<boost::asio::io_context::executor_type> strand_;
 
 
@@ -263,7 +263,7 @@ namespace inverted_index {
         std::future<void> updateDocumentBase(const std::vector<wstring> &vecPaths);
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
-        explicit InvertedIndex(boost::asio::io_context& _io, boost::asio::io_context& io_commit);
+        explicit InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit);
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();

@@ -21,13 +21,6 @@
 #include <future>
 #include <psapi.h>
 
-
-#include <boost/asio/awaitable.hpp>
-#include <boost/asio/use_awaitable.hpp>
-
-#include <boost/asio/as_tuple.hpp>
-
-
 static size_t process_memory()
 {
     PROCESS_MEMORY_COUNTERS_EX pmc{};
@@ -286,7 +279,6 @@ void logIndexError(const std::wstring& path, const std::string& msg)
 }
 
 
-
 std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         const std::vector<std::wstring>& vecPaths)
 {
@@ -317,130 +309,105 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         return p.get_future();
     }
 
-    // 2. общий финальный промис
+    // Финальный promise
     auto finalPromise = std::make_shared<std::promise<void>>();
     std::future<void> future = finalPromise->get_future();
 
-    // 3. всё основное — в strand_
-    boost::asio::post(
-            strand_,
-            [this,
-                    toDelete = std::move(toDelete),
-                    toIndex  = std::move(toIndex),
-                    finalPromise]() mutable
+    try
+    {
+        // ------------------------------------------------------------------
+        // 2. УДАЛЕНИЕ — строго в strand_, но синхронно
+        // ------------------------------------------------------------------
+        {
+            std::promise<void> delPromise;
+            auto delFuture = delPromise.get_future();
+
+            boost::asio::post(strand_, [this, &toDelete, &delPromise]()
             {
-                // ---- УДАЛЕНИЕ ----
-                for (FileId fileId : toDelete)
-                {
-                    try {
+                try {
+                    for (FileId fileId : toDelete)
                         safeEraseFileInternal(fileId);
-                    }
-                    catch (...) {
-                        addToLog("Exception in safeEraseFileInternal");
-                    }
+
+                    addToLog("updateDocumentBase: deletions done");
+                    delPromise.set_value();
                 }
-                addToLog("updateDocumentBase: deletions done");
-
-                // ---- ИНДЕКСАЦИЯ ----
-                //std::vector<std::future<void>> fileFutures;
-
-
-                std::vector<FileFuture> fileFutures;
-                fileFutures.reserve(toIndex.size());
-
-                for (FileId fileId : toIndex)
-                {
-                    auto p = std::make_shared<std::promise<void>>();
-
-                    fileFutures.push_back({
-                                                  fileId,
-                                                  docPaths.pathById(fileId), // здесь ты ещё в strand_ → безопасно
-                                                  p->get_future()
-                                          });
-
-
-                    boost::asio::post(
-                            io_,
-                            [this, fileId, p]()
-                            {
-                                try {
-
-                                    fileIndexing(fileId, p);
-                                }
-                                catch (...) {
-                                    try { p->set_exception(std::current_exception()); } catch (...) {}
-                                }
-                            });
+                catch (...) {
+                    delPromise.set_exception(std::current_exception());
                 }
-
-                addToLog("updateDocumentBase: indexing tasks dispatched, files=" +
-                         std::to_string(fileFutures.size()));
-
-                // ---- ОЖИДАНИЕ ВСЕХ fileIndexing В ОТДЕЛЬНОМ ПОТОКЕ ----
-                std::thread(
-                        [this,
-                                fileFutures = std::move(fileFutures),
-                                finalPromise]() mutable
-                        {
-                            addToLog("updateDocumentBase: wait promises thread start");
-
-                            for (auto& ff : fileFutures)
-                            {
-                                using namespace std::chrono_literals;
-
-                                if (ff.fut.wait_for(60s) != std::future_status::ready)
-                                {
-                                    logIndexError(ff.path, "TIMEOUT waiting file future (60s)");
-                                    continue; // или break; если хочешь аварийно завершать весь апдейт
-                                }
-
-                                try { ff.fut.get(); }
-                                catch (const std::exception& e) { logIndexError(ff.path, e.what()); }
-                                catch (...) { logIndexError(ff.path, "unknown exception"); }
-
-
-                            }
-
-
-                            addToLog("updateDocumentBase: all fileIndexing done");
-
-                            // Финальный шаг — в strand_ (там же живут все структуры индекса)
-                            boost::asio::post(
-                                    strand_,
-                                    [this, finalPromise]()
-                                    {
-                                        addToLog("FINAL: entered");
-
-                                        try
-                                        {
-                                            addToLog("FINAL: before saveIndex");
-                                            saveIndex();
-                                            addToLog("FINAL: after saveIndex");
-
-                                            work = false;
-
-                                            addToLog("FINAL: before set_value");
-                                            finalPromise->set_value();
-                                            addToLog("FINAL: after set_value");
-                                        }
-                                        catch (const std::exception& e)
-                                        {
-                                            addToLog(std::string("FINAL: exception: ") + e.what());
-                                            try { finalPromise->set_exception(std::current_exception()); } catch(...) {}
-                                        }
-                                        catch (...)
-                                        {
-                                            addToLog("FINAL: unknown exception");
-                                            try { finalPromise->set_exception(std::current_exception()); } catch(...) {}
-                                        }
-                                    });
-
-                        }).detach();
             });
+
+            delFuture.get(); // ← ждём удаления
+        }
+
+        // ------------------------------------------------------------------
+        // 3. ИНДЕКСАЦИЯ — CPU pool
+        // ------------------------------------------------------------------
+        std::vector<FileFuture> fileFutures;
+        fileFutures.reserve(toIndex.size());
+
+        for (FileId fileId : toIndex)
+        {
+            auto p = std::make_shared<std::promise<void>>();
+
+            fileFutures.push_back({
+                                          fileId,
+                                          docPaths.pathById(fileId),
+                                          p->get_future()
+                                  });
+
+            boost::asio::post(cpu_pool_,
+                              [this, fileId, p]()
+                              {
+                                  try {
+                                      fileIndexing(fileId, p);
+                                  }
+                                  catch (...) {
+                                      try { p->set_exception(std::current_exception()); } catch (...) {}
+                                  }
+                              });
+        }
+
+        addToLog("updateDocumentBase: indexing tasks dispatched, files=" +
+                 std::to_string(fileFutures.size()));
+
+        // ------------------------------------------------------------------
+        // 4. ОЖИДАНИЕ ВСЕХ fileIndexing (как было, но без detached)
+        // ------------------------------------------------------------------
+        for (auto& ff : fileFutures)
+        {
+            using namespace std::chrono_literals;
+
+            if (ff.fut.wait_for(60s) != std::future_status::ready)
+            {
+                logIndexError(ff.path, "TIMEOUT waiting file future (60s)");
+                continue;
+            }
+
+            try { ff.fut.get(); }
+            catch (const std::exception& e) { logIndexError(ff.path, e.what()); }
+            catch (...) { logIndexError(ff.path, "unknown exception"); }
+        }
+
+        addToLog("updateDocumentBase: all fileIndexing done");
+
+        // ------------------------------------------------------------------
+        // 5. ФИНАЛ — saveIndex (тут же, линейно)
+        // ------------------------------------------------------------------
+        addToLog("FINAL: before saveIndex");
+        saveIndex();
+        addToLog("FINAL: after saveIndex");
+
+        work = false;
+        finalPromise->set_value();
+    }
+    catch (...)
+    {
+        work = false;
+        try { finalPromise->set_exception(std::current_exception()); } catch (...) {}
+    }
 
     return future;
 }
-
 
 
 void logIndexingDebug(const std::string& msg) {
@@ -730,10 +697,10 @@ inverted_index::InvertedIndex::~InvertedIndex() {
     saveIndex();
 }
 
-inverted_index::InvertedIndex::InvertedIndex(boost::asio::io_context& io, boost::asio::io_context& io_commit)
-        : io_(io)
-        , io_commit_(io_commit)
+inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit)
+        : io_commit_(io_commit)
         , strand_(boost::asio::make_strand(io_commit_))
+        , cpu_pool_(cpu_pool)
 {
 
 
@@ -900,7 +867,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
                           //
                           std::wcout << L"[strand/index] Scheduling fileIndexing job for id=" << fileId << std::endl;
 
-                          boost::asio::post(io_, [this, fileId, promise]()
+                          boost::asio::post(cpu_pool_, [this, fileId, promise]()
                           {
                               try
                               {

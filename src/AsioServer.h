@@ -52,8 +52,9 @@ namespace asio_server
     X(GET_ATTACHMENTS) \
     X(GET_ISH_PDTV) \
     X(GET_TELEGA_ATACHMENTS) \
-    X(GET_SINGLE_ATACHMENT) \
-    X(END_COMMAND) \
+    X(GET_SINGLE_ATACHMENT)   \
+    X(SERVER_BUSY_ERROR)   \
+    X(END_COMMAND)   \
 
 // enum
     enum class COMMAND : uint_fast64_t {

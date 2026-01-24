@@ -219,7 +219,7 @@ int main()
     // ------------------------------------------------------------------------
     search_server::SearchServer server(
             settings,
-            runtime.index(),
+            runtime.cpu_pool(),
             runtime.commit()
     );
 
