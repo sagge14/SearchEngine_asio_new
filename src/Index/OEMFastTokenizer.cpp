@@ -1,6 +1,5 @@
 #include "OEMFastTokenizer.h"
 #include <cctype>
-#include <cstring>
 
 // ------------------------------------------------------------
 // 1. Таблица wordChar — ускоряет разбор слов на 2–3 раза

@@ -25,9 +25,8 @@ public:
 
     boost::asio::io_context& net();
     boost::asio::io_context& scheduler();
-    boost::asio::io_context& index();
     boost::asio::io_context& commit();
-    boost::asio::thread_pool& cpu_pool() { return cpu_pool_; }
+    boost::asio::thread_pool& cpu_pool();
 
 
     void start();
@@ -38,14 +37,12 @@ private:
 
     Context net_;
     Context scheduler_;
-    Context index_;
     Context commit_;
 
     size_t t_net_{1};
     size_t t_scheduler_{1};
-    size_t t_index_{1};
     size_t t_commit_{1};
 
     std::vector<std::thread> threads_;
-    boost::asio::thread_pool cpu_pool_{std::max<size_t>(1, std::thread::hardware_concurrency() / 2)};
+    boost::asio::thread_pool cpu_pool_{std::max<size_t>(1, std::thread::hardware_concurrency())};
 };

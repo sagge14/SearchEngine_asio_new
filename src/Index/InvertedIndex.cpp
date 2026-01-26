@@ -132,7 +132,7 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
         }
 
         // 3. Один commit-task в io_commit
-        boost::asio::post(io_commit_, [this,
+        boost::asio::post(cpu_pool_, [this,
                 chunkMap = std::move(chunkMap),
                 promise = batch.promise]()
         {
@@ -702,8 +702,6 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
         , strand_(boost::asio::make_strand(io_commit_))
         , cpu_pool_(cpu_pool)
 {
-
-
         // Проверка наличия файла с индексом
         if (std::filesystem::exists("inverted_index3.dat")) {
             // Если файл существует, загружаем данные
@@ -717,7 +715,6 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
             dictionary.shrink_to_fit();
 
         }
-
 }
 
 void inverted_index::InvertedIndex::compact()

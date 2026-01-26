@@ -72,8 +72,7 @@
 // ============================================================================
 #include "scheduler/PeriodicTaskManager.h"
 #include "scheduler/TaskID.h"
-#include "scheduler/UpdateIndexTask.h"
-#include "scheduler/PeriodicUpdateTask.h"
+#include "scheduler/PeriodicIndexUpdateTask.h"
 #include "scheduler/FlushPendingTask.h"
 #include "scheduler/BackupTask.h"
 #include "scheduler/DelayEventTickTask.h"
@@ -204,7 +203,6 @@ int main()
     Telega::year          = settings.year;
     Telega::prd_base_dir  = settings.prd_base_dir;
     Telega::prm_base_dir  = settings.prm_base_dir;
-    Telega::b_prm         = Telega::getBases(Telega::TYPE::ISHOD);
 
     LG("Telega initialized");
 
@@ -231,7 +229,6 @@ int main()
     // ------------------------------------------------------------------------
     // Scheduler & FileWatcher
     // ------------------------------------------------------------------------
-    PeriodicTaskManager<TaskId> scheduler;
 
     FileEventDispatcher dispatcher(
             settings.dirs,
@@ -239,26 +236,31 @@ int main()
             runtime.scheduler()
     );
 
-    dispatcher.registerCommand(
-            FileEvent::Added,
-            std::make_unique<AddFileCommand<TaskId>>(server, scheduler, settings.extensions)
-    );
+    PeriodicTaskManager<TaskId> scheduler;
 
     dispatcher.registerCommand(
             FileEvent::Removed,
             std::make_unique<RemoveFileCommand>(server)
     );
 
+    dispatcher.registerCommand(
+            FileEvent::Added,
+            std::make_unique<AddFileCommand<TaskId>>(server, scheduler, settings.extensions)
+    );
+
+
     scheduler.addTask<FlushPendingTask2>(
             TaskId::FlushPendingTask,
             runtime.scheduler(),
+            runtime.cpu_pool().get_executor(),
             7s,
             dispatcher
     );
 
-    scheduler.addTask<PeriodicUpdateTask>(
+    scheduler.addTask<PeriodicIndexUpdateTask>(
             TaskId::PeriodicUpdateTask,
             runtime.scheduler(),
+            runtime.cpu_pool().get_executor(),
             std::chrono::seconds(settings.indTime),
             &server
     );
@@ -266,6 +268,7 @@ int main()
     scheduler.addTask<DelayEventTickTask<TaskId>>(
             TaskId::DelayEventTickTask,
             runtime.scheduler(),
+            runtime.cpu_pool().get_executor(),
             2s,
             scheduler
     );
@@ -278,6 +281,7 @@ int main()
         scheduler.addTask<BackupTask>(
                 TaskId::BackupTask,
                 runtime.scheduler(),
+                runtime.cpu_pool().get_executor(),
                 std::chrono::seconds(job.period_sec),
                 job.backup_dir,
                 job.targets

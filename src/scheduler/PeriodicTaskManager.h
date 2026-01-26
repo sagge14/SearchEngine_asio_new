@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <deque>
 #include <iostream>
+
 struct DelayedEvent {
     std::function<void()> action;
     std::chrono::steady_clock::time_point execute_after;
@@ -95,7 +96,7 @@ public:
         static_assert(std::is_base_of<AbstractScheduledTask, Task>::value, "Task must inherit AbstractScheduledTask");
         auto task = std::make_shared<Task>(std::forward<Args>(args)...);
         std::lock_guard lock(mtx_);
-       // tasks_[id] = task;
+
         tasks_.emplace(id, task);
         task->start();
     }

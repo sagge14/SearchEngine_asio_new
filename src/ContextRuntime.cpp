@@ -19,12 +19,11 @@ ContextRuntime::~ContextRuntime() {
 }
 
 void ContextRuntime::calcThreads(size_t total) {
-    size_t base = std::max<size_t>(1, total / 4);
-    t_net_       = base;
-    t_scheduler_ = base;
-    t_index_     = base;
-    size_t used = base * 3;
-    t_commit_ = (total > used) ? (total - used) : 1;
+
+    t_net_       = 2;
+    t_scheduler_ = 1;
+    t_commit_    = 1;
+
 }
 
 void ContextRuntime::start() {
@@ -45,14 +44,12 @@ void ContextRuntime::start() {
 
     run(net_, t_net_);
     run(scheduler_, t_scheduler_);
-    run(index_, t_index_);
     run(commit_, t_commit_);
 }
 
 void ContextRuntime::stop() {
     net_.stop();
     scheduler_.stop();
-    index_.stop();
     commit_.stop();
 
     for (auto& t : threads_)
@@ -61,6 +58,6 @@ void ContextRuntime::stop() {
 }
 
 boost::asio::io_context& ContextRuntime::net()       { return net_.io; }
-boost::asio::io_context& ContextRuntime::scheduler(){ return scheduler_.io; }
-boost::asio::io_context& ContextRuntime::index()    { return index_.io; }
-boost::asio::io_context& ContextRuntime::commit()   { return commit_.io; }
+boost::asio::io_context& ContextRuntime::scheduler() { return scheduler_.io; }
+boost::asio::io_context& ContextRuntime::commit()    { return commit_.io; }
+boost::asio::thread_pool &ContextRuntime::cpu_pool() { return cpu_pool_; }

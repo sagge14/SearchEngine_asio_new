@@ -14,9 +14,10 @@ class DelayEventTickTask : public AbstractScheduledTask {
 public:
     // Конструктор (без template!)
     DelayEventTickTask(boost::asio::io_context& io,
+                       boost::asio::any_io_executor cpu_ex,
                        std::chrono::seconds period,
                        PeriodicTaskManager<TaskID>& periodicTaskManager)
-            : AbstractScheduledTask(io, period)
+            : AbstractScheduledTask(io, cpu_ex, period)
             , periodicTaskManager_(&periodicTaskManager)
     {}
 

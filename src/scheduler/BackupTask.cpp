@@ -4,6 +4,7 @@
 #include <utf8proc.h>
 #include <iostream>
 #include <filesystem>
+#include <utility>
 
 namespace {
 // ---------------------------------------------
@@ -55,10 +56,10 @@ namespace {
 } // anonymous namespace
 
 
-BackupTask::BackupTask(boost::asio::io_context& io, std::chrono::seconds period,
-                       const fs::path& backup_root, const std::vector<BackupTarget>& targets)
-        : AbstractScheduledTask(io, period),
-          backup_root_(backup_root),
+BackupTask::BackupTask(boost::asio::io_context& io, boost::asio::any_io_executor cpu_ex, std::chrono::seconds period,
+                       fs::path  backup_root, const std::vector<BackupTarget>& targets)
+        : AbstractScheduledTask(io, std::move(cpu_ex), period),
+          backup_root_(std::move(backup_root)),
           targets_(targets) {}
 
 void BackupTask::runTask() {
