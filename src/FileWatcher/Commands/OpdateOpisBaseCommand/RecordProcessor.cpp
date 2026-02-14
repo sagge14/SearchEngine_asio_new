@@ -1,7 +1,7 @@
 // record_processor.cpp
 #include "RecordProcessor.h"
 #include "SQLite/SQLiteConnectionManager.h"
-#include "OEMtoCase.h"
+#include "MyUtils/OEMtoCase.h"
 #include <string>
 #include <fstream>
 #include <vector>
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iostream>
-#include <utf8cpp/utf8.h>
+#include <Utils/utf8cpp/utf8.h>
 
 void logKrDebug(const std::string& msg) {
     static std::mutex logMutex;

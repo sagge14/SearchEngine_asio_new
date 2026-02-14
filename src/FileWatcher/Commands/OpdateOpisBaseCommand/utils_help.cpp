@@ -3,13 +3,12 @@
 #include <windows.h>
 #include <string_view>
 #include <cctype>
-#include "OEMtoCase.h"
-#include "utf8cpp/utf8/checked.h"
+#include "MyUtils/OEMtoCase.h"
+#include "Utils/utf8cpp/utf8/checked.h"
 #include <iostream>
-#include <utf8proc.h>
+#include "Utils/utf8cpp/utf8proc.h"
 #include <regex>
 
-// --- строковые утилиты ---
 void replace_all(std::string& s, std::string_view from, std::string_view to)
 {
     for (size_t pos{}; (pos = s.find(from, pos)) != std::string::npos; )
@@ -90,10 +89,6 @@ std::string to_lower_utf82(const std::string& input) {
     return utf8;
 }
 
-#include <utf8proc.h>
-#include <string>
-#include <cstring>          // memcpy
-#include <cstdint>          // intptr_t / utf8proc_ssize_t
 
 std::string capitalize_utf82(const std::string& s)
 {

@@ -1,8 +1,10 @@
 //
 // Created by user on 01.02.2023.
 //
+
 #include <boost/asio/post.hpp>
 #include <windows.h>
+#include <cassert>
 #include <iostream>
 #include <ranges>
 #include <filesystem>
@@ -14,10 +16,10 @@
 #include <mutex>
 #include "InvertedIndex.h"
 #include <codecvt>
+#include "MyUtils/UtfUtil.h"
 #include <boost/algorithm/string.hpp>
 #include "simd_tokenizer.h"
 #include "OEMFastTokenizer.h"
-#include "Interface.h"
 #include <future>
 #include <psapi.h>
 
@@ -28,6 +30,17 @@ static size_t process_memory()
                          reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
                          sizeof(pmc));
     return pmc.WorkingSetSize;   // байты
+}
+
+static void logIndexError(const std::wstring& path, const std::string& msg)
+{
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+
+    std::ofstream out("index_errors.log", std::ios::app);
+    if (!out) return;
+
+   // out << utf::to_utf8(path) << " | " << msg << '\n';
 }
 
 void inverted_index::InvertedIndex::pingIo(boost::asio::io_context& ctx, const char* name)
@@ -266,17 +279,6 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
 
 
 
-
-void logIndexError(const std::wstring& path, const std::string& msg)
-{
-    static std::mutex mtx;
-    std::lock_guard<std::mutex> lock(mtx);
-
-    std::ofstream out("index_errors.log", std::ios::app);
-    if (!out) return;
-
-    out << my::utf8(path) << " | " << msg << '\n';
-}
 
 
 std::future<void> inverted_index::InvertedIndex::updateDocumentBase(

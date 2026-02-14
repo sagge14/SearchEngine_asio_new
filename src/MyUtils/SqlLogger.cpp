@@ -6,15 +6,9 @@
 #include <algorithm>
 #include <cctype>
 
-#include <locale>
-#include <codecvt>
-
-#include <string>
 #include <windows.h>
 
-#include <regex>
-#include <string>
-#include <windows.h>
+
 
 std::string oem866ToUtf8(const std::string& oemStr) {
     // OEM866 → wide

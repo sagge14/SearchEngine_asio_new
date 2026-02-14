@@ -27,8 +27,6 @@
 #include "robin_hood.h"
 #include "OEMtoUpper.h"
 
-
-
 #include "DocPaths.h"
 
 namespace search_server
@@ -40,53 +38,11 @@ namespace search_server
 namespace inverted_index {
 
 
-
     using namespace std;
 
     using FileId = uint32_t;
     typedef unordered_map<size_t, size_t> mapEntry;
     typedef map<size_t, vector<unordered_map<string,mapEntry>::iterator>> mapDictionaryIterators;
-
-/*
-    class OEMtoUpper
-    {
-
-    public:
-        inline static std::map<char,char> mapChar = {};
-        explicit OEMtoUpper(const std::string p)
-        {
-            std::ifstream file(p, std::ios::binary);
-
-            if(!file.is_open())
-                return;
-
-            std::string s1;
-            std::string s2;
-            getline(file,s1);
-            getline(file,s2);
-            file.close();
-
-            for(int i =0;i<33;i++)
-                mapChar.insert(std::make_pair(s1[i],s2[i]));
-
-
-        }
-        static bool iS_not_a_Oem(char c)
-        {
-            static auto a_oem = mapChar.begin()->first;
-            return c != a_oem;
-        }
-        static char getUpperCharOem(char c)
-        {
-            if(auto i = mapChar.find(c);i!=mapChar.end())
-                return i->second;
-            else
-                return std::toupper(c);
-        };
-    };
-
-
-*/
 
 
     template<typename Time = chrono::seconds, typename Clock = chrono::high_resolution_clock>
@@ -200,9 +156,6 @@ namespace inverted_index {
         friend class search_server::SearchServer;
         friend class search_server::RelativeIndex;
 
-        /** @param fileIndexing функция индексирования одного файла.
-            @param allFilesIndexing функция индексирования всех файлов из mapHashDocPaths.
-            @param addToLog функция добавление в 'logFile' инфрормации о работе сервера. */
 
         void fileIndexing(FileId fileId, std::shared_ptr<std::promise<void>> promise);
         void safeEraseFile(FileId hash);
@@ -251,14 +204,6 @@ namespace inverted_index {
         BOOST_SERIALIZATION_SPLIT_MEMBER()
 
     public:
-
-        /** @param setDocPaths для установки путей файлов подлежащих индексации.
-            @param updateDocumentBase функция процесс обновления базы индексов.
-            @param addToLog функция добавление в 'logFile' инфрормации о работе сервера.
-            @param getWordCount функция возвращающая mapEntry - обьект типа map<size_t,size_t>
-            где first - это индекс файла, а second - количество сколько раз 'word'
-            содержится в файле с индексом first - функция используется только для тестирования */
-
 
         std::future<void> updateDocumentBase(const std::vector<wstring> &vecPaths);
         PostingList getWordCount(const string& word);

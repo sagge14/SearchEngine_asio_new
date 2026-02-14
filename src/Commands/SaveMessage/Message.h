@@ -14,7 +14,7 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/string.hpp>
 
-#include "MyStrings/myWstring.h"
+//#include "MyStrings/myWstring.h"
 
 #define BYTE unsigned char
 

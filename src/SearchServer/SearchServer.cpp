@@ -6,7 +6,7 @@
 #include <iostream>
 #include <string>
 #include <codecvt>
-#include "Interface.h"
+#include "MyUtils/FileScanner.h"
 
 FileEvent merge(FileEvent old, FileEvent neu)
 {
@@ -525,7 +525,7 @@ void search_server::SearchServer::updateStep()
     /* ---------- СКАНИРОВАНИЕ ---------- */
     addToLog("updateStep() → scan start");
 
-    docPaths = Interface::getAllFilesFromDirs(
+    docPaths = FileScanner::scanDirectories(
             settings.dirs,
             settings.extensions,
             settings.excludeDirs

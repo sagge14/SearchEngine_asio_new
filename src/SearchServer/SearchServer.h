@@ -2,9 +2,9 @@
 // Created by user on 02.02.2023.
 //
 #pragma once
-#include "ConverterJSON.h"
+#include "JSON/ConverterJSON.h"
 #include "Index/InvertedIndex.h"
-#include "AsioServer.h"
+#include "AsioServer/AsioServer.h"
 #include <set>
 #include <condition_variable>
 #include "FileWatcher/MultiWatcher.h"

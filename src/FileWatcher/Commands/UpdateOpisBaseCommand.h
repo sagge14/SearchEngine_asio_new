@@ -1,7 +1,6 @@
 #pragma once
 #include "IFileEventCommand.h"
 #include "OpdateOpisBaseCommand/RecordProcessor.h"
-#include "Interface.h"
 #include "scheduler/PeriodicTaskManager.h"
 #include <memory>
 #include <algorithm>

@@ -1,7 +1,7 @@
 #include "BackupTask.h"
 #include <algorithm>
 #include <iostream>
-#include <utf8proc.h>
+#include "Utils/utf8cpp/utf8proc.h"
 #include <iostream>
 #include <filesystem>
 #include <utility>
@@ -10,12 +10,12 @@ namespace {
 // ---------------------------------------------
 //  UTF-8 → std::wstring при помощи utf8proc
 // ---------------------------------------------
-    static std::wstring utf8_to_wstring(const std::string& s)
+    std::wstring utf8_to_wstring(const std::string& s)
     {
         std::wstring out;
         out.reserve(s.size());
-        const utf8proc_uint8_t* data = reinterpret_cast<const utf8proc_uint8_t*>(s.data());
-        const utf8proc_ssize_t len   = static_cast<utf8proc_ssize_t>(s.size());
+        const auto* data = reinterpret_cast<const utf8proc_uint8_t*>(s.data());
+        const auto len   = static_cast<utf8proc_ssize_t>(s.size());
 
         for (utf8proc_ssize_t i = 0; i < len; ) {
             utf8proc_int32_t cp;
