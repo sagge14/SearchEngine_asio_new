@@ -9,15 +9,8 @@
 #include "SQLite/SQLiteConnectionManager.h"
 #include <string>
 
-#include <codecvt>
-#include <locale>
-
+#include "MyUtils/Encoding.h"
 #include <fstream>
-
-inline std::wstring from_utf8(const std::string &str) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.from_bytes(str);
-}
 
 std::vector<uint8_t> GetTelegaSingleAttachmentCmd::execute(const std::vector<uint8_t> &_data) {
     // Преобразуем вектор байт в строку, чтобы использовать его как имя файла
@@ -79,7 +72,7 @@ std::vector<uint8_t> GetTelegaSingleAttachmentCmd::execute(const std::vector<uin
     }
 
     fs::path full_file_name = fs::path(attachments_dir) / file_name;
-    full_file_name = fs::path{from_utf8(full_file_name.string())}; // имя файла в UTF-8
+    full_file_name = fs::path{encoding::utf8_to_wstring(full_file_name.string())};
 
 
 

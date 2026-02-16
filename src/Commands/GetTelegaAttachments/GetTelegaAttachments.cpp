@@ -5,19 +5,8 @@
 #include "SQLite/SQLiteConnectionManager.h"
 #include "GetTelegaAttachments.h"
 
+#include "MyUtils/Encoding.h"
 #include <string>
-#include <codecvt>
-#include <locale>
-
-inline std::string to_utf8(const std::wstring &wstr) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.to_bytes(wstr);
-}
-
-inline std::wstring from_utf8(const std::string &str) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.from_bytes(str);
-}
 
 std::vector<uint8_t> GetTelegaAttachmentsCmd::execute(const std::vector<uint8_t> &_data) {
     namespace nh = nlohmann;
@@ -70,7 +59,7 @@ std::vector<uint8_t> GetTelegaAttachmentsCmd::execute(const std::vector<uint8_t>
     {
         fs::path full = fs::path(attachments_dir) / name;
         nh::json item;
-        auto full2 = fs::path{from_utf8(full.string())}; // имя файла в UTF-8
+        auto full2 = fs::path{encoding::utf8_to_wstring(full.string())};
         item["name"]   = full.filename().string();
         item["exists"] = fs::exists(full2);
         item["size"]   = item["exists"] ? fs::file_size(full2) : 0;

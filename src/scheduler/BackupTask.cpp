@@ -1,52 +1,17 @@
 #include "BackupTask.h"
+#include "MyUtils/Encoding.h"
 #include <algorithm>
-#include <iostream>
-#include "Utils/utf8cpp/utf8proc.h"
 #include <iostream>
 #include <filesystem>
 #include <utility>
 
 namespace {
-// ---------------------------------------------
-//  UTF-8 → std::wstring при помощи utf8proc
-// ---------------------------------------------
-    std::wstring utf8_to_wstring(const std::string& s)
-    {
-        std::wstring out;
-        out.reserve(s.size());
-        const auto* data = reinterpret_cast<const utf8proc_uint8_t*>(s.data());
-        const auto len   = static_cast<utf8proc_ssize_t>(s.size());
-
-        for (utf8proc_ssize_t i = 0; i < len; ) {
-            utf8proc_int32_t cp;
-            utf8proc_ssize_t n = utf8proc_iterate(data + i, len - i, &cp);
-            if (n < 0) { // невалидная последовательность → U+FFFD
-                cp = 0xFFFD;
-                n  = 1;
-            }
-#if WCHAR_MAX >= 0x10FFFF // Linux / macOS (UTF-32)
-            out.push_back(static_cast<wchar_t>(cp));
-#else                    // Windows (UTF-16)
-            if (cp <= 0xFFFF) {
-                out.push_back(static_cast<wchar_t>(cp));
-            } else { // суррогатная пара
-                cp -= 0x10000;
-                out.push_back(static_cast<wchar_t>((cp >> 10)   + 0xD800));
-                out.push_back(static_cast<wchar_t>((cp & 0x3FF) + 0xDC00));
-            }
-#endif
-            i += n;
-        }
-        return out;
-    }
-
-// wide-stream logging c utf8proc-конвертацией
     void logError(const char* what,
                   const fs::path& p,
                   const std::error_code& ec)
     {
-        const std::wstring what_w = utf8_to_wstring(what);
-        const std::wstring msg_w  = utf8_to_wstring(ec.message());
+        const std::wstring what_w = encoding::utf8_to_wstring(what);
+        const std::wstring msg_w  = encoding::utf8_to_wstring(ec.message());
 
         std::wcerr << L"[ERROR] " << what_w
                    << L" \""    << p.wstring()

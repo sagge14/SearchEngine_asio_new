@@ -5,7 +5,7 @@
 #include "SearchServer.h"
 #include <iostream>
 #include <string>
-#include <codecvt>
+#include "MyUtils/Encoding.h"
 #include "MyUtils/FileScanner.h"
 
 FileEvent merge(FileEvent old, FileEvent neu)
@@ -23,20 +23,6 @@ FileEvent merge(FileEvent old, FileEvent neu)
         return old;                         // Added+Modified == Added
 
     return neu;                             // иначе последнее
-}
-
-namespace my_conv  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
 }
 
 
@@ -275,9 +261,6 @@ void search_server::SearchServer::trustSettings() const {
         либо напрямую из файла настроек сервера (по умолчанию Settings.json).
     Если настройки не корректны выбрасывается соответствующее исключение. */
 
-    using convert_t = std::codecvt_utf8<wchar_t>;
-    std::wstring_convert<convert_t, wchar_t> strconverter;
-
     if(settings.name.empty())
         throw(myExp(ErrorCodes::NAME));
     if(settings.threadCount < 0)
@@ -395,11 +378,8 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
      вычисления относительной релевантности.
      */
 
-    using convert_t = std::codecvt_utf8<wchar_t>;
-    std::wstring_convert<convert_t, wchar_t> strconverter;
-
     const std::wstring& wpath = _index->docPaths.pathById(_fileInd);
-    filePath = strconverter.to_bytes(wpath);
+    filePath = encoding::wstring_to_utf8(wpath);
 
     auto checkWordAndFileInd = [_index, _fileInd](const std::string& w)
     {

@@ -12,20 +12,7 @@
 #include "Commands/GetAttachments/PrefixMap.h"
 #include "Commands/GetJsonTelega/Telega.h"
 
-#include <codecvt>
-namespace cc2  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
-}
+#include "MyUtils/Encoding.h"
 
 
 #define TO_JSON(J, S) J[#S] = val.S;
@@ -257,11 +244,11 @@ PrefixMap ConverterJSON::loadAttachPrefixLogin(const std::filesystem::path &path
     jsonFile.at("prefix").get_to(str_prefix);
     jsonFile.at("map").get_to(str_map);
 
-    pm.prefix = cc2::utf8ToWstring(str_prefix);
+    pm.prefix = encoding::utf8_to_wstring(str_prefix);
 
     for(const auto& [key,value]:str_map)
     {
-        pm.map_.insert({cc2::utf8ToWstring(key),cc2::utf8ToWstring(value)});
+        pm.map_.insert({encoding::utf8_to_wstring(key),encoding::utf8_to_wstring(value)});
     }
 
     return pm;
@@ -271,13 +258,13 @@ void ConverterJSON::saveAttachPrefixLogin(const PrefixMap& pm, const std::filesy
 
 
     // Преобразуем поле prefix обратно в строку
-    std::string str_prefix = cc2::wstringToUtf8(pm.prefix);
+    std::string str_prefix = encoding::wstring_to_utf8(pm.prefix);
     jsonFile["prefix"] = str_prefix;
 
     // Преобразуем карту map_ обратно в строковый формат
     std::map<std::string, std::string> str_map;
     for (const auto& [key, value] : pm.map_) {
-        str_map[cc2::wstringToUtf8(key)] = cc2::wstringToUtf8(value);
+        str_map[encoding::wstring_to_utf8(key)] = encoding::wstring_to_utf8(value);
     }
     jsonFile["map"] = str_map;
 

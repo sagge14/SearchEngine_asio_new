@@ -3,23 +3,9 @@
 //
 
 #include "FileEventDispatcher.h"
+#include "MyUtils/Encoding.h"
 #include <iostream>
-#include <codecvt>
 #include <unordered_set>
-
-namespace my_conv2  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
-}
 
 FileEvent merge2(FileEvent old, FileEvent neu)
 {
@@ -104,7 +90,7 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
 
     for (const auto& d8 : _dirs)
     {
-        std::filesystem::path p = my_conv2::utf8ToWstring(d8);
+        std::filesystem::path p = encoding::utf8_to_wstring(d8);
         std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
         std::wstring name   = p.filename().wstring();      // напр.  L"Data"
         std::wcout << L"    [enqueueUpdate]  " << name << " " << parent  << std::endl;

@@ -1,5 +1,5 @@
 #include "FileScanner.h"
-#include "UtfUtil.h"
+#include "Encoding.h"
 #include <fstream>
 #include <mutex>
 #include <cwctype>
@@ -16,7 +16,7 @@ namespace
         std::ofstream out("scan_errors.log", std::ios::app);
         if (!out) return;
 
-        out << utf::to_utf8(path) << " | " << msg << '\n';
+        out << encoding::wstring_to_utf8(path) << " | " << msg << '\n';
     }
 
     bool matchExtension(const std::wstring& fileName,

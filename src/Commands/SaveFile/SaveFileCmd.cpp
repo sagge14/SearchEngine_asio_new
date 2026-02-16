@@ -1,9 +1,8 @@
 #include "SaveFileCmd.h"
 #include "FileData.h"
 
+#include "MyUtils/Encoding.h"
 #include <fstream>
-#include <codecvt>
-#include <locale>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -12,19 +11,6 @@
 #include <iomanip>
 #include <sstream>
 #include <map>
-
-namespace ccc
-{
-    std::string wstringToString(const std::wstring& wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    std::wstring stringToWstring(const std::string& str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
-}
 
 std::wstring SaveFileCmd::getUniqueFilename(const std::filesystem::path& directory, const std::wstring& filename, const std::vector<uint8_t>& fileContent) {
     std::filesystem::path filePath = directory / filename;
@@ -86,7 +72,7 @@ std::wstring SaveFileCmd::getCurrentMonthInRussianUpperCase() {
             {9, "СЕНТЯБРЬ"}, {10, "ОКТЯБРЬ"}, {11, "НОЯБРЬ"}, {12, "ДЕКАБРЬ"}
     };
 
-    return ccc::stringToWstring(monthNames[localTime->tm_mon + 1]);
+    return encoding::utf8_to_wstring(monthNames[localTime->tm_mon + 1]);
 }
 
 std::filesystem::path createTimestampedPath(const std::filesystem::path& basePath, const std::wstring& filename) {
@@ -126,7 +112,7 @@ std::vector<uint8_t> SaveFileCmd::execute(const std::vector<uint8_t>& data) {
     try {
         FileData fd = deserializeFromBytes(data);
 
-        filename = ccc::stringToWstring(fd.getFilename());
+        filename = encoding::utf8_to_wstring(fd.getFilename());
         fileContent = fd.getData();
     } catch (...) {
         return {0};

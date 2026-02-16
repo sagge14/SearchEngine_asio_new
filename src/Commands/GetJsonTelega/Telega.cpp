@@ -4,30 +4,12 @@
 
 #include "Telega.h"
 #include "SQLite/SQLiteConnectionManager.h"
-#include <codecvt>
+#include "MyUtils/Encoding.h"
 #include <string>
 #include <regex>
 #include <sstream>
 #include <optional>
 #include <iostream>
-
-namespace conv2
-{
-    using namespace std;
-    using convert_t = std::codecvt_utf8<wchar_t>;
-
-    wstring_convert<convert_t, wchar_t> strconverter;
-
-    string to_string(const std::wstring& wstr)                                 //Конструкция перевода в String из WString
-    {
-        return strconverter.to_bytes(wstr);
-    }
-
-    wstring to_wstring(const std::string& str)                                 //Конструкция перевода в WString из String
-    {
-        return strconverter.from_bytes(str);
-    }
-}
 
 
 
@@ -224,7 +206,7 @@ void Telega::initTelega(const std::map<std::string, std::string> &_record) {
             gde_sht = _record.at("GdeSHT");
             try
             {
-                auto tt = conv2::to_wstring(from_to);
+                auto tt = encoding::utf8_to_wstring(from_to);
             }
             catch(...)
             {

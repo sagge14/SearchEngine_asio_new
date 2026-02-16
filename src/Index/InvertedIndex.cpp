@@ -15,8 +15,7 @@
 #include <fstream>
 #include <mutex>
 #include "InvertedIndex.h"
-#include <codecvt>
-#include "MyUtils/UtfUtil.h"
+#include "MyUtils/Encoding.h"
 #include <boost/algorithm/string.hpp>
 #include "simd_tokenizer.h"
 #include "OEMFastTokenizer.h"
@@ -426,16 +425,13 @@ void inverted_index::InvertedIndex::fileIndexing(
 {
     try
     {
-        using convert_t = std::codecvt_utf8<wchar_t>;
-        std::wstring_convert<convert_t, wchar_t> strconverter;
-
         std::wstring fullPath = docPaths.pathById(fileId); // КОПИЯ!
 
         std::ifstream file(fullPath.c_str(), std::ios::binary);
         if (!file.is_open())
         {
             addToLog("fileIndexing: cannot open file " +
-                     strconverter.to_bytes(fullPath));
+                     encoding::wstring_to_utf8(fullPath));
 
             promise->set_exception(
                     std::make_exception_ptr(

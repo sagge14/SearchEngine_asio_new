@@ -5,8 +5,7 @@
 #include <memory>
 #include <algorithm>
 #include <filesystem>
-#include <locale>
-#include <codecvt>
+#include "MyUtils/Encoding.h"
 
 template<typename TaskID>
 class UpdateOpisBaseCommand : public IFileEventCommand {
@@ -59,8 +58,7 @@ public:
             }
 
             std::wstring ws = ss.str();
-            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-            std::string utf8msg = converter.to_bytes(ws);
+            std::string utf8msg = encoding::wstring_to_utf8(ws);
             throw std::runtime_error(utf8msg);
         };
 

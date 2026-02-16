@@ -2,6 +2,7 @@
 #include "RecordProcessor.h"
 #include "SQLite/SQLiteConnectionManager.h"
 #include "MyUtils/OEMtoCase.h"
+#include "MyUtils/Encoding.h"
 #include <string>
 #include <fstream>
 #include <vector>
@@ -44,12 +45,6 @@ std::string RecordProcessor::dstTableVh_;
 std::string RecordProcessor::dstTableIsh_;
 
 // =============== вспомогательные ===================
-std::wstring utf8_to_wstring(const std::string& ws)
-{
-    std::wstring result;
-    utf8::utf8to16(ws.begin(), ws.end(), std::back_inserter(result));
-    return result;
-}
 
 void RecordProcessor::updateField()
 {
@@ -248,7 +243,7 @@ std::string extractKRBlock(const std::vector<std::string>& lines)
 
 std::string RecordProcessor::getKrSoderj(const std::string& filePath)
 {
-    auto wfilePath = utf8_to_wstring(filePath);
+    auto wfilePath = encoding::utf8_to_wstring(filePath);
 
     /* ---------- 1. проверяем размер файла ---------- */
     auto fileSize = std::filesystem::file_size(wfilePath);
@@ -259,7 +254,7 @@ std::string RecordProcessor::getKrSoderj(const std::string& filePath)
 
     std::string utf8;
     try {
-        utf8 = read_oem866_file_as_utf8(wfilePath);
+        utf8 = encoding::read_oem866_file_as_utf8(wfilePath);
     } catch (const std::exception& e) {
         std::cerr << "[RecordProcessor] Error reading file: " << e.what() << "\n";
         return {};
