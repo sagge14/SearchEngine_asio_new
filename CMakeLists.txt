@@ -72,7 +72,13 @@ file(GLOB_RECURSE test_SRCS
         "${PROJECT_SOURCE_DIR}/test/*.cpp"
         )
 
-add_executable(SearchEngine_test ${test_SRCS})
+# Shared src/ files needed by tests (OEMCase, Encoding used by test/index_atomic_lock_free)
+set(SHARED_TEST_SRCS
+        "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
+        "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
+)
+
+add_executable(SearchEngine_test ${test_SRCS} ${SHARED_TEST_SRCS})
 
 add_compile_definitions(BOOST_ASIO_HAS_CO_AWAIT)
 #add_definitions(-D_ITERATOR_DEBUG_LEVEL=0)
@@ -91,7 +97,7 @@ target_link_libraries(SearchEngine_test PRIVATE gtest gtest_main nlohmann_json::
 option(TEST_MODE "option for debug" OFF)
 
 if (MSVC)
-    add_compile_options(/arch:AVX2)
+    add_compile_options(/arch:AVX2 /utf-8)
 endif()
 
 

@@ -7,25 +7,6 @@
 #include <sstream>
 #include <boost/algorithm/string.hpp>
 #include "SQLite/mySql.h"
-#include <codecvt>
-#include <locale>
-
-namespace conv
-{
-    using namespace std;
-    using convert_t = std::codecvt_utf8<wchar_t>;
-    wstring_convert<convert_t, wchar_t> strconverter;
-
-    string to_string(std::wstring wstr)                                 //Конструкция перевода в String из WString
-    {
-        return strconverter.to_bytes(wstr);
-    }
-
-    wstring to_wstring(std::string str)                                 //Конструкция перевода в WString из String
-    {
-        return strconverter.from_bytes(str);
-    }
-}
 
 
 
