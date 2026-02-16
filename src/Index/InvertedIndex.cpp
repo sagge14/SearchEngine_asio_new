@@ -646,9 +646,9 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
                          | std::views::transform([](const std::string& text) {
             auto s = text;
             boost::algorithm::trim_if(s, [](auto c) {
-                return OEMtoUpper::iS_not_a_Oem(c) && ispunct(c);
+                return OEMCase::iS_not_a_Oem(c) && ispunct(c);
             });
-            for (auto& c : s) c = OEMtoUpper::getUpperCharOem(c);
+            for (auto& c : s) c = OEMCase::getUpperCharOem(c);
             return s;
         });
         std::ranges::for_each(wordRange, [&realWords](auto&& word) {

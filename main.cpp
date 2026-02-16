@@ -41,7 +41,7 @@
 #include "ContextRuntime/ContextRuntime.h"
 #include "JSON/ConverterJSON.h"
 #include "MyUtils/SqlLogger.h"
-#include "MyUtils/OEMtoCase.h"
+#include "MyUtils/OEMCase.h"
 #include "MyUtils/StartLog.h"
 
 
@@ -159,8 +159,7 @@ int main()
     // ------------------------------------------------------------------------
     // Platform / locale init
     // ------------------------------------------------------------------------
-    OEMtoCase::init("OEM866.INI");
-    OEMtoUpper::init("OEM866.INI");
+    OEMCase::init("OEM866.INI");
 
     RecordProcessor::setDefaultDirs(
             "D:\\BASES\\ARCHIVE.DB3",

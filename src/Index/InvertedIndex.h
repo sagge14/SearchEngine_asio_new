@@ -25,7 +25,7 @@
 #include "WordID.h"
 #include "PostingList.h"
 #include "robin_hood.h"
-#include "OEMtoUpper.h"
+#include "MyUtils/OEMCase.h"
 
 #include "DocPaths.h"
 
