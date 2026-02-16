@@ -90,6 +90,8 @@ namespace asio_server
 
     class session : public std::enable_shared_from_this<session>
     {
+        /// Буфер ответов: 1 = минимум (тест), 4–8 = меньше блокировок commandExec и надёжнее доставка try_send(ошибок)
+        static constexpr std::size_t kWriteChannelCapacity = 8;
 
         enum { max_length = 64 * 1024 };
 
@@ -136,7 +138,7 @@ namespace asio_server
         explicit session(tcp::socket socket, boost::asio::thread_pool& cpu_pool)
             :socket_(std::move(socket))
             ,cpu_pool_(cpu_pool)
-            ,write_channel_(socket_.get_executor(), 1){};
+            ,write_channel_(socket_.get_executor(), kWriteChannelCapacity){};
        ~session();
 
     };

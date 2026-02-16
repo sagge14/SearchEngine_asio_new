@@ -10,7 +10,11 @@ void ContextRuntime::Context::stop() {
     io.stop();
 }
 
-ContextRuntime::ContextRuntime(size_t totalThreads) {
+ContextRuntime::ContextRuntime(size_t totalThreads)
+    : cpu_pool_(totalThreads > 0
+                ? std::max(size_t(1), static_cast<size_t>(totalThreads))
+                : std::max(size_t(1), std::thread::hardware_concurrency()))
+{
     calcThreads(totalThreads);
 }
 
@@ -18,12 +22,13 @@ ContextRuntime::~ContextRuntime() {
     stop();
 }
 
-void ContextRuntime::calcThreads(size_t total) {
-
+void ContextRuntime::calcThreads([[maybe_unused]] size_t totalThreads) {
+    // Распределение потоков I/O: фиксировано. totalThreads из ctor используется только для размера cpu_pool.
+    // net — приём + все сессии (read/write), 2 потока обычно хватает на много соединений.
+    // scheduler — таймеры, отложенные задачи; commit — коммит индекса. По 1 достаточно.
     t_net_       = 2;
     t_scheduler_ = 1;
     t_commit_    = 1;
-
 }
 
 void ContextRuntime::start() {

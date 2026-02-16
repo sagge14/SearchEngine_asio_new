@@ -33,7 +33,7 @@ public:
     void stop();
 
 private:
-    void calcThreads(size_t totalThreads);
+    void calcThreads([[maybe_unused]] size_t totalThreads);
 
     Context net_;
     Context scheduler_;
@@ -44,5 +44,7 @@ private:
     size_t t_commit_{1};
 
     std::vector<std::thread> threads_;
-    boost::asio::thread_pool cpu_pool_{std::max<size_t>(1, std::thread::hardware_concurrency())};
+    // Размер задаётся из ctor: 0 = по числу ядер (авто), иначе из конфига (thread_count).
+    // Resize пула в рантайме Boost.Asio не поддерживает.
+    boost::asio::thread_pool cpu_pool_;
 };
