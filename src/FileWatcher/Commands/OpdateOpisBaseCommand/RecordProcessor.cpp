@@ -50,15 +50,15 @@ void RecordProcessor::updateField()
 RecordProcessor::RecordProcessor(Telega::TYPE type, int num, bool need_update_kr)
         : type_{type}, num_{num}
 {
-    std::wcout << L"[RecordProcessor] Constructing: type=" << static_cast<int>(type_)
-               << L", num=" << num_
-               << L", need_update_kr=" << std::boolalpha << need_update_kr << std::endl;
+    LogFile::getRecord().write(L"[RecordProcessor] Constructing: type=" + std::to_wstring(static_cast<int>(type_))
+        + L", num=" + std::to_wstring(num_)
+        + L", need_update_kr=" + (need_update_kr ? L"true" : L"false"));
 
     auto conn = SQLiteConnectionManager::instance().getConnection(getSrcDB());
     std::string sql_qry = "SELECT * FROM ARCHIVE WHERE `Index` = " + std::to_string(num_);
     conn->execSql(sql_qry);
     if (conn->empty()) {
-        std::wcout << L"[RecordProcessor] No record found for num=" << num_ << std::endl;
+        LogFile::getRecord().write(L"[RecordProcessor] No record found for num=" + std::to_wstring(num_));
         empty_ = true;
         return;
     }
@@ -79,7 +79,7 @@ RecordProcessor::RecordProcessor(Telega::TYPE type, int num, bool need_update_kr
         try {
             filePath = row.at("DirectTo") + "\\" + row.at("FileName");
         } catch (const std::exception& e) {
-            std::wcerr << L"[RecordProcessor] File path fields missing: " << e.what() << std::endl;
+            LogFile::getRecord().write(std::string("[RecordProcessor] File path fields missing: ") + e.what());
             filePath = "";
         }
 
@@ -87,14 +87,14 @@ RecordProcessor::RecordProcessor(Telega::TYPE type, int num, bool need_update_kr
             try {
                 kr_from_text_ = getKrSoderj(filePath);
             } catch (const std::exception& e) {
-                std::wcerr << L"[RecordProcessor] getKrSoderj exception: " << e.what() << std::endl;
+                LogFile::getRecord().write(std::string("[RecordProcessor] getKrSoderj exception: ") + e.what());
                 kr_from_text_ = "";
             }
         } else {
             kr_from_text_ = kr_from_base_;
         }
     } catch (const std::exception& e) {
-        std::wcerr << L"[RecordProcessor] Exception during map value extraction: " << e.what() << std::endl;
+        LogFile::getRecord().write(std::string("[RecordProcessor] Exception during map value extraction: ") + e.what());
         throw;
     }
 
@@ -110,7 +110,7 @@ RecordProcessor::RecordProcessor(Telega::TYPE type, int num, bool need_update_kr
             if (auto val = to_int(ish2)) ish_val_ = *val;
         }
     } catch (const std::exception& e) {
-        std::wcerr << L"[RecordProcessor] Exception parsing ish_val: " << e.what() << std::endl;
+        LogFile::getRecord().write(std::string("[RecordProcessor] Exception parsing ish_val: ") + e.what());
     }
 }
 // ----------------------------------------------
@@ -155,12 +155,12 @@ void RecordProcessor::run() const {
         try {
             values = get_record();   // VALUES(...)
         } catch (const std::exception& ex) {
-            std::cerr << "[run] Error forming record #" << num_ << " : " << ex.what() << '\n';
+            LogFile::getRecord().write(std::string("[run] Error forming record #") + std::to_string(num_) + " : " + ex.what());
             return;
         }
 
         if (values.empty()) {
-            std::cerr << "[run] Empty values for #" << num_ << std::endl;
+            LogFile::getRecord().write(std::string("[run] Empty values for #") + std::to_string(num_));
             return;
         }
 
@@ -169,7 +169,7 @@ void RecordProcessor::run() const {
             sql_query = std::vformat(upsert_sql, std::make_format_args(getDstTable(), values));
         //    std::cerr << "[run] SQL: " << sql_query << std::endl;
         } catch (const std::exception& ex) {
-            std::cerr << "[run] SQL format error for #" << num_ << " : " << ex.what() << '\n';
+            LogFile::getRecord().write(std::string("[run] SQL format error for #") + std::to_string(num_) + " : " + ex.what());
             return;
         }
 
@@ -180,9 +180,9 @@ void RecordProcessor::run() const {
          //   std::cerr << "[run] SQL exec error for #" << num_ << " : " << ex.what() << '\n';
         }
     } catch (const std::exception& ex) {
-        std::cerr << "[run] FATAL error for #" << num_ << " : " << ex.what() << '\n';
+        LogFile::getRecord().write(std::string("[run] FATAL error for #") + std::to_string(num_) + " : " + ex.what());
     } catch (...) {
-        std::cerr << "[run] UNKNOWN fatal error for #" << num_ << std::endl;
+        LogFile::getRecord().write(std::string("[run] UNKNOWN fatal error for #") + std::to_string(num_));
     }
 }
 
@@ -243,7 +243,7 @@ std::string RecordProcessor::getKrSoderj(const std::string& filePath)
     /* ---------- 1. проверяем размер файла ---------- */
     auto fileSize = std::filesystem::file_size(wfilePath);
     if (fileSize > MAX_UTF8_FILE_SIZE) {
-        std::cerr << "[RecordProcessor] File too large: " << fileSize << " bytes\n";
+        LogFile::getRecord().write(std::string("[RecordProcessor] File too large: ") + std::to_string(fileSize) + " bytes");
         return {};
     }
 
@@ -251,12 +251,12 @@ std::string RecordProcessor::getKrSoderj(const std::string& filePath)
     try {
         utf8 = encoding::read_oem866_file_as_utf8(wfilePath);
     } catch (const std::exception& e) {
-        std::cerr << "[RecordProcessor] Error reading file: " << e.what() << "\n";
+        LogFile::getRecord().write(std::string("[RecordProcessor] Error reading file: ") + e.what());
         return {};
     }
 
     if (utf8.size() > MAX_UTF8_FILE_SIZE) {
-        std::cerr << "[RecordProcessor] utf8 string too large after conversion\n";
+        LogFile::getRecord().write("[RecordProcessor] utf8 string too large after conversion");
         return {};
     }
 
@@ -278,19 +278,19 @@ std::string RecordProcessor::getKrSoderj(const std::string& filePath)
     try {
         cleanupKr(kr);
     } catch (const std::exception& e) {
-        std::cerr << "[RecordProcessor] Error replacing characters: " << e.what() << '\n';
+        LogFile::getRecord().write(std::string("[RecordProcessor] Error replacing characters: ") + e.what());
     }
 
     try {
         if (!utf8::is_valid(kr.begin(), kr.end())) {
-            std::cerr << "[RecordProcessor] Invalid UTF-8 detected before capitalize_utf8\n";
+            LogFile::getRecord().write("[RecordProcessor] Invalid UTF-8 detected before capitalize_utf8");
             return {};
         }
 
         kr = capitalize_utf8(trim(kr));
 
     } catch (const std::exception& e) {
-        std::cerr << "[RecordProcessor] Error in capitalize_utf8: " << e.what() << '\n';
+        LogFile::getRecord().write(std::string("[RecordProcessor] Error in capitalize_utf8: ") + e.what());
         return {};
     }
 
@@ -348,12 +348,10 @@ void RecordProcessor::updateKrShtInShtJurnal() {
         try {
             srcConn->execSql(upd);
         } catch (const std::exception &ex) {
-            std::cerr << "UPDATE ARCHIVE для №"
-                      << std::to_string(num_) << " не выполнен: "
-                      << ex.what() << '\n';
+            LogFile::getRecord().write(std::string("UPDATE ARCHIVE для №") + std::to_string(num_) + " не выполнен: " + ex.what());
         }
     } else {
-        std::cout << "empty kr " << std::to_string(num_) << std::endl;
+        LogFile::getRecord().write(std::string("empty kr ") + std::to_string(num_));
     }
 }
 

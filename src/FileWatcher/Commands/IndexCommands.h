@@ -10,7 +10,6 @@
 #include "ZagKpodiChenger.h"
 #include "MyUtils/LogFile.h"
 #include <filesystem>
-#include <iostream>
 
 template<typename TaskID>
 class PeriodicTaskManager;
@@ -56,7 +55,7 @@ public:
 
         if(isZagFile(path))
         {
-            std::wcout << L"[ZAG] = " << path << L"\n";
+            LogFile::getWatcher().write(L"[ZAG] = " + path);
             zag_kpodi_->execute(path);
             return;
         }
@@ -69,12 +68,12 @@ public:
             try {
                 opis_command_->execute(path);
             } catch (const std::exception& e) {
-                std::wcerr << L"[execute] opis_command_ exception: " << e.what() << std::endl;
+                LogFile::getWatcher().write(std::string("[execute] opis_command_ exception: ") + e.what());
             } catch (...) {
-                std::wcerr << L"[execute] opis_command_ unknown exception!" << std::endl;
+                LogFile::getWatcher().write("[execute] opis_command_ unknown exception!");
             }
         } else {
-            std::wcout << L"[execute] opis_command_ nullptr " << path << std::endl;
+            LogFile::getWatcher().write(L"[execute] opis_command_ nullptr " + path);
         }
 
 

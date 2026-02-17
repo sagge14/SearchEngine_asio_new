@@ -2,10 +2,12 @@
 #include "IFileEventCommand.h"
 #include "OpdateOpisBaseCommand/RecordProcessor.h"
 #include "scheduler/PeriodicTaskManager.h"
+#include "MyUtils/LogFile.h"
+#include "MyUtils/Encoding.h"
 #include <memory>
 #include <algorithm>
 #include <filesystem>
-#include "MyUtils/Encoding.h"
+#include <sstream>
 
 template<typename TaskID>
 class UpdateOpisBaseCommand : public IFileEventCommand {
@@ -21,15 +23,15 @@ public:
 
         // ── фильтры ──────────────────────────────
         if (containsOUT(fs_path)) {
-            std::wcout << L"[opis_command] Skipped (contains OUT): " << path << std::endl;
+            LogFile::getWatcher().write(L"[opis_command] Skipped (contains OUT): " + path);
             return;
         }
         if (!std::filesystem::is_regular_file(fs_path)) {
-            std::wcout << L"[opis_command] Skipped (not a regular file): " << path << std::endl;
+            LogFile::getWatcher().write(L"[opis_command] Skipped (not a regular file): " + path);
             return;
         }
         if (!isExtensionAllowed(fs_path)) {
-            std::wcout << L"[opis_command] Skipped (extension not allowed): " << path << std::endl;
+            LogFile::getWatcher().write(L"[opis_command] Skipped (extension not allowed): " + path);
             return;
         }
 
@@ -38,9 +40,9 @@ public:
         int          num     = std::atoi(Telega::getNumFromFileName(path).c_str());
         bool need_kr_update  = (type == Telega::TYPE::VHOD);
 
-        std::wcout << L"[opis_command] RecordProcessor created: type=" << static_cast<int>(type)
-                   << L", num=" << num
-                   << L", need_kr_update=" << std::boolalpha << need_kr_update << std::endl;
+        LogFile::getWatcher().write(L"[opis_command] RecordProcessor created: type=" + std::to_wstring(static_cast<int>(type))
+            + L", num=" + std::to_wstring(num)
+            + L", need_kr_update=" + (need_kr_update ? L"true" : L"false"));
 
         auto safe_creat_RP = [type, num, need_kr_update]() {
 
@@ -68,7 +70,7 @@ public:
       //  std::wcout << L"[opis_command] RecordProcessor created =" << num << std::endl;
         // Проверка пустоты и ошибок в конструкторе
         if (!rp) {
-            std::wcout << L"[opis_command] ERROR: RecordProcessor not created for num=" << num << std::endl;
+            LogFile::getWatcher().write(L"[opis_command] ERROR: RecordProcessor not created for num=" + std::to_wstring(num));
             return;
         }
 
@@ -86,34 +88,30 @@ public:
                 }
                 else
                 {
-                     std::wcout << L"[opis_command] No update needed for num=" << rp->getNum() << std::endl;
-                    //return;
+                    LogFile::getWatcher().write(L"[opis_command] No update needed for num=" + std::to_wstring(rp->getNum()));
                 }
-
 
                 PodrIgnore pi{"ignore.txt"};
                 if (pi.itsIgnore(rp->getPodrazd())) {
-                    std::wcout << L"[opis_command] Podrazd ignored for num=" << rp->getNum() << std::endl;
+                    LogFile::getWatcher().write(L"[opis_command] Podrazd ignored for num=" + std::to_wstring(rp->getNum()));
                     return;
                 }
 
                 if (rp->setAndCheckLists()) {
-                 //   std::wcout << L"[opis_command] Running RecordProcessor for num=" << rp->getNum() << std::endl;
                     try {
                         rp->run();
-               //         std::wcout << L"[opis_command] RecordProcessor finished for num=" << rp->getNum() << std::endl;
                     } catch (const std::exception& e) {
-                        std::wcerr << L"[opis_command] Exception in run() for num=" << rp->getNum() << L": " << e.what() << std::endl;
+                        LogFile::getWatcher().write(std::string("[opis_command] Exception in run() for num=") + std::to_string(rp->getNum()) + ": " + e.what());
                     } catch (...) {
-                        std::wcerr << L"[opis_command] Unknown exception in run() for num=" << rp->getNum() << std::endl;
+                        LogFile::getWatcher().write(L"[opis_command] Unknown exception in run() for num=" + std::to_wstring(rp->getNum()));
                     }
                 } else {
-                    std::wcout << L"[opis_command] setAndCheckLists failed for num=" << rp->getNum() << std::endl;
+                    LogFile::getWatcher().write(L"[opis_command] setAndCheckLists failed for num=" + std::to_wstring(rp->getNum()));
                 }
             } catch (const std::exception& e) {
-                std::wcerr << L"[opis_command] Exception in delayed action for num=" << rp->getNum() << L": " << e.what() << std::endl;
+                LogFile::getWatcher().write(std::string("[opis_command] Exception in delayed action for num=") + std::to_string(rp->getNum()) + ": " + e.what());
             } catch (...) {
-                std::wcerr << L"[opis_command] Unknown exception in delayed action for num=" << rp->getNum() << std::endl;
+                LogFile::getWatcher().write(L"[opis_command] Unknown exception in delayed action for num=" + std::to_wstring(rp->getNum()));
             }
         };
 

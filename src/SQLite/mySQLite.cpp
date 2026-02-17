@@ -32,6 +32,7 @@ void mySQLite::connect(const std::string& base_dir) {
         throw std::runtime_error("Failed to open database: " + dir);
     }
     sqlite3_busy_timeout(db, 3000);
+    sqlite3_exec(db, "PRAGMA journal_mode=OFF;", nullptr, nullptr, nullptr);
 }
 
 void mySQLite::close() {

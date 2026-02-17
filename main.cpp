@@ -301,7 +301,7 @@ int main()
         std::string cmd;
         while (true) {
             std::cout << "\n--- Search Engine running ---\n"
-                      << "1 — exit\n> ";
+                      << "1 - exit\n> ";
             std::cin >> cmd;
 
             if (cmd == "1") {

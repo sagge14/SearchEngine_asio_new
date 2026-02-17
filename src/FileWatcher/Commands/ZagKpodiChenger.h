@@ -1,10 +1,10 @@
 #pragma once
 #include "IFileEventCommand.h"
+#include "MyUtils/LogFile.h"
 #include <fstream>
 #include <string>
 #include <vector>
 #include <map>
-#include <iostream>
 #include <filesystem>
 #include <algorithm>
 
@@ -145,7 +145,7 @@ private:
 
     void printMap() const {
         for (const auto& [key, value] : mapKpodi_) {
-            std::wcout << L"[" << key << L"] = " << value << L"\n";
+            LogFile::getWatcher().write(L"[" + key + L"] = " + value);
         }
     }
 };
