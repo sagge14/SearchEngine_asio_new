@@ -3,6 +3,7 @@ cmake-build-*/
 lib/
 minizip/
 other/
+test/
 
 # utf8proc
 utf8proc/
