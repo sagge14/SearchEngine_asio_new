@@ -9,7 +9,7 @@
 
 /// Унифицированный потокобезопасный файловый лог.
 /// Все логи пишутся в папку logs/ (создаётся при первом использовании).
-/// SqlLogger (БД) не затрагивается.
+/// Структура папок: logs/YYYY/MM/dd.MM.YYYY/name.log
 class LogFile
 {
 public:
@@ -36,6 +36,7 @@ public:
     void write(Args&&... args)
     {
         std::lock_guard<std::mutex> lk(m_);
+        ensureCurrentFile();
         stream_ << timestamp();
         (stream_ << ... << std::forward<Args>(args)) << '\n';
         stream_.flush();
@@ -52,8 +53,11 @@ private:
     std::string path() const;
     static std::string timestamp();
     std::string toUtf8(const std::wstring& ws) const;
+    void ensureCurrentFile();
+    static std::string getDatePath();
 
     std::string   name_;
+    std::string   currentPath_;
     std::ofstream stream_;
     std::mutex    m_;
 };

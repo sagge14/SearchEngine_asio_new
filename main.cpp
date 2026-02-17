@@ -129,7 +129,7 @@ LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* info)
 void clearIndexingDebugLog()
 {
     LogFile::getIndex().clear();
-    LogFile::getIndex().write("== Новый запуск индексации ==");
+    LogFile::getIndex().write("== New indexing session started ==");
 }
 
 

@@ -151,4 +151,57 @@ std::wstring utf8_to_wstring(const std::string& s)
     return result;
 }
 
+// ── Системное сообщение об ошибке → UTF-8 ──────────────────────
+
+std::string system_error_to_utf8(const std::string& msg)
+{
+#ifdef _WIN32
+    if (msg.empty()) return {};
+    
+    // На Windows std::error_code::message() обычно возвращает строку
+    // в OEM-866 (кодовая страница консоли) или в текущей системной кодовой странице.
+    // Пробуем преобразовать через текущую кодовую страницу системы (GetACP)
+    UINT cp = GetACP();  // Active Code Page (обычно 1251 для русской Windows)
+    
+    int wlen = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS,
+                                   msg.data(), static_cast<int>(msg.size()),
+                                   nullptr, 0);
+    if (wlen <= 0) {
+        // Если не получилось через системную кодовую страницу,
+        // пробуем OEM-866 (кодовая страница консоли)
+        return oem866_to_utf8(msg);
+    }
+    
+    std::wstring wide(wlen, L'\0');
+    int res = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS,
+                                  msg.data(), static_cast<int>(msg.size()),
+                                  wide.data(), wlen);
+    if (res <= 0) {
+        // Fallback на OEM-866
+        return oem866_to_utf8(msg);
+    }
+    
+    // Преобразуем wide string в UTF-8
+    int utf8len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                      wide.data(), wlen,
+                                      nullptr, 0, nullptr, nullptr);
+    if (utf8len <= 0) {
+        return oem866_to_utf8(msg);  // Fallback
+    }
+    
+    std::string utf8(utf8len, '\0');
+    res = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                              wide.data(), wlen,
+                              utf8.data(), utf8len,
+                              nullptr, nullptr);
+    if (res <= 0) {
+        return oem866_to_utf8(msg);  // Fallback
+    }
+    
+    return utf8;
+#else
+    return msg;  // На Linux обычно уже UTF-8
+#endif
+}
+
 } // namespace encoding

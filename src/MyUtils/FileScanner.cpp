@@ -10,7 +10,10 @@ namespace
 {
     void logScanError(const std::wstring& path, const std::string& msg)
     {
-        LogFile::getScan().write(encoding::wstring_to_utf8(path) + " | " + msg);
+        // Преобразуем путь и сообщение об ошибке в UTF-8
+        std::string utf8Path = encoding::wstring_to_utf8(path);
+        std::string utf8Msg = encoding::system_error_to_utf8(msg);
+        LogFile::getScan().write(utf8Path + " | " + utf8Msg);
     }
 
     bool matchExtension(const std::wstring& fileName,

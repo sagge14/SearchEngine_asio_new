@@ -23,4 +23,8 @@ std::string wstring_to_utf8(const std::wstring& ws);
 /// UTF-8 string → wstring (UTF-16 на Windows)
 std::wstring utf8_to_wstring(const std::string& s);
 
+/// Системное сообщение об ошибке (OEM-866 или Windows-1251) → UTF-8
+/// Пробует определить кодировку автоматически
+std::string system_error_to_utf8(const std::string& msg);
+
 } // namespace encoding
