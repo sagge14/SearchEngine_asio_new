@@ -8,7 +8,9 @@
 #include "UpdateOpisBaseCommand.h"
 #include "SearchServer/SearchServer.h"
 #include "ZagKpodiChenger.h"
+#include "MyUtils/LogFile.h"
 #include <filesystem>
+#include <iostream>
 
 template<typename TaskID>
 class PeriodicTaskManager;
@@ -39,6 +41,7 @@ public:
     }
 
     void execute(const std::wstring& path) override {
+        LogFile::getWatcher().write(L"[AddFileCommand] execute path=" + path);
 
         auto isZagFile = [](const std::wstring& path) {
             std::filesystem::path p(path);
@@ -90,6 +93,7 @@ class RemoveFileCommand : public IFileEventCommand {
 public:
     explicit RemoveFileCommand(search_server::SearchServer& server) : server_(server){}
     void execute(const std::wstring& path) override {
+        LogFile::getWatcher().write(L"[RemoveFileCommand] execute path=" + path);
         server_.removeFileFromIndex(path);
     }
 private:

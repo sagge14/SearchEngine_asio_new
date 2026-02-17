@@ -16,6 +16,7 @@
 #include <mutex>
 #include "InvertedIndex.h"
 #include "MyUtils/Encoding.h"
+#include "MyUtils/LogFile.h"
 #include <boost/algorithm/string.hpp>
 #include "simd_tokenizer.h"
 #include "OEMFastTokenizer.h"
@@ -33,13 +34,7 @@ static size_t process_memory()
 
 static void logIndexError(const std::wstring& path, const std::string& msg)
 {
-    static std::mutex mtx;
-    std::lock_guard<std::mutex> lock(mtx);
-
-    std::ofstream out("index_errors.log", std::ios::app);
-    if (!out) return;
-
-   // out << utf::to_utf8(path) << " | " << msg << '\n';
+    LogFile::getErrors().write(encoding::wstring_to_utf8(path) + " | " + msg);
 }
 
 void inverted_index::InvertedIndex::pingIo(boost::asio::io_context& ctx, const char* name)
@@ -412,11 +407,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
 
 
 void logIndexingDebug(const std::string& msg) {
-    static std::mutex logMutex;
-    std::lock_guard<std::mutex> lock(logMutex);
-    std::ofstream log("indexing_debug.log", std::ios::app);
-    log.imbue(std::locale("Russian_Russia.866"));
-    log << msg << std::endl;
+    LogFile::getIndex().write(msg);
 }
 
 void inverted_index::InvertedIndex::fileIndexing(
@@ -497,32 +488,7 @@ void inverted_index::InvertedIndex::fileIndexing(
 
 
 void inverted_index::InvertedIndex::addToLog(const string& _s) {
-
-    /**
-    Функция для записи информации в лог-файл*/
-
-    char dataTime[20];
-    time_t now = time(nullptr);
-    struct tm tm_buf{};
-#ifdef _WIN32
-    localtime_s(&tm_buf, &now);
-#else
-    localtime_r(&now, &tm_buf);
-#endif
-    strftime(dataTime, sizeof(dataTime), "%H:%M:%S %Y-%m-%d", &tm_buf);
-
-
-  //  lock_guard<mutex> myLock(logMutex);
-
-    ofstream logFile;
-    std::stringstream ss;
-    ss << std::this_thread::get_id();
-    uint64_t tid = std::stoull(ss.str());
-
-    logFile.open("index_log"+ std::to_string(tid)  +".log", ios::app);
-    logFile << "[" << dataTime << "] " << _s << endl;
-    logFile.close();
-
+    LogFile::getIndex().write(_s);
 }
 
 PostingList inverted_index::InvertedIndex::getWordCount(const std::string& word)

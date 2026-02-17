@@ -19,7 +19,6 @@ public:
             : AbstractScheduledTask(io, std::move(cpu_ex), period), fileEventDispatcher(fed) {}
 
     void runTask() override {
-        // просто вызываем публичную функцию у сервера
         fileEventDispatcher.flushPending();
     }
 

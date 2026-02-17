@@ -1,6 +1,6 @@
 #include "FileWatcher.h"
+#include "MyUtils/LogFile.h"
 #include <boost/system/error_code.hpp>
-#include <iostream>
 
 /* ───────── ctor / dtor ───────── */
 
@@ -57,7 +57,7 @@ bool FileWatcher::openDir()
             nullptr);
 
     if (hDir_ == INVALID_HANDLE_VALUE) {
-        std::wcerr << L"[Watcher] can't open " << dir_ << L'\n';
+        LogFile::getWatcher().write(L"[Watcher] can't open " + dir_);
         return false;
     }
 
@@ -66,8 +66,7 @@ bool FileWatcher::openDir()
             boost::asio::use_service<boost::asio::detail::win_iocp_io_context>(io_);
     iocp.register_handle(hDir_, ec);
     if (ec) {
-        std::wcerr << L"[Watcher] register_handle error: "
-                   << ec.message().c_str() << L'\n';
+        LogFile::getWatcher().write(std::string("[Watcher] register_handle error: ") + ec.message());
         ::CloseHandle(hDir_);
         hDir_ = INVALID_HANDLE_VALUE;
         return false;
@@ -102,8 +101,7 @@ void FileWatcher::startRead()
                     startRead();                      // перезапуск
                 }
                 else if (ec != boost::asio::error::operation_aborted)
-                    std::wcerr << L"[Watcher] IOCP error: "
-                               << ec.message().c_str() << L'\n';
+                    LogFile::getWatcher().write(std::string("[Watcher] IOCP error: ") + ec.message());
             });
 
     DWORD dummy = 0;
@@ -141,6 +139,18 @@ static FileEvent toEvt(DWORD act)
     return FileEvent::Modified;
 }
 
+static const wchar_t* evtToStr(FileEvent e)
+{
+    switch (e) {
+        case FileEvent::Added:       return L"Added";
+        case FileEvent::Removed:     return L"Removed";
+        case FileEvent::Modified:    return L"Modified";
+        case FileEvent::RenamedOld:  return L"RenamedOld";
+        case FileEvent::RenamedNew:  return L"RenamedNew";
+    }
+    return L"?";
+}
+
 void FileWatcher::parseEvents(std::size_t bytes)
 {
     BYTE* ptr = reinterpret_cast<BYTE*>(buf_.data());
@@ -150,8 +160,9 @@ void FileWatcher::parseEvents(std::size_t bytes)
         auto* fni = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(ptr + off);
         std::wstring rel(fni->FileName, fni->FileNameLength / sizeof(WCHAR));
         std::filesystem::path abs = std::filesystem::path(dir_) / rel;
-
-        if (cb_) cb_(toEvt(fni->Action), abs.wstring());
+        FileEvent evt = toEvt(fni->Action);
+        LogFile::getWatcher().write(L"[Watcher] event " + std::wstring(evtToStr(evt)) + L" path=" + abs.wstring());
+        if (cb_) cb_(evt, abs.wstring());
 
         if (!fni->NextEntryOffset) break;
         off += fni->NextEntryOffset;
@@ -165,8 +176,10 @@ void FileWatcher::fireAddEventsRecursive()
         for (auto& e : fs::recursive_directory_iterator(
                 dir_, fs::directory_options::skip_permission_denied))
         {
-            if (e.is_regular_file() && cb_)
-                cb_(FileEvent::Added, e.path().wstring());
+            if (e.is_regular_file()) {
+                LogFile::getWatcher().write(L"[Watcher] fireAdd path=" + e.path().wstring());
+                if (cb_) cb_(FileEvent::Added, e.path().wstring());
+            }
         }
     }
     catch (...) {

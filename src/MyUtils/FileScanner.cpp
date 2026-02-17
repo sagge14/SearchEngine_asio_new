@@ -1,6 +1,6 @@
 #include "FileScanner.h"
 #include "Encoding.h"
-#include <fstream>
+#include "LogFile.h"
 #include <mutex>
 #include <cwctype>
 
@@ -10,13 +10,7 @@ namespace
 {
     void logScanError(const std::wstring& path, const std::string& msg)
     {
-        static std::mutex mtx;
-        std::lock_guard<std::mutex> lock(mtx);
-
-        std::ofstream out("scan_errors.log", std::ios::app);
-        if (!out) return;
-
-        out << encoding::wstring_to_utf8(path) << " | " << msg << '\n';
+        LogFile::getScan().write(encoding::wstring_to_utf8(path) + " | " + msg);
     }
 
     bool matchExtension(const std::wstring& fileName,

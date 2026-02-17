@@ -2,8 +2,8 @@
 #include "RecordProcessor.h"
 #include "SQLite/SQLiteConnectionManager.h"
 #include "MyUtils/Encoding.h"
+#include "MyUtils/LogFile.h"
 #include <string>
-#include <fstream>
 #include <vector>
 #include <regex>
 #include <algorithm>
@@ -12,11 +12,7 @@
 #include <Utils/utf8cpp/utf8.h>
 
 void logKrDebug(const std::string& msg) {
-    static std::mutex logMutex;
-    std::lock_guard<std::mutex> lock(logMutex);
-    std::ofstream log("kr_debug.log", std::ios::app);
-    log.imbue(std::locale("Russian_Russia.866"));
-    log << msg << std::endl;
+    LogFile::getRecord().write(msg);
 }
 
 void cleanupKr(std::string& kr)

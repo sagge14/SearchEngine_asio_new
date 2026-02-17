@@ -42,7 +42,7 @@
 #include "JSON/ConverterJSON.h"
 #include "MyUtils/SqlLogger.h"
 #include "MyUtils/OEMCase.h"
-#include "MyUtils/StartLog.h"
+#include "MyUtils/LogFile.h"
 
 
 // ============================================================================
@@ -83,7 +83,6 @@
 // ============================================================================
 using namespace std::chrono_literals;
 
-#define LG(...) StartLog::instance().write(__VA_ARGS__)
 
 
 // ============================================================================
@@ -91,17 +90,7 @@ using namespace std::chrono_literals;
 // ============================================================================
 void rawLog(const std::string& msg)
 {
-    static std::mutex mtx;
-    std::lock_guard<std::mutex> lock(mtx);
-
-    std::ofstream f("io_ping.log", std::ios::app);
-    if (!f) return;
-
-    auto now = std::time(nullptr);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%H:%M:%S", std::localtime(&now));
-
-    f << "[" << buf << "] " << msg << "\n";
+    LogFile::getPing().write(msg);
 }
 
 void pingIoRaw(boost::asio::io_context& ctx, const char* name)
@@ -118,15 +107,17 @@ void pingIoRaw(boost::asio::io_context& ctx, const char* name)
 // ============================================================================
 void myTerminateHandler()
 {
-    std::ofstream log("fatal_crash.log", std::ios::app);
-    log << "[FATAL] Server terminated due to unhandled exception!\n";
+    LogFile::ensureLogsDir();
+    std::ofstream log("logs/errors.log", std::ios::app);
+    if (log) log << "[FATAL] Server terminated due to unhandled exception!\n";
     std::abort();
 }
 
 LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* info)
 {
-    std::ofstream log("crash.log", std::ios::app);
-    log << "[SEH] Exception code: 0x"
+    LogFile::ensureLogsDir();
+    std::ofstream log("logs/errors.log", std::ios::app);
+    if (log) log << "[SEH] Exception code: 0x"
         << std::hex << info->ExceptionRecord->ExceptionCode << "\n";
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -137,8 +128,8 @@ LONG WINAPI myUnhandledFilter(EXCEPTION_POINTERS* info)
 // ============================================================================
 void clearIndexingDebugLog()
 {
-    std::ofstream log("indexing_debug.log");
-    log << "== Новый запуск индексации ==\n";
+    LogFile::getIndex().clear();
+    LogFile::getIndex().write("== Новый запуск индексации ==");
 }
 
 
@@ -147,6 +138,8 @@ void clearIndexingDebugLog()
 // ============================================================================
 int main()
 {
+    LogFile::ensureLogsDir();
+
     // ------------------------------------------------------------------------
     // Load settings
     // ------------------------------------------------------------------------
@@ -288,6 +281,7 @@ int main()
     }
 
     LG("Scheduler initialized");
+    LG("All file logs: logs/ (startup, watcher, index, errors, backup, scan, record, ping)");
 
     // ------------------------------------------------------------------------
     // Asio server

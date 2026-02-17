@@ -1,14 +1,14 @@
 #include <boost/asio.hpp>
 #include "MultiWatcher.h"
+#include "MyUtils/LogFile.h"
 #include <windows.h>
-#include <iostream>
 #include <filesystem>
 
 MultiDirWatcher::MultiDirWatcher(const std::wstring& p,
-                                 DirMatch match,
+                                 const std::unordered_set<std::wstring>& kids,
                                  FileCb   fcb,
-                                boost::asio::io_context* io)
-        : parentDir_(p), matchFn_(std::move(match)), fileCb_(std::move(fcb)), io_(io)
+                                 boost::asio::io_context* io)
+        : parentDir_(p), kids_(kids), fileCb_(std::move(fcb)), io_(io)
 {}
 
 MultiDirWatcher::~MultiDirWatcher() { stop(); }
@@ -18,44 +18,24 @@ void MultiDirWatcher::start()
     if (running_ || !io_) return;
     running_ = true;
 
-    /* ───── стартовый скан ───── */
+    /* ───── создаём watcher для каждой подпапки из конфига (kids); если каталога нет — start() вернёт false ───── */
     namespace fs = std::filesystem;
-    try {
-        for (const auto& e :
-                fs::directory_iterator(parentDir_,
-                                       fs::directory_options::skip_permission_denied))
-        {
-            if (!e.is_directory()) continue;
-
-            std::wstring name = e.path().filename().wstring();
-            if (!matchFn_(name))  continue;            // неинтересно
-
-            if (!inner_.contains(name))                // ещё нет watcher-а
-            {
-                auto w = std::make_unique<FileWatcher>(*io_,
-                        e.path().wstring(), fileCb_, /*forceWalk=*/false );
-                w->start();
-                inner_.emplace(name, std::move(w));
-
-                std::wcout << L"[Multi] start init watcher for "
-                           << name << std::endl;
-            }
-        }
-    }
-    catch (...) {
-        std::wcerr << L"[Multi] initial scan failed for "
-                   << parentDir_ << std::endl;
-    }
-
-   // /* ───── основной поток слежения за переименованиями ───── */
-   // thread_ = std::thread(&MultiDirWatcher::watchParent, this);
-
-    auto watch = [this]
+    for (const auto& name : kids_)
     {
-        this->watchParent();
-    };
+        if (inner_.contains(name)) continue;
 
-    io_->post(watch);
+        std::wstring childPath = (fs::path(parentDir_) / name).wstring();
+        auto w = std::make_unique<FileWatcher>(*io_, childPath, fileCb_, /*forceWalk=*/false);
+        if (!w->start()) continue;   // каталог не существует — подхватит watchParent() при появлении
+
+        inner_.emplace(name, std::move(w));
+        LogFile::getWatcher().write(L"[Multi] start init watcher for " + name);
+    }
+
+    /* ───── основной поток слежения за переименованиями (отдельный поток, чтобы не блокировать scheduler) ───── */
+    if (watchThread_.joinable())
+        watchThread_.join();
+    watchThread_ = std::thread(&MultiDirWatcher::watchParent, this);
 }
 
 
@@ -72,6 +52,8 @@ void MultiDirWatcher::stop()
     for (auto& [_, w] : inner_) w->stop();
     inner_.clear();
 
+    if (watchThread_.joinable())
+        watchThread_.join();
 }
 
 void MultiDirWatcher::watchParent()
@@ -93,11 +75,11 @@ void MultiDirWatcher::watchParent()
                     FILE_FLAG_BACKUP_SEMANTICS, nullptr);
 
             if (hParent_ == INVALID_HANDLE_VALUE) {
-                std::wcerr << L"[Multi] can't open parent: " << parentDir_ << std::endl;
+                LogFile::getWatcher().write(L"[Multi] can't open parent: " + parentDir_);
                 std::this_thread::sleep_for(SLEEP);
                 continue;
             }
-            std::wcout << L"[Multi] watching parent " << parentDir_ << std::endl;
+            LogFile::getWatcher().write(L"[Multi] watching parent " + parentDir_);
         }
 
         /* 2. ждём изменения имён директорий */
@@ -119,7 +101,7 @@ void MultiDirWatcher::watchParent()
             auto* fni = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buf + off);
             std::wstring name(fni->FileName, fni->FileNameLength / sizeof(WCHAR));
 
-            bool interesting = matchFn_(name);   // применять ваш фильтр
+            bool interesting = kids_.contains(name);
 
             if (interesting)
             {
@@ -135,7 +117,7 @@ void MultiDirWatcher::watchParent()
                             auto w = std::make_unique<FileWatcher>(*io_,childPath, fileCb_, true /*forceWalk*/ );
                             w->start();
                             inner_.emplace(name, std::move(w));
-                            std::wcout << L"[Multi] start watcher for " << name << std::endl;
+                            LogFile::getWatcher().write(L"[Multi] start watcher for " + name);
                         }
                         break;
                     }
@@ -146,7 +128,7 @@ void MultiDirWatcher::watchParent()
                         {
                             it->second->stop();
                             inner_.erase(it);
-                            std::wcout << L"[Multi] stop watcher for " << name << std::endl;
+                            LogFile::getWatcher().write(L"[Multi] stop watcher for " + name);
                         }
                         break;
                     }

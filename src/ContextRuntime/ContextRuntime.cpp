@@ -1,6 +1,5 @@
 #include "ContextRuntime.h"
-#include "MyUtils/StartLog.h"
-#define LG(...) StartLog::instance().write(__VA_ARGS__)
+#include "MyUtils/LogFile.h"
 
 ContextRuntime::Context::Context()
         : guard(boost::asio::make_work_guard(io)) {}

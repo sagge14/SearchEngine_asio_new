@@ -1,7 +1,7 @@
 #include "BackupTask.h"
 #include "MyUtils/Encoding.h"
+#include "MyUtils/LogFile.h"
 #include <algorithm>
-#include <iostream>
 #include <filesystem>
 #include <utility>
 
@@ -10,13 +10,10 @@ namespace {
                   const fs::path& p,
                   const std::error_code& ec)
     {
-        const std::wstring what_w = encoding::utf8_to_wstring(what);
-        const std::wstring msg_w  = encoding::utf8_to_wstring(ec.message());
-
-        std::wcerr << L"[ERROR] " << what_w
-                   << L" \""    << p.wstring()
-                   << L"\": ("  << ec.value() << L") "
-                   << msg_w << L'\n';
+        std::string line = std::string("[ERROR] ") + what + " \"" +
+            encoding::wstring_to_utf8(p.wstring()) + "\": (" +
+            std::to_string(ec.value()) + ") " + ec.message();
+        LogFile::getBackup().write(line);
     }
 } // anonymous namespace
 
@@ -69,7 +66,7 @@ void BackupTask::backupDirectory(const BackupTarget& target, const std::string& 
                  fs::copy_options::overwrite_existing |
                  fs::copy_options::skip_symlinks, ec);
         if (ec) { logError("initial copy", target.src, ec); }
-        else    { std::cout << "Initial backup dir: " << base_backup << '\n'; }
+        else    { LogFile::getBackup().write(std::string("Initial backup dir: ") + base_backup.string()); }
         return;
     }
 
@@ -121,7 +118,7 @@ void BackupTask::backupDirectory(const BackupTarget& target, const std::string& 
     }
 
     cleanupOldBackups(target, true);
-    std::cout << "Backup dir: " << target.src << " -> " << version_dir << '\n';
+    LogFile::getBackup().write(target.src.string() + " -> " + version_dir.string());
 }
 
 void BackupTask::backupFile(const BackupTarget& target, const std::string& time_str)
@@ -147,7 +144,7 @@ void BackupTask::backupFile(const BackupTarget& target, const std::string& time_
     if (!fs::exists(base_file, ec) || ec) {
         fs::copy_file(target.src, base_file, fs::copy_options::overwrite_existing, ec);
         if (ec) { logError("init copy", base_file, ec); }
-        else    { std::cout << "Initial backup file: " << base_file << '\n'; }
+        else    { LogFile::getBackup().write(std::string("Initial backup file: ") + base_file.string()); }
         return;
     }
 
@@ -180,7 +177,7 @@ void BackupTask::backupFile(const BackupTarget& target, const std::string& time_
     // 8. Чистим старые версии.
     cleanupOldBackups(target, false);
 
-    std::cout << "Backup file: " << target.src << " -> " << dst << '\n';
+    LogFile::getBackup().write(target.src.string() + " -> " + dst.string());
 }
 
 

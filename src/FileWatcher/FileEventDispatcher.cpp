@@ -4,8 +4,20 @@
 
 #include "FileEventDispatcher.h"
 #include "MyUtils/Encoding.h"
-#include <iostream>
+#include "MyUtils/LogFile.h"
 #include <unordered_set>
+
+static const wchar_t* evtToStr(FileEvent e)
+{
+    switch (e) {
+        case FileEvent::Added:       return L"Added";
+        case FileEvent::Removed:     return L"Removed";
+        case FileEvent::Modified:    return L"Modified";
+        case FileEvent::RenamedOld:  return L"RenamedOld";
+        case FileEvent::RenamedNew:  return L"RenamedNew";
+    }
+    return L"?";
+}
 
 FileEvent merge2(FileEvent old, FileEvent neu)
 {
@@ -26,7 +38,11 @@ FileEvent merge2(FileEvent old, FileEvent neu)
 
 void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 {
-    if (!matchByExtensions(path)) return;
+    if (!matchByExtensions(path)) {
+        LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+        return;
+    }
+    LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent " + std::wstring(evtToStr(evt)) + L" path=" + path);
 
     size_t h = std::hash<std::wstring>{}(path);
 
@@ -44,12 +60,15 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 
 void FileEventDispatcher::flushPending()
 {
-   // std::wcout << L" - flushstart " << std::endl;
     std::queue<size_t> local;
 
     {   std::lock_guard lk(mtx_);
         std::swap(local, pendingQ_);
     }
+
+    const size_t qsize = local.size();
+    if (qsize > 0)
+        LogFile::getWatcher().write(std::string("[Dispatcher] flushPending start queue=") + std::to_string(qsize));
 
     while (!local.empty())
     {
@@ -64,17 +83,16 @@ void FileEventDispatcher::flushPending()
             evtMap_.erase(it);                      //   ← снимаем блок
         }
 
+        LogFile::getWatcher().write(L"[Dispatcher] flushPending dispatch " + std::wstring(evtToStr(evt)) + L" path=" + path);
+
         switch (evt)
         {
             case FileEvent::Removed:
             case FileEvent::RenamedOld:
-                std::wcout << L" - flushstart dell " << std::endl;
-              //  index->enqueueFileDeletion(path);
-              if(commands_.find(FileEvent::Removed) != commands_.end())
-                  commands_.at(FileEvent::Removed)->execute(path);
+                if(commands_.find(FileEvent::Removed) != commands_.end())
+                    commands_.at(FileEvent::Removed)->execute(path);
                 break;
             default:                                // Added / Modified / Ren.New
-                std::wcout << L" - flushstart add " << std::endl   ;
                 if(commands_.find(FileEvent::Added) != commands_.end())
                     commands_.at(FileEvent::Added)->execute(path);
                 break;
@@ -93,7 +111,7 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
         std::filesystem::path p = encoding::utf8_to_wstring(d8);
         std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
         std::wstring name   = p.filename().wstring();      // напр.  L"Data"
-        std::wcout << L"    [enqueueUpdate]  " << name << " " << parent  << std::endl;
+        LogFile::getWatcher().write(L"[enqueueUpdate] " + name + L" " + parent);
         need[parent].insert(name);
     }
 
@@ -103,16 +121,11 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
         pushFileEvent(evt, full);
     };
 
-    /* создаём по parent-каталогу один MultiDirWatcher */
+    /* создаём по parent-каталогу один MultiDirWatcher; передаём набор kids из конфига */
     for (auto& [parent, kids] : need)
     {
         /* фильтр: интересны только каталоги, имя которых в “kids” */
-        auto dirFilter = [kids](const std::wstring& n) -> bool
-        {
-            return kids.contains(n);
-        };
-
-        auto w = std::make_unique<MultiDirWatcher>(parent, dirFilter, fileCb, &io_);
+        auto w = std::make_unique<MultiDirWatcher>(parent, kids, fileCb, &io_);
         w->start();
         dirWatchers_.emplace_back(std::move(w));
     }
