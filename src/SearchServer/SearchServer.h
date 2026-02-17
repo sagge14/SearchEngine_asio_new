@@ -111,6 +111,7 @@ namespace search_server {
         std::vector<std::string> extensions;
         std::vector<std::string> files;
         std::vector<std::string> excludeDirs;
+        double compactThresholdPercent = 5.0;  // Порог для compact (%)
 
         static Settings* getSettings();
         static auto getExtensions() {return getSettings()->extensions;};

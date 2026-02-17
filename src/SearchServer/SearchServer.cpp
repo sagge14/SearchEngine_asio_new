@@ -350,7 +350,8 @@ void search_server::SearchServer::flushUpdateAndSaveDictionary() {
     std::thread([this] {
         try {
             updateStep();
-            index->saveIndex();
+            // saveIndex() уже вызывается внутри updateDocumentBase() -> updateStep()
+            // Не нужно вызывать повторно
         } catch (const std::exception& e) {
             // Можно залогировать ошибку
         }
@@ -447,10 +448,11 @@ search_server::Settings::Settings() {
     name = "TestServer";
     version = "1.1";
     dir = "";
-    threadCount = 1;
-    maxResponse = 5;
+    threadCount = 6;
+    maxResponse = 30;
     port = 15001;
     exactSearch = false;
+    compactThresholdPercent = 5.0;
 
 }
 
@@ -555,18 +557,22 @@ void search_server::SearchServer::updateStep()
     addToLog("updateStep() → updateDocumentBase finished");
 
     /* ---------- ФИНАЛ ---------- */
-    index->compact();
+    index->compact(settings.compactThresholdPercent);
     addToLog("updateStep() → compact done");
 
-    index->saveIndex();
-    addToLog("updateStep() → saveIndex done");
+    // saveIndex() уже вызывается внутри updateDocumentBase(), не нужно вызывать повторно
+    // index->saveIndex();
+    addToLog("updateStep() → saveIndex skipped (already done in updateDocumentBase)");
 
     time = getTimeOfUpdate();
 
+    // Получаем статистику словаря (используем wordIds.size() вместо dictionary.size())
+    auto stats = index->getStats();
     addToLog("Index database update completed! " +
-             std::to_string(index->docPaths.size()) + " files, " +
-             std::to_string(index->dictionary.size()) +
-             " unique words. Time " +
+             std::to_string(stats.totalFiles) + " files, " +
+             std::to_string(stats.uniqueWords) +
+             " unique words, " +
+             std::to_string(stats.totalPostings) + " postings. Time " +
              std::to_string(time) + " sec");
 
     update_is_running = false;

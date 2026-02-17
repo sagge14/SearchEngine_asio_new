@@ -47,7 +47,7 @@ public:
 
     ConverterJSON() = default;
     static PrefixMap loadAttachPrefixLogin(const std::filesystem::path& path);
-    static void setSettings(const search_server::Settings& val);
+    static void setSettings(const search_server::Settings& val, const std::string& jsonPath = "Settings.json");
     static std::string getJsonTelega(const Telega& val);
     static search_server::Settings getSettings(const std::string& jsonPath = "Settings.json");
     static std::vector<std::string> getRequests(const std::string& jsonPath = "Requests.json");
