@@ -37,7 +37,7 @@ public:
         ar & id2path & path2info;
     }
 
-    size_t size() {return path2info.size();}
+    size_t size() const {return path2info.size();}
 
 private:
     struct FileInfo {
