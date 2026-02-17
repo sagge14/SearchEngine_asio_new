@@ -14,6 +14,9 @@
 #include <atomic>
 #include <fstream>
 #include <mutex>
+#include <sstream>
+#include <iomanip>
+#include <climits>
 #include "InvertedIndex.h"
 #include "MyUtils/Encoding.h"
 #include "MyUtils/LogFile.h"
@@ -278,8 +281,27 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
 std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         const std::vector<std::wstring>& vecPaths)
 {
+    // Защита от параллельных вызовов
+    std::lock_guard<std::mutex> updateLock(updateMutex);
+    
     addToLog("updateDocumentBase() → start");
-    work = true;
+    
+    // Проверяем, не выполняется ли уже обновление
+    bool expected = false;
+    if (!work.compare_exchange_strong(expected, true)) {
+        addToLog("updateDocumentBase() → SKIP: update already in progress");
+        std::promise<void> p;
+        p.set_value();
+        return p.get_future();
+    }
+
+    // RAII-обёртка для автоматического сброса work при выходе из функции
+    struct WorkGuard {
+        std::atomic<bool>& work_;
+        explicit WorkGuard(std::atomic<bool>& w) : work_(w) {}
+        ~WorkGuard() { work_.store(false, std::memory_order_release); }
+    };
+    WorkGuard workGuard(work);
 
     // 1. diff
     UpdatePack pack = docPaths.getUpdate({ vecPaths.begin(), vecPaths.end() });
@@ -299,10 +321,10 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     // Нет работы — сразу готовый future
     if (toDelete.empty() && toIndex.empty())
     {
-        work = false;
         std::promise<void> p;
         p.set_value();
         return p.get_future();
+        // work будет сброшен автоматически через WorkGuard
     }
 
     // Финальный promise
@@ -341,6 +363,11 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         std::vector<FileFuture> fileFutures;
         fileFutures.reserve(toIndex.size());
 
+        // Lock-free счетчик прогресса
+        std::atomic<size_t> processedFiles{0};
+        const size_t totalFiles = toIndex.size();
+        const size_t progressInterval = std::max<size_t>(100, totalFiles / 20); // логировать каждые 5% или 100 файлов
+
         for (FileId fileId : toIndex)
         {
             auto p = std::make_shared<std::promise<void>>();
@@ -352,10 +379,21 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
                                   });
 
             boost::asio::post(cpu_pool_,
-                              [this, fileId, p]()
+                              [this, fileId, p, &processedFiles, totalFiles, progressInterval]()
                               {
                                   try {
                                       fileIndexing(fileId, p);
+                                      
+                                      // Lock-free обновление счетчика
+                                      size_t processed = processedFiles.fetch_add(1, std::memory_order_relaxed) + 1;
+                                      
+                                      // Логируем прогресс без блокировок (только при достижении интервала)
+                                      if (processed % progressInterval == 0 || processed == totalFiles) {
+                                          // Используем addToLog только для важных событий
+                                          addToLog("Progress: " + std::to_string(processed) + "/" + 
+                                                  std::to_string(totalFiles) + " files indexed (" +
+                                                  std::to_string((processed * 100) / totalFiles) + "%)");
+                                      }
                                   }
                                   catch (...) {
                                       try { p->set_exception(std::current_exception()); } catch (...) {}
@@ -389,17 +427,37 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         // ------------------------------------------------------------------
         // 5. ФИНАЛ — saveIndex (тут же, линейно)
         // ------------------------------------------------------------------
+        auto startTime = std::chrono::steady_clock::now();
         addToLog("FINAL: before saveIndex");
         saveIndex();
-        addToLog("FINAL: after saveIndex");
+        auto saveTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startTime).count();
+        addToLog("FINAL: after saveIndex, took " + std::to_string(saveTime) + " ms");
 
-        work = false;
+        // Log dictionary statistics and memory usage
+        auto stats = getStats();
+        size_t memBytes = process_memory();
+        size_t dict_size = dictionaryChunks.size() * CHUNK_SIZE;  // Total dictionary slots
+        double hole_percent = (dict_size > 0) ? (stats.emptyPostings * 100.0 / dict_size) : 0.0;
+        
+        std::ostringstream statsLog;
+        statsLog << "DICTIONARY STATS: unique_words=" << stats.uniqueWords
+                 << ", total_postings=" << stats.totalPostings
+                 << ", total_files=" << stats.totalFiles
+                 << ", dictionary_slots=" << dict_size
+                 << ", holes=" << stats.emptyPostings
+                 << ", hole_percent=" << std::fixed << std::setprecision(2) << hole_percent << "%"
+                 << ", dictionary_memory=" << (stats.memoryBytes / 1024 / 1024) << " MB"
+                 << ", process_memory=" << (memBytes / 1024 / 1024) << " MB";
+        addToLog(statsLog.str());
+
         finalPromise->set_value();
+        // work будет сброшен автоматически через WorkGuard
     }
     catch (...)
     {
-        work = false;
         try { finalPromise->set_exception(std::current_exception()); } catch (...) {}
+        // work будет сброшен автоматически через WorkGuard
     }
 
     return future;
@@ -503,6 +561,53 @@ void inverted_index::InvertedIndex::dictonaryToLog() const {
     //      addToLog(i.first + "\t" + std::to_string(i.second.size()));
 }
 
+inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
+{
+    DictionaryStats stats{};
+    
+    // Реальное количество уникальных слов
+    stats.uniqueWords = wordIds.size();
+    stats.totalFiles = docPaths.size();
+    
+    // Подсчет постингов из chunks (без длительных блокировок)
+    size_t totalPostings = 0;
+    size_t emptyPostings = 0;
+    size_t memoryBytes = 0;
+    
+    // Проходим по chunks с минимальными блокировками
+    for (const auto& chunkPtr : dictionaryChunks)
+    {
+        if (!chunkPtr) {
+            // Пустой chunk = CHUNK_SIZE пустых постингов
+            emptyPostings += CHUNK_SIZE;
+            continue;
+        }
+        
+        const Chunk& chunk = *chunkPtr;
+        // Используем try_lock для неблокирующего чтения где возможно
+        std::shared_lock<std::shared_mutex> lk(chunk.mutex);
+        
+        for (const auto& posting : chunk.bucket)
+        {
+            size_t postingSize = posting.size();
+            if (postingSize == 0) {
+                ++emptyPostings;
+            } else {
+                totalPostings += postingSize;
+                // Posting = 6 bytes (uint32_t fileId + uint16_t cnt)
+                // + overhead vector (~24 bytes на пустой вектор)
+                memoryBytes += postingSize * 6 + 24;
+            }
+        }
+    }
+    
+    stats.totalPostings = totalPostings;
+    stats.emptyPostings = emptyPostings;
+    stats.memoryBytes = memoryBytes;
+    
+    return stats;
+}
+
 void inverted_index::InvertedIndex::rebuildDictionaryFromChunks()
 {
     std::lock_guard<std::mutex> g(mapMutex);
@@ -578,7 +683,7 @@ void inverted_index::InvertedIndex::reconstructWordIts()
 void inverted_index::InvertedIndex::fixDictionaryHoles()
 {
 
-    addToLog("===> Автоисправление дыр в индексе (fixDictionaryHoles) начато");
+    addToLog("===> Dictionary holes auto-fix started (fixDictionaryHoles)");
 
     for (FileId fileId = 0; fileId < docPaths.size(); ++fileId)
     {
@@ -630,31 +735,65 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
             if (!dictionary[wid].find(fileId)) {
                 dictionary[wid][fileId] = 1; // или поставить правильный cnt, если есть возможность
                 wordRefs[fileId].push_back(wid);
-                addToLog("AUTOFIX: восстановил слово '" + word + "' для файла " + std::to_string(fileId));
+                addToLog("AUTOFIX: restored word '" + word + "' for file " + std::to_string(fileId));
             }
         }
     }
 
-    addToLog("===> Автоисправление дыр в индексе (fixDictionaryHoles) завершено");
+    addToLog("===> Dictionary holes auto-fix completed (fixDictionaryHoles)");
 }
 
 
 void inverted_index::InvertedIndex::saveIndex() const {
-
-    const_cast<InvertedIndex*>(this)->rebuildDictionaryFromChunks();
-
-    std::ofstream ofs("inverted_index3.dat", std::ios::binary);
-    if (ofs.is_open()) {
-        boost::archive::binary_oarchive oa(ofs);
-        oa << *this;
-        ofs.close();
-    } else {
-        addToLog("Failed to open file for saving index.");
+    // Защита от параллельных вызовов saveIndex
+    std::lock_guard<std::mutex> saveLock(saveMutex);
+    
+    addToLog("saveIndex() → start");
+    
+    // Проверяем, не выполняется ли обновление (но не блокируем его)
+    if (work.load(std::memory_order_acquire)) {
+        addToLog("saveIndex() → SKIP: update in progress");
+        return;
     }
 
-    dictionary.clear();
-    dictionary.shrink_to_fit();
+    try {
+        // Пересобираем dictionary из chunks перед сохранением (если он пустой)
+        // Используем const_cast для вызова не-const метода
+        InvertedIndex* nonConstThis = const_cast<InvertedIndex*>(this);
+        {
+            std::lock_guard<std::mutex> lock(mapMutex);
+            if (dictionary.empty()) {
+                nonConstThis->rebuildDictionaryFromChunks();
+            }
+        }
 
+        // Сохраняем индекс
+        std::ofstream ofs("inverted_index3.dat", std::ios::binary);
+        if (ofs.is_open()) {
+            boost::archive::binary_oarchive oa(ofs);
+            {
+                std::lock_guard<std::mutex> lock(mapMutex);
+                oa << *this;
+            }
+            ofs.close();
+            addToLog("saveIndex() → saved successfully");
+        } else {
+            addToLog("saveIndex() → ERROR: Failed to open file for saving index.");
+        }
+
+        // Очищаем dictionary после сохранения
+        {
+            std::lock_guard<std::mutex> lock(mapMutex);
+            dictionary.clear();
+            dictionary.shrink_to_fit();
+        }
+    }
+    catch (const std::exception& e) {
+        addToLog("saveIndex() → EXCEPTION: " + std::string(e.what()));
+    }
+    catch (...) {
+        addToLog("saveIndex() → EXCEPTION: unknown error");
+    }
 }
 
 inverted_index::InvertedIndex::~InvertedIndex() {
@@ -681,37 +820,69 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
         }
 }
 
-void inverted_index::InvertedIndex::compact()
+void inverted_index::InvertedIndex::compact(double thresholdPercent)
 {
     // Внешний вызов compact() должен лишь поставить задачу в strand.
-    boost::asio::post(strand_, [this]()
+    boost::asio::post(strand_, [this, thresholdPercent]()
     {
+        // Проверяем, не выполняется ли обновление (без блокировки, чтобы избежать deadlock)
+        if (work.load(std::memory_order_acquire)) {
+            addToLog("COMPACT: SKIP - update in progress, will retry later");
+            return;
+        }
+
         addToLog("COMPACT: started in strand");
+
+        // Пересобираем dictionary из chunks перед compact (если он пустой)
+        // Используем try_lock для updateMutex, чтобы не блокировать обновления надолго
+        std::unique_lock<std::mutex> updateLock(updateMutex, std::try_to_lock);
+        if (!updateLock.owns_lock()) {
+            addToLog("COMPACT: SKIP - update lock busy, will retry later");
+            return;
+        }
+
+        // Двойная проверка после блокировки
+        if (work.load(std::memory_order_acquire)) {
+            addToLog("COMPACT: SKIP - update started during lock acquisition");
+            return;
+        }
+
+        if (dictionary.empty()) {
+            rebuildDictionaryFromChunks();
+        }
 
         size_t holes = 0;
         for (const auto& post : dictionary)
             if (post.empty())
                 ++holes;
 
+        // Используем wordIds.size() для реального размера словаря
         size_t dict_size = dictionary.size();
+        size_t real_words = wordIds.size();
         double hole_percent = (dict_size > 0) ? (holes * 100.0 / dict_size) : 0.0;
 
         std::ostringstream oss;
         oss << "COMPACT: holes=" << holes
             << ", dict_size=" << dict_size
+            << ", real_words=" << real_words
             << ", hole_percent=" << std::fixed << std::setprecision(2)
-            << hole_percent << "%";
+            << hole_percent << "%"
+            << ", threshold=" << std::fixed << std::setprecision(2)
+            << thresholdPercent << "%";
 
-        // Нужно ли проводить compact?
-        if (holes == 0 || holes < dict_size / 10)
+        // Нужно ли проводить compact? Используем порог из настроек
+        if (holes == 0 || hole_percent < thresholdPercent)
         {
-            oss << " → SKIP";
+            oss << " → SKIP (below threshold)";
             addToLog(oss.str());
             return;
         }
 
         oss << " → RUN";
         addToLog(oss.str());
+
+        // Блокируем доступ к dictionary во время compact
+        std::lock_guard<std::mutex> lock(mapMutex);
 
         // === 1. Подготовить новые структуры ===
         std::vector<PostingList> newDict;
@@ -723,16 +894,25 @@ void inverted_index::InvertedIndex::compact()
         std::unordered_map<std::string, uint32_t> new_word2id;
         std::vector<std::string> new_id2word;
 
+        size_t wordIdsSize = wordIds.size();
         for (uint32_t oldWid = 0; oldWid < dictionary.size(); ++oldWid)
         {
             auto& post = dictionary[oldWid];
             if (post.empty())
                 continue; // пропускаем дырку
 
+            // Проверяем, что oldWid существует в wordIds
+            if (oldWid >= wordIdsSize) {
+                addToLog("COMPACT: WARNING - oldWid " + std::to_string(oldWid) + 
+                        " >= wordIds.size() (" + std::to_string(wordIdsSize) + "), skipping");
+                continue;
+            }
+
             auto newWid = static_cast<uint32_t>(newDict.size());
             remap[oldWid] = newWid;
             newDict.push_back(std::move(post));
 
+            // Безопасное получение слова по ID
             const std::string& word = wordIds.byId(oldWid);
             new_word2id[word] = newWid;
             new_id2word.push_back(word);
@@ -744,16 +924,44 @@ void inverted_index::InvertedIndex::compact()
         // === 2. Пересборка wordIds ===
         wordIds.rebuild(std::move(new_word2id), std::move(new_id2word));
 
-        // === 3. Пересборка wordRefs ===
+        // === 3. Пересборка wordRefs с обработкой отсутствующих ID ===
+        size_t remapErrors = 0;
         for (auto& [fileId, vec] : wordRefs)
         {
             for (uint32_t& wid : vec)
             {
-                wid = remap.at(wid);
+                auto it = remap.find(wid);
+                if (it != remap.end()) {
+                    wid = it->second;
+                } else {
+                    // Если wid не найден в remap, это ошибка данных
+                    remapErrors++;
+                    addToLog("COMPACT: ERROR - wid " + std::to_string(wid) + 
+                            " not found in remap for fileId " + std::to_string(fileId));
+                    // Устанавливаем недопустимое значение для последующей очистки
+                    wid = UINT32_MAX;
+                }
             }
         }
 
-        addToLog("COMPACT: done");
+        // Очищаем недопустимые значения из wordRefs
+        if (remapErrors > 0) {
+            const uint32_t INVALID_WID = UINT32_MAX;
+            for (auto& [fileId, vec] : wordRefs) {
+                vec.erase(
+                    std::remove(vec.begin(), vec.end(), INVALID_WID),
+                    vec.end()
+                );
+            }
+            addToLog("COMPACT: removed " + std::to_string(remapErrors) + 
+                    " invalid word references");
+        }
+
+        // === 4. Пересборка chunks из dictionary ===
+        rebuildChunksFromDictionary();
+
+        addToLog("COMPACT: done, new dict size=" + std::to_string(dictionary.size()) +
+                ", new wordIds size=" + std::to_string(wordIds.size()));
     });
 }
 

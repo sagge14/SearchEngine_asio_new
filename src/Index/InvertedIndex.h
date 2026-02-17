@@ -61,6 +61,14 @@ namespace inverted_index {
 
 
 
+    struct DictionaryStats {
+        size_t uniqueWords;      // wordIds.size() - реальное количество уникальных слов
+        size_t totalPostings;    // сумма size() всех непустых PostingList
+        size_t emptyPostings;    // holes - пустые постинг-листы
+        size_t totalFiles;        // docPaths.size()
+        size_t memoryBytes;      // примерный размер постингов в памяти
+    };
+
     class InvertedIndex {
 
         struct PostingBatch {
@@ -77,7 +85,7 @@ namespace inverted_index {
 
         struct Chunk {
             std::vector<PostingList> bucket;
-            std::shared_mutex mutex;
+            mutable std::shared_mutex mutex;  // mutable для блокировки в const методах
 
             Chunk() : bucket(CHUNK_SIZE) {}
         };
@@ -137,6 +145,8 @@ namespace inverted_index {
         mutable mutex mapMutex;
         mutable mutex resizeDicMutex;
         mutable mutex logMutex;
+        mutex updateMutex;  // Защита от параллельных вызовов updateDocumentBase
+        mutable mutex saveMutex;  // Защита от параллельных вызовов saveIndex
 
 
         boost::asio::io_context& io_commit_;
@@ -171,7 +181,7 @@ namespace inverted_index {
 
         static void addToLog(const string &_s) ;
         void reconstructWordIts();
-        void compact();
+        void compact(double thresholdPercent = 5.0);  // Порог для compact в процентах
         void fixDictionaryHoles();
 
         // InvertedIndex.h (внутри class InvertedIndex, в private-секции)
@@ -208,6 +218,7 @@ namespace inverted_index {
         std::future<void> updateDocumentBase(const std::vector<wstring> &vecPaths);
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
+        DictionaryStats getStats() const;
         explicit InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit);
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
