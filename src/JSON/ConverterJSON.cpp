@@ -54,6 +54,7 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
+    jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
 
     std::ofstream jsonFileSettings(jsonPath);
     jsonFileSettings << std::setw(2) << jsonSettings;
@@ -245,6 +246,14 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("compact_threshold_percent").get_to(s.compactThresholdPercent);
         } else {
             addedFields.push_back("config.compact_threshold_percent");
+            needsResave = true;
+        }
+
+        // save_dictionary_to_file — сохранять inverted_index3.dat (дефолт true в Settings)
+        if (config.contains("save_dictionary_to_file")) {
+            config.at("save_dictionary_to_file").get_to(s.saveDictionaryToFile);
+        } else {
+            addedFields.push_back("config.save_dictionary_to_file");
             needsResave = true;
         }
 

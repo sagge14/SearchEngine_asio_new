@@ -232,7 +232,7 @@ void search_server::SearchServer::updateDocumentBase(const std::vector<std::wstr
     time = inverted_index::perf_timer<chrono::milliseconds>::duration([this,_docPaths]() {
         std::future<void> fut = this->index->updateDocumentBase(_docPaths);
 
-        // ЖДЁМ полного завершения (compact, save, batch commits, всё!)
+        // Ждём завершения индексации в InvertedIndex; compact/save — в SearchServer::updateStep
         fut.get();
         }).count();
 
@@ -321,7 +321,10 @@ search_server::SearchServer::~SearchServer() {
     /**
     Деструктор класса*/
 
-    delete  index;
+    if (index && settings.saveDictionaryToFile)
+        index->saveIndex();
+    delete index;
+    index = nullptr;
 
 }
 
@@ -350,8 +353,6 @@ void search_server::SearchServer::flushUpdateAndSaveDictionary() {
     std::thread([this] {
         try {
             updateStep();
-            // saveIndex() уже вызывается внутри updateDocumentBase() -> updateStep()
-            // Не нужно вызывать повторно
         } catch (const std::exception& e) {
             // Можно залогировать ошибку
         }
@@ -440,7 +441,8 @@ void search_server::Settings::show() const
     std::cout << "Index database update period:\t" << indTime << " seconds" << std::endl;
     std::cout << "Asio port:\t\t\t" << port << std::endl;
     std::cout << "Show request as text:\t\t" << std::boolalpha << requestText << std::endl;
-    std::cout << "Use exact search:\t\t" << std::boolalpha << exactSearch << std::endl << std::endl;
+    std::cout << "Use exact search:\t\t" << std::boolalpha << exactSearch << std::endl;
+    std::cout << "Save dictionary to file:\t" << std::boolalpha << saveDictionaryToFile << std::endl << std::endl;
 }
 
 search_server::Settings::Settings() {
@@ -453,6 +455,7 @@ search_server::Settings::Settings() {
     port = 15001;
     exactSearch = false;
     compactThresholdPercent = 5.0;
+    saveDictionaryToFile = true;
 
 }
 
@@ -560,9 +563,12 @@ void search_server::SearchServer::updateStep()
     index->compact(settings.compactThresholdPercent);
     addToLog("updateStep() → compact done");
 
-    // saveIndex() уже вызывается внутри updateDocumentBase(), не нужно вызывать повторно
-    // index->saveIndex();
-    addToLog("updateStep() → saveIndex skipped (already done in updateDocumentBase)");
+    if (settings.saveDictionaryToFile) {
+        addToLog("updateStep() → saveIndex (save_dictionary_to_file=true)");
+        index->saveIndex();
+    } else {
+        addToLog("updateStep() → saveIndex skipped (save_dictionary_to_file=false)");
+    }
 
     time = getTimeOfUpdate();
 

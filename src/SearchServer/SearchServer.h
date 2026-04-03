@@ -112,6 +112,8 @@ namespace search_server {
         std::vector<std::string> files;
         std::vector<std::string> excludeDirs;
         double compactThresholdPercent = 5.0;  // Порог для compact (%)
+        /// Сохранять inverted_index3.dat; вызывает SearchServer (не InvertedIndex в конце апдейта).
+        bool saveDictionaryToFile = true;
 
         static Settings* getSettings();
         static auto getExtensions() {return getSettings()->extensions;};
