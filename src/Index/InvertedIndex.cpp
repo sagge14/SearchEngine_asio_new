@@ -55,50 +55,54 @@ void inverted_index::InvertedIndex::commitSingleWord(const PostingTask& t)
     const size_t   chunkIndex = wid / CHUNK_SIZE;
     const size_t   localIndex = wid % CHUNK_SIZE;
 
-    // создаём/расширяем чанк под глобальным мьютексом, как в getPostingList
+    // Метаданные vector — под mapMutex; данные чанка — под chunk.mutex
+    Chunk* chunkPtr = nullptr;
     {
         std::lock_guard<std::mutex> g(mapMutex);
         if (chunkIndex >= dictionaryChunks.size())
             dictionaryChunks.resize(chunkIndex + 1);
         if (!dictionaryChunks[chunkIndex])
             dictionaryChunks[chunkIndex] = std::make_unique<Chunk>();
+        chunkPtr = dictionaryChunks[chunkIndex].get();
     }
 
-    Chunk& chunk = *dictionaryChunks[chunkIndex];
-
-    std::unique_lock<std::shared_mutex> lk(chunk.mutex);
-    chunk.bucket[localIndex][t.fileId] += t.count;
+    std::unique_lock<std::shared_mutex> lk(chunkPtr->mutex);
+    chunkPtr->bucket[localIndex][t.fileId] += t.count;
 }
 
 void inverted_index::InvertedIndex::commitChunkMap(
         const std::unordered_map<size_t, std::vector<PostingTask>>& chunkMap)
 {
-    // === 1. (Редко) расширяем массив чанков ОДИН раз ===
+    // Снимок Chunk* под mapMutex, затем только chunk.mutex — без гонки по vector при resize.
+    std::vector<std::pair<Chunk*, std::vector<PostingTask>>> work;
+    work.reserve(chunkMap.size());
+
     {
         std::lock_guard<std::mutex> g(mapMutex);
 
         size_t maxIndex = 0;
-        for (auto& [cid, _] : chunkMap)
+        for (const auto& [cid, _] : chunkMap)
             if (cid > maxIndex) maxIndex = cid;
 
         if (maxIndex >= dictionaryChunks.size())
             dictionaryChunks.resize(maxIndex + 1);
 
-        for (auto& [cid, _] : chunkMap)
+        for (const auto& [cid, tasks] : chunkMap)
+        {
             if (!dictionaryChunks[cid])
                 dictionaryChunks[cid] = std::make_unique<Chunk>();
+            work.emplace_back(dictionaryChunks[cid].get(), tasks);
+        }
     }
 
-    // === 2. Обновляем чанки с минимальными lock ===
-    for (auto& [cid, tasks] : chunkMap)
+    for (auto& [ch, tasks] : work)
     {
-        Chunk& ch = *dictionaryChunks[cid];
-        std::unique_lock<std::shared_mutex> lk(ch.mutex);
+        std::unique_lock<std::shared_mutex> lk(ch->mutex);
 
         for (auto& t : tasks)
         {
             size_t local = t.wordId % CHUNK_SIZE;
-            ch.bucket[local][t.fileId] += t.count;
+            ch->bucket[local][t.fileId] += t.count;
         }
     }
 }
@@ -182,12 +186,16 @@ std::optional<PostingList> inverted_index::InvertedIndex::getPostingCopyByWord(c
     const size_t chunkIndex = wid / CHUNK_SIZE;
     const size_t localIndex = wid % CHUNK_SIZE;
 
-    if (chunkIndex >= dictionaryChunks.size())
-        return std::nullopt;
-
-    const auto& chunkPtr = dictionaryChunks[chunkIndex];
-    if (!chunkPtr)
-        return std::nullopt;
+    const Chunk* chunkPtr = nullptr;
+    {
+        std::lock_guard<std::mutex> g(mapMutex);
+        if (chunkIndex >= dictionaryChunks.size())
+            return std::nullopt;
+        const auto& up = dictionaryChunks[chunkIndex];
+        if (!up)
+            return std::nullopt;
+        chunkPtr = up.get();
+    }
 
     std::shared_lock<std::shared_mutex> lk(chunkPtr->mutex);
     const PostingList& pl = chunkPtr->bucket[localIndex];
@@ -233,21 +241,30 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
     if (itRefs != wordRefs.end())
     {
         const auto& widList = itRefs->second;
-        for (uint32_t wid : widList)
+        std::vector<std::pair<Chunk*, size_t>> targets;
+        targets.reserve(widList.size());
         {
-            size_t chunkIndex = wid / CHUNK_SIZE;
-            size_t localIndex = wid % CHUNK_SIZE;
+            std::lock_guard<std::mutex> g(mapMutex);
+            for (uint32_t wid : widList)
+            {
+                size_t chunkIndex = wid / CHUNK_SIZE;
+                size_t localIndex = wid % CHUNK_SIZE;
 
-            if (chunkIndex >= dictionaryChunks.size())
-                continue;
+                if (chunkIndex >= dictionaryChunks.size())
+                    continue;
 
-            auto& chunkPtr = dictionaryChunks[chunkIndex];
-            if (!chunkPtr)
-                continue;
+                auto& up = dictionaryChunks[chunkIndex];
+                if (!up)
+                    continue;
 
-            Chunk& chunk = *chunkPtr;
-            std::unique_lock<std::shared_mutex> lk(chunk.mutex);
-            auto& posting = chunk.bucket[localIndex];
+                targets.emplace_back(up.get(), localIndex);
+            }
+        }
+
+        for (auto [chunk, localIndex] : targets)
+        {
+            std::unique_lock<std::shared_mutex> lk(chunk->mutex);
+            auto& posting = chunk->bucket[localIndex];
             if (!posting.empty())
                 posting.erase(fileId);
         }
@@ -257,13 +274,19 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
     else
     {
         // fallback: полный обход (редкий случай)
-        for (auto& chunkPtr : dictionaryChunks)
+        std::vector<Chunk*> chunks;
+        {
+            std::lock_guard<std::mutex> g(mapMutex);
+            chunks.reserve(dictionaryChunks.size());
+            for (auto& up : dictionaryChunks)
+                chunks.push_back(up.get());
+        }
+        for (Chunk* chunkPtr : chunks)
         {
             if (!chunkPtr) continue;
-            Chunk& chunk = *chunkPtr;
 
-            std::unique_lock<std::shared_mutex> lk(chunk.mutex);
-            for (auto& posting : chunk.bucket)
+            std::unique_lock<std::shared_mutex> lk(chunkPtr->mutex);
+            for (auto& posting : chunkPtr->bucket)
             {
                 if (!posting.empty())
                     posting.erase(fileId);
@@ -413,6 +436,9 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
 
             if (ff.fut.wait_for(60s) != std::future_status::ready)
             {
+                const std::string pathUtf8 = encoding::wstring_to_utf8(ff.path);
+                addToLog("updateDocumentBase: TIMEOUT (60s) waiting file future, id=" +
+                         std::to_string(ff.id) + " path=" + pathUtf8);
                 logIndexError(ff.path, "TIMEOUT waiting file future (60s)");
                 continue;
             }
@@ -424,20 +450,16 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
 
         addToLog("updateDocumentBase: all fileIndexing done");
 
-        // ------------------------------------------------------------------
-        // 5. ФИНАЛ — saveIndex (тут же, линейно)
-        // ------------------------------------------------------------------
-        auto startTime = std::chrono::steady_clock::now();
-        addToLog("FINAL: before saveIndex");
-        saveIndex();
-        auto saveTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startTime).count();
-        addToLog("FINAL: after saveIndex, took " + std::to_string(saveTime) + " ms");
+        // Сохранение на диск — только по настройке save_dictionary_to_file в SearchServer::updateStep
 
         // Log dictionary statistics and memory usage
         auto stats = getStats();
         size_t memBytes = process_memory();
-        size_t dict_size = dictionaryChunks.size() * CHUNK_SIZE;  // Total dictionary slots
+        size_t dict_size;
+        {
+            std::lock_guard<std::mutex> g(mapMutex);
+            dict_size = dictionaryChunks.size() * CHUNK_SIZE;
+        }
         double hole_percent = (dict_size > 0) ? (stats.emptyPostings * 100.0 / dict_size) : 0.0;
         
         std::ostringstream statsLog;
@@ -476,7 +498,7 @@ void inverted_index::InvertedIndex::fileIndexing(
     {
         std::wstring fullPath = docPaths.pathById(fileId); // КОПИЯ!
 
-        std::ifstream file(fullPath.c_str(), std::ios::binary);
+        std::ifstream file(std::filesystem::path(fullPath), std::ios::binary);
         if (!file.is_open())
         {
             addToLog("fileIndexing: cannot open file " +
@@ -574,17 +596,23 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
     size_t emptyPostings = 0;
     size_t memoryBytes = 0;
     
-    // Проходим по chunks с минимальными блокировками
-    for (const auto& chunkPtr : dictionaryChunks)
+    std::vector<const Chunk*> chunks;
+    {
+        std::lock_guard<std::mutex> g(mapMutex);
+        chunks.reserve(dictionaryChunks.size());
+        for (const auto& up : dictionaryChunks)
+            chunks.push_back(up.get());
+    }
+
+    for (const Chunk* chunkPtr : chunks)
     {
         if (!chunkPtr) {
             // Пустой chunk = CHUNK_SIZE пустых постингов
             emptyPostings += CHUNK_SIZE;
             continue;
         }
-        
+
         const Chunk& chunk = *chunkPtr;
-        // Используем try_lock для неблокирующего чтения где возможно
         std::shared_lock<std::shared_mutex> lk(chunk.mutex);
         
         for (const auto& posting : chunk.bucket)
@@ -608,9 +636,8 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
     return stats;
 }
 
-void inverted_index::InvertedIndex::rebuildDictionaryFromChunks()
+void inverted_index::InvertedIndex::rebuildDictionaryFromChunksLocked()
 {
-    std::lock_guard<std::mutex> g(mapMutex);
     dictionary.clear();
     dictionary.reserve(dictionaryChunks.size() * CHUNK_SIZE);
 
@@ -632,8 +659,15 @@ void inverted_index::InvertedIndex::rebuildDictionaryFromChunks()
     }
 }
 
+void inverted_index::InvertedIndex::rebuildDictionaryFromChunks()
+{
+    std::lock_guard<std::mutex> g(mapMutex);
+    rebuildDictionaryFromChunksLocked();
+}
+
 void inverted_index::InvertedIndex::rebuildChunksFromDictionary()
 {
+    // Вызывать только при удерживаемом mapMutex (load, compact).
     dictionaryChunks.clear();
 
     for (size_t wid = 0; wid < dictionary.size(); ++wid)
@@ -758,14 +792,17 @@ void inverted_index::InvertedIndex::saveIndex() const {
 
     try {
         // Пересобираем dictionary из chunks перед сохранением (если он пустой)
-        // Используем const_cast для вызова не-const метода
         InvertedIndex* nonConstThis = const_cast<InvertedIndex*>(this);
+        bool rebuiltFromChunks = false;
         {
             std::lock_guard<std::mutex> lock(mapMutex);
             if (dictionary.empty()) {
-                nonConstThis->rebuildDictionaryFromChunks();
+                nonConstThis->rebuildDictionaryFromChunksLocked();
+                rebuiltFromChunks = true;
             }
         }
+        addToLog(std::string("saveIndex() → trace: rebuild_from_chunks=") +
+                 (rebuiltFromChunks ? "yes" : "no"));
 
         // Сохраняем индекс
         std::ofstream ofs("inverted_index3.dat", std::ios::binary);
@@ -773,7 +810,9 @@ void inverted_index::InvertedIndex::saveIndex() const {
             boost::archive::binary_oarchive oa(ofs);
             {
                 std::lock_guard<std::mutex> lock(mapMutex);
+                addToLog("saveIndex() → trace: serialize begin");
                 oa << *this;
+                addToLog("saveIndex() → trace: serialize end");
             }
             ofs.close();
             addToLog("saveIndex() → saved successfully");
@@ -796,9 +835,7 @@ void inverted_index::InvertedIndex::saveIndex() const {
     }
 }
 
-inverted_index::InvertedIndex::~InvertedIndex() {
-    saveIndex();
-}
+inverted_index::InvertedIndex::~InvertedIndex() = default;
 
 inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit)
         : io_commit_(io_commit)
@@ -1100,24 +1137,32 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
 
         const auto &widList = refIt->second;
 
-        for (uint32_t wid : widList)
+        std::vector<std::pair<Chunk*, size_t>> targets;
+        targets.reserve(widList.size());
         {
-            const size_t chunkIndex = wid / CHUNK_SIZE;
-            const size_t localIndex = wid % CHUNK_SIZE;
+            std::lock_guard<std::mutex> g(mapMutex);
+            for (uint32_t wid : widList)
+            {
+                const size_t chunkIndex = wid / CHUNK_SIZE;
+                const size_t localIndex = wid % CHUNK_SIZE;
 
-            if (chunkIndex >= dictionaryChunks.size())
-                continue;
+                if (chunkIndex >= dictionaryChunks.size())
+                    continue;
 
-            auto& chunkPtr = dictionaryChunks[chunkIndex];
-            if (!chunkPtr)
-                continue;
+                auto& up = dictionaryChunks[chunkIndex];
+                if (!up)
+                    continue;
 
-            Chunk& chunk = *chunkPtr;
-            std::unique_lock<std::shared_mutex> lk(chunk.mutex);
+                targets.emplace_back(up.get(), localIndex);
+            }
+        }
 
-            auto& posting = chunk.bucket[localIndex];
+        for (auto [chunk, localIndex] : targets)
+        {
+            std::unique_lock<std::shared_mutex> lk(chunk->mutex);
+
+            auto& posting = chunk->bucket[localIndex];
             posting.erase(id);
-            // если пустой — просто остаётся пустым; чистить ещё где-то не надо
         }
 
         std::wcout << L"[strand/dictionary] Cleaned "

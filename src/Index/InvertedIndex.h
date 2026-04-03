@@ -112,6 +112,7 @@ namespace inverted_index {
             size_t chunkIndex = wid / CHUNK_SIZE;
             size_t localIndex = wid % CHUNK_SIZE;
 
+            std::lock_guard<std::mutex> g(mapMutex);
             if (chunkIndex >= dictionaryChunks.size())
                 dictionaryChunks.resize(chunkIndex + 1);
 
@@ -124,6 +125,8 @@ namespace inverted_index {
         [[maybe_unused]] std::shared_mutex& mutexForWord(uint32_t wid)
         {
             size_t chunkIndex = wid / CHUNK_SIZE;
+
+            std::lock_guard<std::mutex> g(mapMutex);
             if (chunkIndex >= dictionaryChunks.size())
                 dictionaryChunks.resize(chunkIndex + 1);
 
@@ -177,6 +180,8 @@ namespace inverted_index {
                 const std::unordered_map<size_t, std::vector<PostingTask>>& chunkMap);
 
         void rebuildDictionaryFromChunks();
+        /// Вызывать только при уже удерживаемом mapMutex (см. saveIndex).
+        void rebuildDictionaryFromChunksLocked();
         void rebuildChunksFromDictionary();
 
         static void addToLog(const string &_s) ;
@@ -191,9 +196,9 @@ namespace inverted_index {
 
         friend class boost::serialization::access;
 
+        /// mapMutex снаружи (saveIndex). Вложенный lock здесь даёт deadlock с saveIndex.
         template<class Archive>
         void save(Archive & ar, const unsigned int version)  const {
-            std::lock_guard<std::mutex> lock(mapMutex);
             ar & dictionary;
             ar & wordIds;
             ar & docPaths;
