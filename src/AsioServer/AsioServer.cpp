@@ -177,6 +177,7 @@ boost::asio::awaitable<void> asio_server::session::writeLoop()
         while (!stopped_ && socket_.is_open()) {
             boost::system::error_code ec;
             WriteItem item;
+
             std::tie(ec, item) =
                     co_await write_channel_.async_receive(boost::asio::as_tuple(boost::asio::use_awaitable));
 
@@ -243,14 +244,11 @@ boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
         buffer->resize(bytesRead);
 
         boost::system::error_code ec;
-        co_await boost::asio::async_write(
-                socket_,
-                boost::asio::buffer(buffer->data(), static_cast<size_t>(bytesRead)),
-                boost::asio::redirect_error(boost::asio::use_awaitable, ec)
-        );
+
+        co_await write_channel_.async_send(ec, buffer, boost::asio::use_awaitable);
 
         if (ec) {
-            search_server::addToLog("sendNextFileChunk write error: " + ec.message());
+            search_server::addToLog("sendNextFileChunk channel error: " + ec.message());
             stop("file send error");
             co_return;
         }
