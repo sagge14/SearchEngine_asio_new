@@ -91,6 +91,8 @@ void LogFile::ensureCurrentFile()
         std::filesystem::create_directories(fsPath.parent_path(), ec);
         stream_.open(newPath, std::ios::app);
 #endif
+        // Фиксируем C locale, чтобы не появлялись нестандартные разделители тысяч/десятичные.
+        stream_.imbue(std::locale::classic());
         currentPath_ = newPath;
     }
 }

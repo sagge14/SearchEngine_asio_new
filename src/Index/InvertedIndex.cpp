@@ -375,6 +375,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     toIndex.insert(toIndex.end(), pack.updated.begin(), pack.updated.end());
 
     std::ostringstream diffLog;
+    diffLog.imbue(std::locale::classic());
     diffLog << "diff: +"  << pack.added.size()
             << ", upd "   << pack.updated.size()
             << ", del "   << pack.removed.size();
@@ -505,6 +506,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         double hole_percent = (dict_size > 0) ? (stats.emptyPostings * 100.0 / dict_size) : 0.0;
         
         std::ostringstream statsLog;
+        statsLog.imbue(std::locale::classic());
         statsLog << "DICTIONARY STATS: unique_words=" << stats.uniqueWords
                  << ", total_postings=" << stats.totalPostings
                  << ", total_files=" << stats.totalFiles
