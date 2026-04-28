@@ -22,6 +22,8 @@
 #include <boost/asio/experimental/channel.hpp>
 #include <boost/asio/strand.hpp>
 #include <future>
+#include <optional>
+#include <semaphore>
 #include "WordID.h"
 #include "PostingList.h"
 #include "robin_hood.h"
@@ -156,6 +158,11 @@ namespace inverted_index {
         boost::asio::thread_pool& cpu_pool_;
         boost::asio::strand<boost::asio::io_context::executor_type> strand_;
 
+        /// Ограничитель одновременных читателей файлов; пуст при maxParallelReaders <= 0.
+        std::optional<std::counting_semaphore<>> readSlots_;
+        /// Таймаут ожидания одной задачи fileIndexing в updateDocumentBase, секунды.
+        int fileIndexingTimeoutSec_ = 60;
+
 
         using mapEntry = std::unordered_map<size_t, size_t>;   // fileId → count
         WordIdManager wordIds;               // то, что добавили на шаге 1
@@ -224,7 +231,10 @@ namespace inverted_index {
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
         DictionaryStats getStats() const;
-        explicit InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit);
+        explicit InvertedIndex(boost::asio::thread_pool& cpu_pool,
+                               boost::asio::io_context& io_commit,
+                               int maxParallelReaders = 0,
+                               int fileIndexingTimeoutSec = 60);
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();

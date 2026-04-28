@@ -55,6 +55,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
     jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
+    jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
+    jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
 
     std::ofstream jsonFileSettings(jsonPath);
     jsonFileSettings << std::setw(2) << jsonSettings;
@@ -254,6 +256,22 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("save_dictionary_to_file").get_to(s.saveDictionaryToFile);
         } else {
             addedFields.push_back("config.save_dictionary_to_file");
+            needsResave = true;
+        }
+
+        // max_parallel_readers — лимит одновременных читателей файлов (0 = без лимита)
+        if (config.contains("max_parallel_readers")) {
+            config.at("max_parallel_readers").get_to(s.maxParallelReaders);
+        } else {
+            addedFields.push_back("config.max_parallel_readers");
+            needsResave = true;
+        }
+
+        // file_indexing_timeout_sec — таймаут ожидания одного файла в updateDocumentBase
+        if (config.contains("file_indexing_timeout_sec")) {
+            config.at("file_indexing_timeout_sec").get_to(s.fileIndexingTimeoutSec);
+        } else {
+            addedFields.push_back("config.file_indexing_timeout_sec");
             needsResave = true;
         }
 

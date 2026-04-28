@@ -40,6 +40,33 @@ static void logIndexError(const std::wstring& path, const std::string& msg)
     LogFile::getErrors().write(encoding::wstring_to_utf8(path) + " | " + msg);
 }
 
+namespace {
+    /// RAII: захватывает слот семафора при maxParallelReaders > 0; иначе no-op.
+    struct ReadSlotGuard {
+        std::optional<std::counting_semaphore<>>& sem;
+        bool taken = false;
+
+        explicit ReadSlotGuard(std::optional<std::counting_semaphore<>>& s) : sem(s)
+        {
+            if (sem.has_value()) {
+                sem->acquire();
+                taken = true;
+            }
+        }
+
+        ~ReadSlotGuard()
+        {
+            if (taken)
+                sem->release();
+        }
+
+        ReadSlotGuard(const ReadSlotGuard&) = delete;
+        ReadSlotGuard& operator=(const ReadSlotGuard&) = delete;
+        ReadSlotGuard(ReadSlotGuard&&) = delete;
+        ReadSlotGuard& operator=(ReadSlotGuard&&) = delete;
+    };
+}
+
 void inverted_index::InvertedIndex::pingIo(boost::asio::io_context& ctx, const char* name)
 {
     inverted_index::InvertedIndex::addToLog(std::string("PING post -> ") + name);
@@ -435,16 +462,19 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         // ------------------------------------------------------------------
         // 4. ОЖИДАНИЕ ВСЕХ fileIndexing (как было, но без detached)
         // ------------------------------------------------------------------
+        const auto perFileTimeout = std::chrono::seconds(fileIndexingTimeoutSec_);
         for (auto& ff : fileFutures)
         {
-            using namespace std::chrono_literals;
-
-            if (ff.fut.wait_for(60s) != std::future_status::ready)
+            if (ff.fut.wait_for(perFileTimeout) != std::future_status::ready)
             {
                 const std::string pathUtf8 = encoding::wstring_to_utf8(ff.path);
-                addToLog("updateDocumentBase: TIMEOUT (60s) waiting file future, id=" +
+                addToLog("updateDocumentBase: TIMEOUT (" +
+                         std::to_string(fileIndexingTimeoutSec_) +
+                         "s) waiting file future, id=" +
                          std::to_string(ff.id) + " path=" + pathUtf8);
-                logIndexError(ff.path, "TIMEOUT waiting file future (60s)");
+                logIndexError(ff.path,
+                              "TIMEOUT waiting file future (" +
+                              std::to_string(fileIndexingTimeoutSec_) + "s)");
                 continue;
             }
 
@@ -503,54 +533,59 @@ void inverted_index::InvertedIndex::fileIndexing(
     {
         std::wstring fullPath = docPaths.pathById(fileId); // КОПИЯ!
 
-        std::ifstream file(std::filesystem::path(fullPath), std::ios::binary);
-        if (!file.is_open())
-        {
-            addToLog("fileIndexing: cannot open file " +
-                     encoding::wstring_to_utf8(fullPath));
-
-            promise->set_exception(
-                    std::make_exception_ptr(
-                            std::runtime_error("file not found")));
-            return;
-        }
-
         // --- словарь частот ---
         robin_hood::unordered_map<std::string, size_t> freqWordFile;
 
-        // --- SIMD tokenizer ---
-        static const size_t BUF_SIZE = 64 * 1024;
-        std::vector<char> buf(BUF_SIZE);
-
-        std::string carry;   // хвост слова на границах буферов
-
-        while (true)
+        // Чтение и токенизация — под слотом семафора (если maxParallelReaders > 0).
+        // Слот удерживается только на время I/O+tokenize одного файла; формирование
+        // batch и постинг в strand_ происходят уже без слота.
         {
-            file.read(buf.data(), BUF_SIZE);
-            std::size_t readBytes = file.gcount();
-            if (readBytes == 0)
-                break;
+            ReadSlotGuard slot(readSlots_);
 
-            const bool isLastChunk = file.eof();
+            std::ifstream file(std::filesystem::path(fullPath), std::ios::binary);
+            if (!file.is_open())
+            {
+                addToLog("fileIndexing: cannot open file " +
+                         encoding::wstring_to_utf8(fullPath));
 
-            simd_tokenizer::tokenize_oem866_buffer(
-                    buf.data(),
-                    readBytes,
-                    isLastChunk,
-                    carry,
-                    [&](std::string_view tok)
-                    {
-                        // -------- 🔥 ТВОЯ OEM-ЛОГИКА --------
+                promise->set_exception(
+                        std::make_exception_ptr(
+                                std::runtime_error("file not found")));
+                return;
+            }
 
-                        std::string w;
-                        w.assign(tok.data(), tok.size());  // быстрее, чем std::string(tok)
+            // --- SIMD tokenizer ---
+            static const size_t BUF_SIZE = 64 * 1024;
+            std::vector<char> buf(BUF_SIZE);
 
-                        OEMFastTokenizer::normalizeToken(w);
+            std::string carry;   // хвост слова на границах буферов
 
-                        if (!w.empty())
-                            ++freqWordFile[w];
-                    });
-        }
+            while (true)
+            {
+                file.read(buf.data(), BUF_SIZE);
+                std::size_t readBytes = file.gcount();
+                if (readBytes == 0)
+                    break;
+
+                const bool isLastChunk = file.eof();
+
+                simd_tokenizer::tokenize_oem866_buffer(
+                        buf.data(),
+                        readBytes,
+                        isLastChunk,
+                        carry,
+                        [&](std::string_view tok)
+                        {
+                            std::string w;
+                            w.assign(tok.data(), tok.size());
+
+                            OEMFastTokenizer::normalizeToken(w);
+
+                            if (!w.empty())
+                                ++freqWordFile[w];
+                        });
+            }
+        } // slot освобождается здесь
 
         // создаём batch
         PostingBatch batch;
@@ -842,11 +877,24 @@ void inverted_index::InvertedIndex::saveIndex() const {
 
 inverted_index::InvertedIndex::~InvertedIndex() = default;
 
-inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit)
+inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
+                                             boost::asio::io_context& io_commit,
+                                             int maxParallelReaders,
+                                             int fileIndexingTimeoutSec)
         : io_commit_(io_commit)
-        , strand_(boost::asio::make_strand(io_commit_))
         , cpu_pool_(cpu_pool)
+        , strand_(boost::asio::make_strand(io_commit_))
 {
+        if (maxParallelReaders > 0)
+            readSlots_.emplace(static_cast<std::ptrdiff_t>(maxParallelReaders));
+
+        fileIndexingTimeoutSec_ = std::max(1, fileIndexingTimeoutSec);
+
+        addToLog("InvertedIndex: maxParallelReaders=" +
+                 std::to_string(maxParallelReaders) +
+                 ", fileIndexingTimeoutSec=" +
+                 std::to_string(fileIndexingTimeoutSec_));
+
         // Проверка наличия файла с индексом
         if (std::filesystem::exists("inverted_index3.dat")) {
             // Если файл существует, загружаем данные

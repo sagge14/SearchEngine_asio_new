@@ -247,7 +247,11 @@ index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
     trustSettings();
 
   //  initWatchers(settings);
-    index = new inverted_index::InvertedIndex(cpu_pool_, io_commit);
+    index = new inverted_index::InvertedIndex(
+            cpu_pool_,
+            io_commit,
+            settings.maxParallelReaders,
+            settings.fileIndexingTimeoutSec);
     // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
 
 }
