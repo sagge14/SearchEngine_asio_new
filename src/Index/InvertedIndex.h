@@ -160,6 +160,8 @@ namespace inverted_index {
 
         /// Ограничитель одновременных читателей файлов; пуст при maxParallelReaders <= 0.
         std::optional<std::counting_semaphore<>> readSlots_;
+        /// Конфигурация для логов/диагностики.
+        int maxParallelReaders_ = 0;
         /// Таймаут ожидания одной задачи fileIndexing в updateDocumentBase, секунды.
         int fileIndexingTimeoutSec_ = 60;
 

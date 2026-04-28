@@ -339,12 +339,19 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     // Защита от параллельных вызовов
     std::lock_guard<std::mutex> updateLock(updateMutex);
     
-    addToLog("updateDocumentBase() → start");
+    const auto t0 = std::chrono::steady_clock::now();
+    static std::atomic<uint64_t> s_sessionId{0};
+    const uint64_t sessionId = ++s_sessionId;
+
+    addToLog("INDEX_SESSION_BEGIN id=" + std::to_string(sessionId) +
+             " max_parallel_readers=" + std::to_string(maxParallelReaders_) +
+             " file_indexing_timeout_sec=" + std::to_string(fileIndexingTimeoutSec_));
+    addToLog("updateDocumentBase() -> start");
     
     // Проверяем, не выполняется ли уже обновление
     bool expected = false;
     if (!work.compare_exchange_strong(expected, true)) {
-        addToLog("updateDocumentBase() → SKIP: update already in progress");
+        addToLog("updateDocumentBase() -> SKIP: update already in progress");
         std::promise<void> p;
         p.set_value();
         return p.get_future();
@@ -508,12 +515,25 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
                  << ", process_memory=" << (memBytes / 1024 / 1024) << " MB";
         addToLog(statsLog.str());
 
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+        const double elapsedSec = (elapsedMs > 0) ? (elapsedMs / 1000.0) : 0.0;
+        const double filesPerSec = (elapsedSec > 0.0) ? (static_cast<double>(totalFiles) / elapsedSec) : 0.0;
+        addToLog("INDEX_SESSION_END id=" + std::to_string(sessionId) +
+                 " files=" + std::to_string(totalFiles) +
+                 " elapsed_ms=" + std::to_string(elapsedMs) +
+                 " files_per_sec=" + std::to_string(filesPerSec));
+
         finalPromise->set_value();
         // work будет сброшен автоматически через WorkGuard
     }
     catch (...)
     {
         try { finalPromise->set_exception(std::current_exception()); } catch (...) {}
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+        addToLog("INDEX_SESSION_END id=" + std::to_string(sessionId) +
+                 " status=exception elapsed_ms=" + std::to_string(elapsedMs));
         // work будет сброшен автоматически через WorkGuard
     }
 
@@ -822,11 +842,11 @@ void inverted_index::InvertedIndex::saveIndex() const {
     // Защита от параллельных вызовов saveIndex
     std::lock_guard<std::mutex> saveLock(saveMutex);
     
-    addToLog("saveIndex() → start");
+    addToLog("saveIndex() -> start");
     
     // Проверяем, не выполняется ли обновление (но не блокируем его)
     if (work.load(std::memory_order_acquire)) {
-        addToLog("saveIndex() → SKIP: update in progress");
+        addToLog("saveIndex() -> SKIP: update in progress");
         return;
     }
 
@@ -841,7 +861,7 @@ void inverted_index::InvertedIndex::saveIndex() const {
                 rebuiltFromChunks = true;
             }
         }
-        addToLog(std::string("saveIndex() → trace: rebuild_from_chunks=") +
+        addToLog(std::string("saveIndex() -> trace: rebuild_from_chunks=") +
                  (rebuiltFromChunks ? "yes" : "no"));
 
         // Сохраняем индекс
@@ -850,14 +870,14 @@ void inverted_index::InvertedIndex::saveIndex() const {
             boost::archive::binary_oarchive oa(ofs);
             {
                 std::lock_guard<std::mutex> lock(mapMutex);
-                addToLog("saveIndex() → trace: serialize begin");
+                addToLog("saveIndex() -> trace: serialize begin");
                 oa << *this;
-                addToLog("saveIndex() → trace: serialize end");
+                addToLog("saveIndex() -> trace: serialize end");
             }
             ofs.close();
-            addToLog("saveIndex() → saved successfully");
+            addToLog("saveIndex() -> saved successfully");
         } else {
-            addToLog("saveIndex() → ERROR: Failed to open file for saving index.");
+            addToLog("saveIndex() -> ERROR: Failed to open file for saving index.");
         }
 
         // Очищаем dictionary после сохранения
@@ -868,10 +888,10 @@ void inverted_index::InvertedIndex::saveIndex() const {
         }
     }
     catch (const std::exception& e) {
-        addToLog("saveIndex() → EXCEPTION: " + std::string(e.what()));
+        addToLog("saveIndex() -> EXCEPTION: " + std::string(e.what()));
     }
     catch (...) {
-        addToLog("saveIndex() → EXCEPTION: unknown error");
+        addToLog("saveIndex() -> EXCEPTION: unknown error");
     }
 }
 
@@ -885,6 +905,7 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
         , cpu_pool_(cpu_pool)
         , strand_(boost::asio::make_strand(io_commit_))
 {
+        maxParallelReaders_ = maxParallelReaders;
         if (maxParallelReaders > 0)
             readSlots_.emplace(static_cast<std::ptrdiff_t>(maxParallelReaders));
 
@@ -963,12 +984,12 @@ void inverted_index::InvertedIndex::compact(double thresholdPercent)
         // Нужно ли проводить compact? Используем порог из настроек
         if (holes == 0 || hole_percent < thresholdPercent)
         {
-            oss << " → SKIP (below threshold)";
+            oss << " -> SKIP (below threshold)";
             addToLog(oss.str());
             return;
         }
 
-        oss << " → RUN";
+        oss << " -> RUN";
         addToLog(oss.str());
 
         // Блокируем доступ к dictionary во время compact
