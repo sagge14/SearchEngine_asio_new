@@ -52,6 +52,7 @@ public:
     size_t size() const { return data.size(); }
     bool empty()  const { return data.empty(); }
     void clear()        { data.clear(); }
+    void shrink_to_fit() { data.shrink_to_fit(); }
 
     // Для сериализации Boost
     template<class Archive>

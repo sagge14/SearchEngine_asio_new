@@ -43,6 +43,10 @@ public:
     void rebuild(std::unordered_map<std::string, uint32_t>&& new_word2id,
                  std::vector<std::string>&& new_id2word);
 
+    /** Сжать внутренние контейнеры до фактического размера.
+        Вызывать только когда нет одновременных getId/tryGet. */
+    void shrinkToFit();
+
 private:
     std::unordered_map<std::string, uint32_t> word2id_;   // прямой словарь
     robin_hood::unordered_map<std::string, uint32_t> wordToIdFast;

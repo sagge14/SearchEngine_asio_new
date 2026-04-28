@@ -39,6 +39,15 @@ public:
 
     size_t size() const {return path2info.size();}
 
+    /** Сжать внутренние контейнеры. Вызывать в моменты,
+        когда нет одновременных upsert/markRemoved. */
+    void shrinkToFit() {
+        id2path.shrink_to_fit();
+        for (auto& w : id2path)
+            w.shrink_to_fit();
+        path2info.rehash(0);
+    }
+
 private:
     struct FileInfo {
         std::filesystem::file_time_type mtime;

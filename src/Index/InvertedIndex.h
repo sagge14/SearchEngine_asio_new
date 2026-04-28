@@ -198,6 +198,11 @@ namespace inverted_index {
         void compact(double thresholdPercent = 5.0);  // Порог для compact в процентах
         void fixDictionaryHoles();
 
+        /// Ужать все внутренние контейнеры (capacity → size) и попытаться
+        /// вернуть страницы рабочему набору ОС. Вызывать по окончании
+        /// массовой индексации, когда новых вставок не ожидается.
+        void compactMemory();
+
         // InvertedIndex.h (внутри class InvertedIndex, в private-секции)
 
         void applyBatchInStrand(PostingBatch batch);

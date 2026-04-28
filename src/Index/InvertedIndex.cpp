@@ -493,6 +493,25 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
 
         addToLog("updateDocumentBase: all fileIndexing done");
 
+        // Пытаемся отдать обратно ёмкости векторов и страницы рабочего
+        // набора, накопившиеся за время инкрементальных вставок.
+        // Делать имеет смысл именно здесь — индексация закончена,
+        // updateMutex удерживается, дальнейших массовых вставок не будет.
+        {
+            const size_t memBefore = process_memory();
+            compactMemory();
+            const size_t memAfter  = process_memory();
+
+            std::ostringstream cm;
+            cm.imbue(std::locale::classic());
+            cm << "compactMemory: " << (memBefore / 1024 / 1024)
+               << " MB -> " << (memAfter / 1024 / 1024) << " MB"
+               << " (saved "
+               << ((memBefore > memAfter) ? (memBefore - memAfter) / 1024 / 1024 : 0)
+               << " MB)";
+            addToLog(cm.str());
+        }
+
         // Сохранение на диск — только по настройке save_dictionary_to_file в SearchServer::updateStep
 
         // Log dictionary statistics and memory usage
@@ -839,6 +858,102 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
     addToLog("===> Dictionary holes auto-fix completed (fixDictionaryHoles)");
 }
 
+
+void inverted_index::InvertedIndex::compactMemory()
+{
+    addToLog("compactMemory: start");
+
+    // Прогоняем основную работу через strand_, чтобы гарантировать
+    // отсутствие гонок с processBatch/safeEraseFile (они тоже идут в strand_).
+    std::promise<void> done;
+    auto fut = done.get_future();
+
+    boost::asio::post(strand_, [this, &done]()
+    {
+        try
+        {
+            // 1) PostingList'ы внутри чанков — ужимаем под мьютексом каждого
+            //    чанка. Указатели берём один раз под mapMutex, чтобы не
+            //    держать его на время длинного прохода.
+            std::vector<Chunk*> chunks;
+            {
+                std::lock_guard<std::mutex> g(mapMutex);
+                chunks.reserve(dictionaryChunks.size());
+                for (auto& up : dictionaryChunks)
+                    chunks.push_back(up.get());
+            }
+
+            size_t shrunkPostings = 0;
+            for (Chunk* ch : chunks)
+            {
+                if (!ch) continue;
+                std::unique_lock<std::shared_mutex> lk(ch->mutex);
+                for (auto& posting : ch->bucket)
+                {
+                    if (!posting.empty()) {
+                        posting.shrink_to_fit();
+                        ++shrunkPostings;
+                    }
+                }
+            }
+
+            // 2) Внешние векторы под mapMutex.
+            {
+                std::lock_guard<std::mutex> g(mapMutex);
+                dictionaryChunks.shrink_to_fit();
+
+                if (!dictionary.empty()) {
+                    for (auto& pl : dictionary)
+                        pl.shrink_to_fit();
+                    dictionary.shrink_to_fit();
+                }
+            }
+
+            // 3) Структуры, изменяемые строго в strand_:
+            //    wordRefs, wordIds, docPaths.
+            for (auto& [fileId, vec] : wordRefs)
+                vec.shrink_to_fit();
+            wordRefs.rehash(0);
+
+            wordIds.shrinkToFit();
+            docPaths.shrinkToFit();
+
+            addToLog("compactMemory: shrunk " +
+                     std::to_string(shrunkPostings) + " postings");
+
+            done.set_value();
+        }
+        catch (...)
+        {
+            try { done.set_exception(std::current_exception()); } catch (...) {}
+        }
+    });
+
+    try { fut.get(); }
+    catch (const std::exception& e) {
+        addToLog(std::string("compactMemory: EXCEPTION ") + e.what());
+        return;
+    }
+    catch (...) {
+        addToLog("compactMemory: unknown exception");
+        return;
+    }
+
+    // 4) Подсказка ОС: подрезать рабочий набор. Это косметика —
+    //    фактическое heap-потребление определяется аллокатором, а не
+    //    Working Set'ом. Но для GetProcessMemoryInfo цифра упадёт ближе
+    //    к реальному использованию.
+    SetProcessWorkingSetSize(GetCurrentProcess(),
+                             static_cast<SIZE_T>(-1),
+                             static_cast<SIZE_T>(-1));
+
+    const size_t memBytes = process_memory();
+    std::ostringstream oss;
+    oss.imbue(std::locale::classic());
+    oss << "compactMemory: done, process_memory="
+        << (memBytes / 1024 / 1024) << " MB";
+    addToLog(oss.str());
+}
 
 void inverted_index::InvertedIndex::saveIndex() const {
     // Защита от параллельных вызовов saveIndex
