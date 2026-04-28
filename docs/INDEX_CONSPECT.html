@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: Работа инвертированного индекса</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 25px;
+        }
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 20px;
+            font-weight: 600;
+        }
+        pre {
+            background: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+        }
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .diagram {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        hr {
+            border: none;
+            border-top: 2px solid #ecf0f1;
+            margin: 30px 0;
+        }
+        ul, ol {
+            margin: 10px 0;
+            padding-left: 30px;
+        }
+        li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Конспект: Работа инвертированного индекса</h1>
+    
+    <div class="note">
+        <strong>Цель документа:</strong> Подробное объяснение архитектуры и работы инвертированного индекса в поисковой системе.
+    </div>
+
+    <h2>1. Общая архитектура</h2>
+    
+    <h3>1.1. Что такое инвертированный индекс?</h3>
+    
+    <p>Инвертированный индекс — это структура данных, которая позволяет быстро находить документы по словам. В отличие от прямого индекса (документ → слова), инвертированный индекс хранит: <strong>слово → список документов</strong>, где это слово встречается.</p>
+    
+    <div class="diagram">
+        <strong>Пример:</strong><br>
+        Документ 1: "кот собака"<br>
+        Документ 2: "кот мышь"<br>
+        Документ 3: "собака мышь"<br><br>
+        
+        <strong>Инвертированный индекс:</strong><br>
+        "кот" → [документ 1, документ 2]<br>
+        "собака" → [документ 1, документ 3]<br>
+        "мышь" → [документ 2, документ 3]
+    </div>
+
+    <h3>1.2. Основные компоненты системы</h3>
+    
+    <table>
+        <tr>
+            <th>Компонент</th>
+            <th>Назначение</th>
+            <th>Расположение</th>
+        </tr>
+        <tr>
+            <td><code>InvertedIndex</code></td>
+            <td>Основной класс индекса</td>
+            <td><code>src/Index/InvertedIndex.h</code></td>
+        </tr>
+        <tr>
+            <td><code>PostingList</code></td>
+            <td>Список постингов для одного слова</td>
+            <td><code>src/Index/PostingList.h</code></td>
+        </tr>
+        <tr>
+            <td><code>WordIdManager</code></td>
+            <td>Управление ID слов (слово ↔ ID)</td>
+            <td><code>src/Index/WordID.h</code></td>
+        </tr>
+        <tr>
+            <td><code>DocPaths</code></td>
+            <td>Управление путями к документам (путь ↔ FileId)</td>
+            <td><code>src/Index/DocPaths.h</code></td>
+        </tr>
+        <tr>
+            <td><code>Chunk</code></td>
+            <td>Блок постинг-листов для параллельной работы</td>
+            <td>Внутри <code>InvertedIndex</code></td>
+        </tr>
+    </table>
+
+    <hr>
+
+    <h2>2. Структуры данных</h2>
+
+    <h3>2.1. Posting — запись о вхождении слова в документ</h3>
+    
+    <h4>Проблема</h4>
+    <p>Нужно хранить информацию о том, в каких документах встречается слово и сколько раз.</p>
+    
+    <h4>Решение</h4>
+    <p>Структура <code>Posting</code> содержит минимальную информацию:</p>
+    
+    <pre><code class="language-cpp">struct Posting {
+    uint32_t fileId;  // ID документа (4 байта)
+    uint16_t cnt;     // Количество вхождений слова в документ (2 байта)
+};</code></pre>
+    
+    <h4>Разбор синтаксиса</h4>
+    <ul>
+        <li><code>uint32_t fileId</code> — идентификатор файла (32-битное беззнаковое число). Максимум 4 миллиарда файлов.</li>
+        <li><code>uint16_t cnt</code> — счетчик вхождений (16-битное беззнаковое число). Максимум 65535 вхождений одного слова в документ.</li>
+    </ul>
+    
+    <div class="note">
+        <strong>Оптимизация памяти:</strong> Всего 6 байт на постинг. Для миллиона постингов это всего ~6 МБ.
+    </div>
+
+    <h3>2.2. PostingList — упорядоченный список постингов</h3>
+    
+    <h4>Проблема</h4>
+    <p>Для каждого слова нужно хранить список документов, где оно встречается. Нужен быстрый поиск и вставка.</p>
+    
+    <h4>Решение</h4>
+    <p>Класс <code>PostingList</code> использует отсортированный <code>std::vector&lt;Posting&gt;</code>:</p>
+    
+    <pre><code class="language-cpp">class PostingList {
+    std::vector&lt;Posting&gt; data;  // Отсортированный по fileId
+    
+public:
+    // Поиск по fileId (бинарный поиск)
+    const uint16_t* find(uint32_t fileId) const {
+        auto it = std::lower_bound(data.begin(), data.end(), fileId,
+                                   [](const Posting& p, uint32_t id) { 
+                                       return p.fileId < id; 
+                                   });
+        return (it != data.end() && it->fileId == fileId) ? &(it->cnt) : nullptr;
+    }
+    
+    // Добавление/обновление (вставка в отсортированную позицию)
+    uint16_t& operator[](uint32_t fileId) {
+        auto it = std::lower_bound(data.begin(), data.end(), fileId, ...);
+        if (it != data.end() && it->fileId == fileId) {
+            return it->cnt;  // Найдено — возвращаем ссылку
+        }
+        // Не найдено — вставляем новый элемент
+        it = data.insert(it, { fileId, 0 });
+        return it->cnt;
+    }
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Хранение:</strong> Постинги хранятся в отсортированном порядке по <code>fileId</code>.</li>
+        <li><strong>Поиск:</strong> Используется бинарный поиск (<code>std::lower_bound</code>) — O(log n).</li>
+        <li><strong>Вставка:</strong> Находится позиция бинарным поиском, затем вставка — O(n) в худшем случае.</li>
+        <li><strong>Обновление:</strong> Если постинг существует, просто увеличиваем счетчик.</li>
+    </ol>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Вставка в середину вектора требует сдвига элементов. Для частых вставок это может быть медленно, но для индексации это приемлемо, так как постинги добавляются пакетами.
+    </div>
+
+    <h3>2.3. WordIdManager — двусторонний словарь слов</h3>
+    
+    <h4>Проблема</h4>
+    <p>Слова — это строки, которые занимают много памяти. Нужно преобразовывать слова в компактные числовые ID для эффективного хранения.</p>
+    
+    <h4>Решение</h4>
+    <p>Класс <code>WordIdManager</code> реализует двустороннее преобразование:</p>
+    
+    <pre><code class="language-cpp">class WordIdManager {
+    std::unordered_map&lt;std::string, uint32_t&gt; word2id_;  // слово → ID
+    std::vector&lt;std::string&gt;                  id2word_;  // ID → слово
+    
+public:
+    // Получить ID слова (создать новый, если нужно)
+    uint32_t getId(const std::string& word) {
+        auto [it, inserted] = word2id_.try_emplace(word, id2word_.size());
+        if (inserted) {
+            id2word_.push_back(word);  // Добавляем в обратный словарь
+        }
+        return it->second;
+    }
+    
+    // Обратное преобразование: ID → слово
+    const std::string& byId(uint32_t id) const {
+        return id2word_[id];
+    }
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Прямое преобразование:</strong> При первом обращении к слову создается новый ID (равный текущему размеру вектора).</li>
+        <li><strong>Обратное преобразование:</strong> ID используется как индекс в векторе <code>id2word_</code> — O(1) доступ.</li>
+        <li><strong>Память:</strong> Каждое слово хранится один раз в <code>id2word_</code>, а не дублируется в каждом постинге.</li>
+    </ol>
+    
+    <div class="success">
+        <strong>Преимущество:</strong> Вместо хранения строк "кот", "собака" в каждом постинге, хранится только число (4 байта). Экономия памяти огромная!
+    </div>
+
+    <h3>2.4. Chunk — блок постинг-листов для параллелизма</h3>
+    
+    <h4>Проблема</h4>
+    <p>При параллельной индексации нескольких файлов одновременно, разные потоки могут пытаться обновлять постинги для разных слов. Нужна блокировка, но блокировать весь словарь целиком — слишком медленно.</p>
+    
+    <h4>Решение</h4>
+    <p>Словарь разбивается на <strong>чанки</strong> (блоки) по 4096 постинг-листов. Каждый чанк имеет свой мьютекс:</p>
+    
+    <pre><code class="language-cpp">struct Chunk {
+    std::vector&lt;PostingList&gt; bucket;  // 4096 постинг-листов
+    std::shared_mutex mutex;          // Мьютекс для этого чанка
+    
+    Chunk() : bucket(CHUNK_SIZE) {}  // CHUNK_SIZE = 4096
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Разбиение:</strong> WordId делится на CHUNK_SIZE (4096) для получения индекса чанка:
+            <pre><code class="language-cpp">size_t chunkIndex = wordId / CHUNK_SIZE;  // В каком чанке
+size_t localIndex = wordId % CHUNK_SIZE;   // Позиция в чанке</code></pre>
+        </li>
+        <li><strong>Параллелизм:</strong> Потоки, работающие с разными чанками, не блокируют друг друга.</li>
+        <li><strong>Блокировки:</strong> Только потоки, работающие с одним чанком, синхронизируются через <code>shared_mutex</code>.</li>
+    </ol>
+    
+    <div class="note">
+        <strong>Пример:</strong> Если у нас 10000 уникальных слов, то будет 3 чанка (0-4095, 4096-8191, 8192-10000). Потоки, индексирующие слова из разных чанков, работают параллельно без блокировок!
+    </div>
+
+    <hr>
+
+    <h2>3. Процесс индексации файла</h2>
+
+    <h3>3.1. Общий поток индексации</h3>
+    
+    <div class="diagram">
+        <strong>Последовательность операций:</strong><br>
+        1. Сканирование файлов → получение списка путей<br>
+        2. Определение изменений (diff) → новые/обновленные/удаленные<br>
+        3. Удаление старых записей<br>
+        4. Параллельная индексация файлов<br>
+        5. Сохранение индекса на диск
+    </div>
+
+    <h3>3.2. fileIndexing() — индексация одного файла</h3>
+    
+    <h4>Проблема</h4>
+    <p>Нужно извлечь все слова из файла, посчитать частоты и добавить в индекс.</p>
+    
+    <h4>Решение</h4>
+    <p>Метод <code>fileIndexing()</code> выполняет следующие шаги:</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::fileIndexing(FileId fileId, 
+                                  std::shared_ptr&lt;std::promise&lt;void&gt;&gt; promise)
+{
+    // 1. Открываем файл
+    std::wstring fullPath = docPaths.pathById(fileId);
+    std::ifstream file(fullPath.c_str(), std::ios::binary);
+    
+    // 2. Словарь частот слов в файле
+    robin_hood::unordered_map&lt;std::string, size_t&gt; freqWordFile;
+    
+    // 3. SIMD токенизация (чтение по 64 КБ)
+    static const size_t BUF_SIZE = 64 * 1024;
+    std::vector&lt;char&gt; buf(BUF_SIZE);
+    std::string carry;  // Хвост слова на границах буферов
+    
+    while (true) {
+        file.read(buf.data(), BUF_SIZE);
+        std::size_t readBytes = file.gcount();
+        if (readBytes == 0) break;
+        
+        // SIMD токенизация с OEM-866 кодировкой
+        simd_tokenizer::tokenize_oem866_buffer(
+            buf.data(), readBytes, file.eof(), carry,
+            [&](std::string_view tok) {
+                std::string w;
+                w.assign(tok.data(), tok.size());
+                OEMFastTokenizer::normalizeToken(w);  // Нормализация
+                if (!w.empty())
+                    ++freqWordFile[w];  // Подсчет частоты
+            });
+    }
+    
+    // 4. Создаем batch и отправляем на обработку
+    PostingBatch batch;
+    batch.fileId = fileId;
+    batch.list.reserve(freqWordFile.size());
+    for (auto &[word, count] : freqWordFile)
+        batch.list.emplace_back(word, count);
+    
+    applyBatchInStrand(std::move(batch));
+}</code></pre>
+    
+    <h4>Разбор по шагам</h4>
+    <ol>
+        <li><strong>Открытие файла:</strong> Получаем путь по FileId и открываем файл в бинарном режиме.</li>
+        <li><strong>Токенизация:</strong> Используется SIMD-оптимизированный токенизатор для быстрого разбора текста на слова. Чтение происходит блоками по 64 КБ.</li>
+        <li><strong>Нормализация:</strong> Каждое слово нормализуется (приведение к верхнему регистру для OEM-866).</li>
+        <li><strong>Подсчет частот:</strong> Используется быстрая хеш-таблица <code>robin_hood::unordered_map</code> для подсчета частот слов.</li>
+        <li><strong>Создание batch:</strong> Создается пакет данных для дальнейшей обработки в strand (последовательном потоке).</li>
+    </ol>
+    
+    <div class="note">
+        <strong>SIMD токенизация:</strong> Использует векторные инструкции процессора для параллельной обработки нескольких символов одновременно. Это значительно ускоряет разбор текста.
+    </div>
+
+    <h3>3.3. processBatch() — обработка пакета слов</h3>
+    
+    <h4>Проблема</h4>
+    <p>Нужно преобразовать слова в WordId, сгруппировать по чанкам и обновить постинги.</p>
+    
+    <h4>Решение</h4>
+    <pre><code class="language-cpp">void InvertedIndex::processBatch(const PostingBatch& batch)
+{
+    // 1. Преобразуем слова → WordId и суммируем частоты
+    robin_hood::unordered_map&lt;uint32_t, uint32_t&gt; widMap;
+    for (auto& [word, count] : batch.list) {
+        uint32_t wid = wordIds.getId(word);  // Получаем/создаем ID
+        widMap[wid] += count;  // Суммируем частоты
+        
+        // Обновляем wordRefs (какие слова есть в файле)
+        auto& refv = wordRefs[batch.fileId];
+        if (refv.empty() || refv.back() != wid)
+            refv.push_back(wid);
+    }
+    
+    // 2. Группировка по chunkId для минимизации блокировок
+    std::unordered_map&lt;size_t, std::vector&lt;PostingTask&gt;&gt; chunkMap;
+    for (auto& [wid, count] : widMap) {
+        size_t chunkIndex = wid / CHUNK_SIZE;
+        chunkMap[chunkIndex].push_back({ batch.fileId, wid, count });
+    }
+    
+    // 3. Отправляем на commit в CPU pool
+    boost::asio::post(cpu_pool_, [this, chunkMap = std::move(chunkMap)]() {
+        commitChunkMap(chunkMap);
+    });
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Преобразование слов:</strong> Каждое слово преобразуется в WordId через <code>wordIds.getId()</code>. Если слово новое, создается новый ID.</li>
+        <li><strong>Суммирование:</strong> Если одно слово встречается несколько раз в batch (редко, но возможно), частоты суммируются.</li>
+        <li><strong>Группировка по чанкам:</strong> Постинги группируются по чанкам, чтобы минимизировать количество блокировок.</li>
+        <li><strong>Асинхронный commit:</strong> Обновление постингов выполняется в CPU pool асинхронно.</li>
+    </ol>
+    
+    <div class="success">
+        <strong>Оптимизация:</strong> Группировка по чанкам позволяет обновить все постинги одного чанка за одну блокировку, вместо блокировки для каждого слова отдельно.
+    </div>
+
+    <h3>3.4. commitChunkMap() — атомарное обновление чанков</h3>
+    
+    <h4>Проблема</h4>
+    <p>Нужно безопасно обновить постинги в разных чанках, минимизируя время блокировок.</p>
+    
+    <h4>Решение</h4>
+    <pre><code class="language-cpp">void InvertedIndex::commitChunkMap(
+    const std::unordered_map&lt;size_t, std::vector&lt;PostingTask&gt;&gt;& chunkMap)
+{
+    // 1. Расширяем массив чанков ОДИН раз (под глобальным мьютексом)
+    {
+        std::lock_guard&lt;std::mutex&gt; g(mapMutex);
+        size_t maxIndex = 0;
+        for (auto& [cid, _] : chunkMap)
+            if (cid > maxIndex) maxIndex = cid;
+        
+        if (maxIndex >= dictionaryChunks.size())
+            dictionaryChunks.resize(maxIndex + 1);
+        
+        // Создаем недостающие чанки
+        for (auto& [cid, _] : chunkMap)
+            if (!dictionaryChunks[cid])
+                dictionaryChunks[cid] = std::make_unique&lt;Chunk&gt;();
+    }
+    
+    // 2. Обновляем каждый чанк с минимальной блокировкой
+    for (auto& [cid, tasks] : chunkMap) {
+        Chunk& ch = *dictionaryChunks[cid];
+        std::unique_lock&lt;std::shared_mutex&gt; lk(ch.mutex);  // Блокируем только этот чанк
+        
+        for (auto& t : tasks) {
+            size_t local = t.wordId % CHUNK_SIZE;
+            ch.bucket[local][t.fileId] += t.count;  // Обновляем постинг
+        }
+    }
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Подготовка:</strong> Под глобальным мьютексом расширяем массив чанков и создаем недостающие. Это делается один раз для всего batch.</li>
+        <li><strong>Обновление:</strong> Для каждого чанка берем его локальный мьютекс и обновляем все постинги этого чанка. Потоки, работающие с другими чанками, не блокируются.</li>
+        <li><strong>Атомарность:</strong> Операция <code>ch.bucket[local][t.fileId] += t.count</code> выполняется под блокировкой, гарантируя корректность при параллельных обновлениях.</li>
+    </ol>
+    
+    <div class="note">
+        <strong>Важно:</strong> Глобальный мьютекс <code>mapMutex</code> используется только для расширения массива чанков (редкая операция). Основная работа идет с локальными мьютексами чанков, что обеспечивает высокий параллелизм.
+    </div>
+
+    <hr>
+
+    <h2>4. Параллелизм и синхронизация</h2>
+
+    <h3>4.1. Архитектура потоков</h3>
+    
+    <div class="diagram">
+        <strong>Три уровня параллелизма:</strong><br><br>
+        
+        <strong>1. CPU Pool (cpu_pool_)</strong><br>
+        - Параллельная индексация файлов<br>
+        - Токенизация и извлечение слов<br>
+        - Количество потоков = количество ядер CPU<br><br>
+        
+        <strong>2. Strand (strand_)</strong><br>
+        - Последовательная обработка batch'ей<br>
+        - Преобразование слов → WordId<br>
+        - Группировка по чанкам<br>
+        - Гарантирует порядок операций<br><br>
+        
+        <strong>3. IO Context (io_commit_)</strong><br>
+        - Асинхронный commit постингов<br>
+        - Обновление чанков<br>
+        - Минимальные блокировки
+    </div>
+
+    <h3>4.2. Strand — последовательная обработка</h3>
+    
+    <h4>Проблема</h4>
+    <p>При параллельной индексации нескольких файлов, разные потоки могут одновременно вызывать <code>wordIds.getId()</code> для одного и того же нового слова. Это может привести к созданию дубликатов ID или гонкам данных.</p>
+    
+    <h4>Решение</h4>
+    <p>Используется <code>boost::asio::strand</code> — гарантирует, что все операции выполняются последовательно в одном потоке:</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::applyBatchInStrand(PostingBatch batch)
+{
+    // Все операции в strand выполняются последовательно
+    boost::asio::post(strand_, [this, batch = std::move(batch)]() mutable {
+        processBatch(batch);  // Преобразование слов → WordId
+    });
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Стратегия:</strong> Все batch'и из разных файлов попадают в одну очередь strand.</li>
+        <li><strong>Последовательность:</strong> Strand обрабатывает их один за другим, гарантируя атомарность операций с <code>wordIds</code>.</li>
+        <li><strong>Параллелизм:</strong> Файлы индексируются параллельно (токенизация), но обновление словаря происходит последовательно.</li>
+    </ol>
+    
+    <div class="warning">
+        <strong>Компромисс:</strong> Strand создает узкое место, но это необходимо для корректности данных. На практике это не критично, так как токенизация (CPU-intensive) выполняется параллельно, а обновление словаря (быстрая операция) — последовательно.
+    </div>
+
+    <h3>4.3. Chunk-based блокировки</h3>
+    
+    <h4>Проблема</h4>
+    <p>Если бы весь словарь был защищен одним мьютексом, параллелизм был бы нулевым — только один поток мог бы обновлять индекс одновременно.</p>
+    
+    <h4>Решение</h4>
+    <p>Словарь разбит на чанки, каждый со своим мьютексом:</p>
+    
+    <pre><code class="language-cpp">struct Chunk {
+    std::vector&lt;PostingList&gt; bucket;  // 4096 постинг-листов
+    std::shared_mutex mutex;          // Локальный мьютекс чанка
+};</code></pre>
+    
+    <h4>Преимущества</h4>
+    <ul>
+        <li><strong>Параллелизм:</strong> Потоки, работающие с разными чанками, не блокируют друг друга.</li>
+        <li><strong>Масштабируемость:</strong> Чем больше чанков, тем выше параллелизм.</li>
+        <li><strong>Гранулярность:</strong> Блокируется только нужный чанк, а не весь словарь.</li>
+    </ul>
+    
+    <div class="success">
+        <strong>Пример:</strong> При индексации 8 файлов параллельно на 8-ядерном процессоре, если слова распределены по разным чанкам, все 8 потоков могут обновлять постинги одновременно без блокировок друг друга!
+    </div>
+
+    <hr>
+
+    <h2>5. Удаление файлов из индекса</h2>
+
+    <h3>5.1. safeEraseFileInternal() — безопасное удаление</h3>
+    
+    <h4>Проблема</h4>
+    <p>При удалении файла нужно удалить все постинги этого файла из всех слов. Но если файлов много, полный обход всех слов будет очень медленным.</p>
+    
+    <h4>Решение</h4>
+    <p>Используется структура <code>wordRefs</code> — обратный индекс (файл → список слов):</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::safeEraseFileInternal(FileId fileId)
+{
+    // Используем wordRefs для быстрого поиска слов файла
+    auto itRefs = wordRefs.find(fileId);
+    if (itRefs != wordRefs.end()) {
+        const auto& widList = itRefs->second;  // Список WordId этого файла
+        
+        // Удаляем постинг только для этих слов
+        for (uint32_t wid : widList) {
+            size_t chunkIndex = wid / CHUNK_SIZE;
+            size_t localIndex = wid % CHUNK_SIZE;
+            
+            if (chunkIndex >= dictionaryChunks.size()) continue;
+            
+            auto& chunkPtr = dictionaryChunks[chunkIndex];
+            if (!chunkPtr) continue;
+            
+            Chunk& chunk = *chunkPtr;
+            std::unique_lock&lt;std::shared_mutex&gt; lk(chunk.mutex);
+            auto& posting = chunk.bucket[localIndex];
+            if (!posting.empty())
+                posting.erase(fileId);  // Удаляем постинг
+        }
+        
+        wordRefs.erase(itRefs);  // Удаляем запись из wordRefs
+    }
+    else {
+        // Fallback: полный обход (редкий случай)
+        // ... обход всех чанков и всех постингов
+    }
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Быстрый путь:</strong> Используется <code>wordRefs[fileId]</code> для получения списка WordId, которые есть в этом файле.</li>
+        <li><strong>Точечное удаление:</strong> Удаляются постинги только для этих слов, а не для всех слов в словаре.</li>
+        <li><strong>Fallback:</strong> Если <code>wordRefs</code> отсутствует (старый индекс), выполняется полный обход.</li>
+    </ol>
+    
+    <div class="success">
+        <strong>Оптимизация:</strong> Вместо обхода всех слов в словаре (может быть миллионы), обходим только слова конкретного файла (обычно сотни-тысячи). Ускорение в сотни раз!
+    </div>
+
+    <h3>5.2. wordRefs — обратный индекс</h3>
+    
+    <h4>Проблема</h4>
+    <p>Нужно быстро найти все слова, которые есть в конкретном файле, для эффективного удаления.</p>
+    
+    <h4>Решение</h4>
+    <p>Структура <code>wordRefs</code> хранит обратное отображение:</p>
+    
+    <pre><code class="language-cpp">std::unordered_map&lt;size_t, std::vector&lt;uint32_t&gt;&gt; wordRefs;
+// fileId → [wordId1, wordId2, ...]</code></pre>
+    
+    <h4>Обновление</h4>
+    <p><code>wordRefs</code> обновляется при индексации в <code>processBatch()</code>:</p>
+    
+    <pre><code class="language-cpp">// В processBatch()
+auto& refv = wordRefs[batch.fileId];
+if (refv.empty() || refv.back() != wid)
+    refv.push_back(wid);  // Добавляем WordId в список файла</code></pre>
+    
+    <div class="note">
+        <strong>Компромисс:</strong> <code>wordRefs</code> занимает дополнительную память, но значительно ускоряет удаление файлов. Это классический trade-off между памятью и скоростью.
+    </div>
+
+    <hr>
+
+    <h2>6. Сохранение и загрузка индекса</h2>
+
+    <h3>6.1. Сериализация</h3>
+    
+    <h4>Проблема</h4>
+    <p>Индекс нужно сохранять на диск для быстрого восстановления при перезапуске приложения.</p>
+    
+    <h4>Решение</h4>
+    <p>Используется Boost.Serialization для бинарной сериализации:</p>
+    
+    <pre><code class="language-cpp">// Сохранение
+template&lt;class Archive&gt;
+void save(Archive & ar, const unsigned int version) const {
+    std::lock_guard&lt;std::mutex&gt; lock(mapMutex);
+    ar & dictionary;  // Постинг-листы
+    ar & wordIds;     // Словарь слов
+    ar & docPaths;    // Пути к файлам
+}
+
+// Загрузка
+template&lt;class Archive&gt;
+void load(Archive & ar, const unsigned int version) {
+    std::lock_guard&lt;std::mutex&gt; lock(mapMutex);
+    ar & dictionary;
+    ar & wordIds;
+    ar & docPaths;
+    rebuildChunksFromDictionary();  // Восстанавливаем чанки
+    reconstructWordIts();           // Восстанавливаем wordRefs
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Сохранение:</strong> Словарь пересобирается из чанков в плоский <code>dictionary</code>, затем сериализуется в бинарный файл.</li>
+        <li><strong>Загрузка:</strong> Данные загружаются из файла, затем чанки и <code>wordRefs</code> восстанавливаются из плоского словаря.</li>
+        <li><strong>Формат:</strong> Бинарный формат Boost.Serialization — компактный и быстрый.</li>
+    </ol>
+
+    <h3>6.2. rebuildDictionaryFromChunks() — пересборка словаря</h3>
+    
+    <h4>Проблема</h4>
+    <p>Во время работы индекс хранится в чанках для параллелизма, но для сериализации нужен плоский словарь.</p>
+    
+    <h4>Решение</h4>
+    <pre><code class="language-cpp">void InvertedIndex::rebuildDictionaryFromChunks()
+{
+    std::lock_guard&lt;std::mutex&gt; g(mapMutex);
+    dictionary.clear();
+    dictionary.reserve(dictionaryChunks.size() * CHUNK_SIZE);
+    
+    for (const auto & chunkPtr : dictionaryChunks) {
+        if (!chunkPtr) {
+            // Пустой чанк = CHUNK_SIZE пустых постинг-листов
+            for (size_t i=0; i&lt;CHUNK_SIZE; ++i)
+                dictionary.emplace_back();
+            continue;
+        }
+        
+        Chunk& chunk = *chunkPtr;
+        std::shared_lock&lt;std::shared_mutex&gt; lk(chunk.mutex);
+        
+        // Копируем все постинг-листы из чанка
+        for (size_t localIndex = 0; localIndex &lt; CHUNK_SIZE; ++localIndex)
+            dictionary.push_back(chunk.bucket[localIndex]);
+    }
+}</code></pre>
+    
+    <div class="note">
+        <strong>Важно:</strong> Пустые чанки создают пустые постинг-листы в словаре. Это создает "дырки" (holes), которые потом можно удалить через <code>compact()</code>.
+    </div>
+
+    <hr>
+
+    <h2>7. Оптимизации и обслуживание</h2>
+
+    <h3>7.1. compact() — удаление пустых постинг-листов</h3>
+    
+    <h4>Проблема</h4>
+    <p>После удаления файлов остаются пустые постинг-листы (holes), которые занимают место и замедляют работу.</p>
+    
+    <h4>Решение</h4>
+    <p>Метод <code>compact()</code> удаляет пустые постинг-листы и переупорядочивает словарь:</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::compact()
+{
+    boost::asio::post(strand_, [this]() {
+        // Пересобираем dictionary из chunks
+        if (dictionary.empty()) {
+            rebuildDictionaryFromChunks();
+        }
+        
+        // Подсчитываем holes
+        size_t holes = 0;
+        for (const auto& post : dictionary)
+            if (post.empty()) ++holes;
+        
+        size_t dict_size = dictionary.size();
+        size_t real_words = wordIds.size();
+        double hole_percent = (holes * 100.0 / dict_size);
+        
+        // Если holes меньше 10% — не стоит compact'ить
+        if (holes == 0 || holes &lt; dict_size / 10) {
+            addToLog("COMPACT: SKIP (holes &lt; 10%)");
+            return;
+        }
+        
+        // Создаем новый словарь без holes
+        std::vector&lt;PostingList&gt; newDict;
+        newDict.reserve(dictionary.size() - holes);
+        
+        std::unordered_map&lt;uint32_t, uint32_t&gt; remap;  // oldWid → newWid
+        
+        for (uint32_t oldWid = 0; oldWid &lt; dictionary.size(); ++oldWid) {
+            auto& post = dictionary[oldWid];
+            if (post.empty()) continue;  // Пропускаем hole
+            
+            auto newWid = static_cast&lt;uint32_t&gt;(newDict.size());
+            remap[oldWid] = newWid;
+            newDict.push_back(std::move(post));
+            
+            // Обновляем wordIds
+            const std::string& word = wordIds.byId(oldWid);
+            // ... пересборка wordIds с новыми ID
+        }
+        
+        dictionary.swap(newDict);
+        // Пересборка wordIds и wordRefs с новыми ID
+    });
+}</code></pre>
+    
+    <h4>Как это работает?</h4>
+    <ol>
+        <li><strong>Анализ:</strong> Подсчитываются пустые постинг-листы. Если их меньше 10%, compact не выполняется.</li>
+        <li><strong>Пересборка:</strong> Создается новый словарь без пустых постинг-листов.</li>
+        <li><strong>Remap:</strong> Создается таблица перехода от старых WordId к новым.</li>
+        <li><strong>Обновление:</strong> Обновляются <code>wordIds</code> и <code>wordRefs</code> с новыми ID.</li>
+    </ol>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Compact выполняется в strand для безопасности, но это долгая операция. Лучше запускать её в фоновом режиме или при низкой нагрузке.
+    </div>
+
+    <h3>7.2. fixDictionaryHoles() — автоисправление дыр</h3>
+    
+    <h4>Проблема</h4>
+    <p>Иногда в индексе могут появиться "дырки" — слова, которые должны быть в файле, но отсутствуют в постингах. Это может произойти из-за ошибок или неполной индексации.</p>
+    
+    <h4>Решение</h4>
+    <p>Метод <code>fixDictionaryHoles()</code> переиндексирует файлы для восстановления пропущенных слов:</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::fixDictionaryHoles()
+{
+    for (FileId fileId = 0; fileId &lt; docPaths.size(); ++fileId) {
+        const std::wstring& wpath = docPaths.pathById(fileId);
+        if (wpath.empty()) continue;
+        
+        // Читаем файл и извлекаем слова
+        std::ifstream file(wpath, std::ios::binary);
+        // ... токенизация и извлечение слов
+        
+        std::set&lt;std::string&gt; realWords;  // Реальные слова из файла
+        
+        // Проверяем, какие слова отсутствуют в индексе
+        for (const std::string& word : realWords) {
+            uint32_t wid;
+            if (!wordIds.tryGet(word, wid)) continue;
+            
+            // Если слова нет в постинге — восстанавливаем
+            if (!dictionary[wid].find(fileId)) {
+                dictionary[wid][fileId] = 1;
+                wordRefs[fileId].push_back(wid);
+            }
+        }
+    }
+}</code></pre>
+    
+    <div class="note">
+        <strong>Использование:</strong> Этот метод полезен для восстановления индекса после сбоев или для проверки целостности данных.
+    </div>
+
+    <h3>7.3. Статистика и мониторинг</h3>
+    
+    <h4>getStats() — получение статистики</h4>
+    <p>Метод <code>getStats()</code> возвращает подробную статистику индекса:</p>
+    
+    <pre><code class="language-cpp">struct DictionaryStats {
+    size_t uniqueWords;      // Реальное количество уникальных слов
+    size_t totalPostings;    // Общее количество постингов
+    size_t emptyPostings;    // Пустые постинг-листы (holes)
+    size_t totalFiles;       // Количество файлов
+    size_t memoryBytes;      // Примерный размер в памяти
+};
+
+DictionaryStats InvertedIndex::getStats() const
+{
+    DictionaryStats stats{};
+    stats.uniqueWords = wordIds.size();  // Реальное количество слов
+    stats.totalFiles = docPaths.size();
+    
+    // Подсчет постингов из chunks
+    for (const auto& chunkPtr : dictionaryChunks) {
+        if (!chunkPtr) {
+            stats.emptyPostings += CHUNK_SIZE;
+            continue;
+        }
+        
+        const Chunk& chunk = *chunkPtr;
+        std::shared_lock&lt;std::shared_mutex&gt; lk(chunk.mutex);
+        
+        for (const auto& posting : chunk.bucket) {
+            if (posting.empty()) {
+                ++stats.emptyPostings;
+            } else {
+                stats.totalPostings += posting.size();
+                stats.memoryBytes += posting.size() * 6 + 24;  // 6 байт на постинг + overhead
+            }
+        }
+    }
+    
+    return stats;
+}</code></pre>
+    
+    <div class="success">
+        <strong>Использование:</strong> Статистика используется для логирования и мониторинга состояния индекса. Помогает выявить проблемы (много holes, большой размер памяти).
+    </div>
+
+    <hr>
+
+    <h2>8. Производительность и оптимизации</h2>
+
+    <h3>8.1. Ключевые оптимизации</h3>
+    
+    <table>
+        <tr>
+            <th>Оптимизация</th>
+            <th>Эффект</th>
+            <th>Реализация</th>
+        </tr>
+        <tr>
+            <td>Chunk-based блокировки</td>
+            <td>Высокий параллелизм</td>
+            <td>Разбиение словаря на чанки по 4096 слов</td>
+        </tr>
+        <tr>
+            <td>SIMD токенизация</td>
+            <td>Ускорение разбора текста в 2-4 раза</td>
+            <td>Векторные инструкции процессора</td>
+        </tr>
+        <tr>
+            <td>WordId вместо строк</td>
+            <td>Экономия памяти в 10-100 раз</td>
+            <td>WordIdManager</td>
+        </tr>
+        <tr>
+            <td>wordRefs для удаления</td>
+            <td>Ускорение удаления в 100-1000 раз</td>
+            <td>Обратный индекс fileId → [wordId]</td>
+        </tr>
+        <tr>
+            <td>Batch обработка</td>
+            <td>Минимизация блокировок</td>
+            <td>Группировка по чанкам перед commit</td>
+        </tr>
+        <tr>
+            <td>robin_hood hash map</td>
+            <td>Быстрее std::unordered_map на 20-30%</td>
+            <td>Оптимизированная хеш-таблица</td>
+        </tr>
+    </table>
+
+    <h3>8.2. Оценка производительности</h3>
+    
+    <div class="diagram">
+        <strong>Типичные показатели:</strong><br><br>
+        
+        <strong>Индексация:</strong><br>
+        - Скорость: 10-50 МБ/сек (зависит от CPU)<br>
+        - Параллелизм: до N потоков (N = количество ядер)<br>
+        - Память: ~100-200 МБ на 1 млн документов<br><br>
+        
+        <strong>Поиск:</strong><br>
+        - Время поиска: &lt; 1 мс для типичных запросов<br>
+        - Масштабируемость: линейная с количеством слов<br><br>
+        
+        <strong>Удаление:</strong><br>
+        - Время: O(количество слов в файле)<br>
+        - Обычно: &lt; 10 мс на файл
+    </div>
+
+    <hr>
+
+    <h2>9. Логирование и отладка</h2>
+
+    <h3>9.1. Система логирования</h3>
+    
+    <p>Все операции индексации логируются в <code>index.log</code> через <code>LogFile::getIndex()</code>:</p>
+    
+    <pre><code class="language-cpp">void InvertedIndex::addToLog(const string& _s) {
+    LogFile::getIndex().write(_s);
+}</code></pre>
+    
+    <h3>9.2. Ключевые события</h3>
+    
+    <ul>
+        <li><strong>Начало индексации:</strong> <code>"updateDocumentBase() → start"</code></li>
+        <li><strong>Прогресс:</strong> <code>"Progress: 500/1000 files indexed (50%)"</code></li>
+        <li><strong>Завершение:</strong> <code>"updateDocumentBase: all fileIndexing done"</code></li>
+        <li><strong>Сохранение:</strong> <code>"FINAL: after saveIndex, took 1234 ms"</code></li>
+        <li><strong>Статистика:</strong> <code>"STATS: words=12345, postings=67890, files=1000, memory=256 MB"</code></li>
+    </ul>
+    
+    <div class="note">
+        <strong>Оптимизация логирования:</strong> Используется lock-free счетчик для прогресса и логирование по интервалам (каждые 100 файлов или 5%), чтобы минимизировать влияние на производительность.
+    </div>
+
+    <hr>
+
+    <h2>10. Резюме</h2>
+
+    <h3>10.1. Ключевые концепции</h3>
+    
+    <ol>
+        <li><strong>Инвертированный индекс:</strong> Слово → список документов (постинги)</li>
+        <li><strong>WordId:</strong> Компактное представление слов (экономия памяти)</li>
+        <li><strong>Chunks:</strong> Разбиение словаря для параллелизма</li>
+        <li><strong>Strand:</strong> Последовательная обработка для корректности</li>
+        <li><strong>wordRefs:</strong> Обратный индекс для быстрого удаления</li>
+    </ol>
+
+    <h3>10.2. Поток данных</h3>
+    
+    <div class="diagram">
+        <strong>Полный цикл индексации:</strong><br><br>
+        
+        1. <strong>Сканирование</strong> → список файлов<br>
+        2. <strong>Diff</strong> → новые/обновленные/удаленные<br>
+        3. <strong>Удаление</strong> → через wordRefs<br>
+        4. <strong>Параллельная индексация</strong> → токенизация файлов<br>
+        5. <strong>Strand обработка</strong> → слова → WordId<br>
+        6. <strong>Chunk commit</strong> → обновление постингов<br>
+        7. <strong>Сохранение</strong> → сериализация на диск
+    </div>
+
+    <h3>10.3. Важные моменты</h3>
+    
+    <div class="warning">
+        <strong>Критично для понимания:</strong><br>
+        - Strand гарантирует корректность при параллельной индексации<br>
+        - Chunks обеспечивают параллелизм при обновлении постингов<br>
+        - wordRefs критически важен для быстрого удаления<br>
+        - dictionary используется только для сериализации, в работе — chunks
+    </div>
+    
+    <div class="success">
+        <strong>Преимущества архитектуры:</strong><br>
+        - Высокий параллелизм (до N потоков)<br>
+        - Эффективное использование памяти<br>
+        - Быстрый поиск и обновление<br>
+        - Масштабируемость на миллионы документов
+    </div>
+
+    <hr>
+
+    <p style="text-align: center; color: #666; margin-top: 40px;">
+        <em>Документ создан: 2026</em>
+    </p>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

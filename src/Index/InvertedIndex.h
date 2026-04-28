@@ -177,7 +177,7 @@ namespace inverted_index {
         void delFromDictionary(const std::vector<FileId>& list);
 
         void commitChunkMap(
-                const std::unordered_map<size_t, std::vector<PostingTask>>& chunkMap);
+                std::unordered_map<size_t, std::vector<PostingTask>> chunkMap);
 
         void rebuildDictionaryFromChunks();
         /// Вызывать только при уже удерживаемом mapMutex (см. saveIndex).

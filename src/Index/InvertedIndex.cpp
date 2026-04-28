@@ -71,11 +71,11 @@ void inverted_index::InvertedIndex::commitSingleWord(const PostingTask& t)
 }
 
 void inverted_index::InvertedIndex::commitChunkMap(
-        const std::unordered_map<size_t, std::vector<PostingTask>>& chunkMap)
+        std::unordered_map<size_t, std::vector<PostingTask>> chunkMap)
 {
-    // Снимок Chunk* под mapMutex, затем только chunk.mutex — без гонки по vector при resize.
-    std::vector<std::pair<Chunk*, std::vector<PostingTask>>> work;
-    work.reserve(chunkMap.size());
+    // Только метаданные vector — под mapMutex; векторы PostingTask собираем после unlock (move).
+    std::unordered_map<size_t, Chunk*> ptrByCid;
+    ptrByCid.reserve(chunkMap.size());
 
     {
         std::lock_guard<std::mutex> g(mapMutex);
@@ -87,13 +87,18 @@ void inverted_index::InvertedIndex::commitChunkMap(
         if (maxIndex >= dictionaryChunks.size())
             dictionaryChunks.resize(maxIndex + 1);
 
-        for (const auto& [cid, tasks] : chunkMap)
+        for (const auto& [cid, _] : chunkMap)
         {
             if (!dictionaryChunks[cid])
                 dictionaryChunks[cid] = std::make_unique<Chunk>();
-            work.emplace_back(dictionaryChunks[cid].get(), tasks);
+            ptrByCid[cid] = dictionaryChunks[cid].get();
         }
     }
+
+    std::vector<std::pair<Chunk*, std::vector<PostingTask>>> work;
+    work.reserve(chunkMap.size());
+    for (auto& [cid, tasks] : chunkMap)
+        work.emplace_back(ptrByCid[cid], std::move(tasks));
 
     for (auto& [ch, tasks] : work)
     {
@@ -152,7 +157,7 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
         {
             try
             {
-                commitChunkMap(chunkMap);
+                commitChunkMap(std::move(chunkMap));
                 if (promise) promise->set_value();
             }
             catch (const std::exception& e)

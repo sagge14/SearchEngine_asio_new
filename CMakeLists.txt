@@ -98,6 +98,9 @@ option(TEST_MODE "option for debug" OFF)
 
 if (MSVC)
     add_compile_options(/arch:AVX2 /utf-8)
+    # Ninja+MSVC: отдельный шаг mt.exe иногда падает с c101008d (запись ресурса в exe).
+    # Для консольного приложения манифест UAC обычно не нужен.
+    target_link_options(SearchEngine PRIVATE /MANIFEST:NO)
 endif()
 
 

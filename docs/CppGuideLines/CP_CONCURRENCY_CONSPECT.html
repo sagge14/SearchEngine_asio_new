@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: CP - Параллелизм (C++ Core Guidelines)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; border-left: 4px solid #3498db; padding-left: 15px; }
+        h3 { color: #555; margin-top: 25px; }
+        h4 { color: #666; font-size: 1.1em; margin-top: 20px; font-weight: 600; }
+        pre { background: #ffffff; border: 1px solid #ddd; border-left: 4px solid #3498db; padding: 15px; overflow-x: auto; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 0.95em; }
+        code { font-family: 'Consolas', 'Monaco', 'Courier New', monospace; }
+        .note { background-color: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 15px 0; }
+        .warning { background-color: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; margin: 15px 0; }
+        .success { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        .bad { background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
+        .good { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        hr { border: none; border-top: 2px solid #ddd; margin: 30px 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        @media (max-width: 768px) { .comparison { grid-template-columns: 1fr; } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>CP: Параллелизм - Подробный конспект</h1>
+    
+    <div class="note">
+        <strong>О разделе:</strong> Раздел CP содержит рекомендации по написанию многопоточного кода. Правильное использование 
+        синхронизации предотвращает гонки данных и делает код безопасным для параллельного выполнения.
+    </div>
+
+    <hr>
+
+    <h2>CP.1: Предполагайте, что ваш код будет выполняться как часть многопоточной программы</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: статические переменные вызывают гонки данных
+double cached_computation(int x) {
+    static int cached_x = 0;
+    static double cached_result = 0.0;
+    
+    if (cached_x != x) {
+        cached_x = x;
+        cached_result = expensive_computation(x);
+    }
+    return cached_result;  // гонка данных при многопоточном доступе!
+}</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: потокобезопасный кэш
+#include &lt;mutex&gt;
+#include &lt;unordered_map&gt;
+
+class ThreadSafeCache {
+    std::mutex mtx;
+    std::unordered_map&lt;int, double&gt; cache;
+public:
+    double get(int x) {
+        std::lock_guard&lt;std::mutex&gt; lock(mtx);
+        auto it = cache.find(x);
+        if (it != cache.end()) {
+            return it->second;
+        }
+        double result = expensive_computation(x);
+        cache[x] = result;
+        return result;
+    }
+};</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>CP.2: Избегайте гонок данных</h2>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Гонка данных возникает, когда два потока обращаются к одному объекту одновременно, и хотя бы один 
+        из них выполняет запись. Это приводит к неопределённому поведению.
+    </div>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: гонка данных
+int counter = 0;
+
+void increment() {
+    ++counter;  // гонка данных! Не атомарная операция
+}
+
+// В многопоточной программе:
+std::thread t1(increment);
+std::thread t2(increment);
+// counter может быть любым значением!</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: атомарные операции
+#include &lt;atomic&gt;
+
+std::atomic&lt;int&gt; counter{0};
+
+void increment() {
+    ++counter;  // атомарная операция, безопасно
+}
+
+// Или используйте мьютекс:
+#include &lt;mutex&gt;
+int counter = 0;
+std::mutex mtx;
+
+void increment() {
+    std::lock_guard&lt;std::mutex&gt; lock(mtx);
+    ++counter;  // защищено мьютексом
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>CP.20: Используйте RAII, никогда не используйте простые lock()/unlock()</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: ручное управление блокировкой
+std::mutex mtx;
+
+void critical_section() {
+    mtx.lock();
+    // ... работа ...
+    if (error) {
+        return;  // блокировка не снята!
+    }
+    mtx.unlock();  // легко забыть
+}</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: RAII для блокировок
+#include &lt;mutex&gt;
+
+std::mutex mtx;
+
+void critical_section() {
+    std::lock_guard&lt;std::mutex&gt; lock(mtx);
+    // ... работа ...
+    if (error) {
+        return;  // блокировка автоматически снимется
+    }
+    // блокировка автоматически снимется при выходе
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>CP.21: Используйте std::lock() или std::scoped_lock для захвата нескольких mutex</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: возможна взаимоблокировка
+std::mutex mtx1, mtx2;
+
+void thread1() {
+    std::lock_guard&lt;std::mutex&gt; lock1(mtx1);
+    std::lock_guard&lt;std::mutex&gt; lock2(mtx2);  // может заблокироваться
+}
+
+void thread2() {
+    std::lock_guard&lt;std::mutex&gt; lock2(mtx2);
+    std::lock_guard&lt;std::mutex&gt; lock1(mtx1);  // взаимоблокировка!
+}</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: std::scoped_lock (C++17)
+#include &lt;mutex&gt;
+
+std::mutex mtx1, mtx2;
+
+void thread1() {
+    std::scoped_lock lock(mtx1, mtx2);  // безопасный захват обоих
+    // ...
+}
+
+void thread2() {
+    std::scoped_lock lock(mtx1, mtx2);  // безопасный захват обоих
+    // ...
+}
+
+// Или std::lock для C++11/14:
+void thread1_old() {
+    std::lock(mtx1, mtx2);
+    std::lock_guard&lt;std::mutex&gt; lock1(mtx1, std::adopt_lock);
+    std::lock_guard&lt;std::mutex&gt; lock2(mtx2, std::adopt_lock);
+    // ...
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Заключение</h2>
+    
+    <div class="note">
+        <h3>Ключевые принципы раздела CP (Параллелизм):</h3>
+        <ul>
+            <li><strong>Предполагайте многопоточность:</strong> Пишите код, безопасный для параллельного выполнения</li>
+            <li><strong>Избегайте гонок данных:</strong> Используйте синхронизацию для защиты общих данных</li>
+            <li><strong>RAII для блокировок:</strong> Используйте lock_guard и scoped_lock</li>
+            <li><strong>Атомарные операции:</strong> Используйте std::atomic для простых операций</li>
+            <li><strong>Избегайте взаимоблокировок:</strong> Используйте std::lock для множественных мьютексов</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе C++ Core Guidelines. 
+    Полный документ: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>
