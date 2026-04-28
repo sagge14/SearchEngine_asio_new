@@ -975,6 +975,7 @@ void inverted_index::InvertedIndex::compact(double thresholdPercent)
         double hole_percent = (dict_size > 0) ? (holes * 100.0 / dict_size) : 0.0;
 
         std::ostringstream oss;
+        oss.imbue(std::locale::classic());
         oss << "COMPACT: holes=" << holes
             << ", dict_size=" << dict_size
             << ", real_words=" << real_words

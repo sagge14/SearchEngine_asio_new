@@ -163,7 +163,14 @@ int main()
     );
 
     setlocale(LC_ALL, "Russian_Russia.866");
-    std::locale::global(std::locale("Russian_Russia.866"));
+    // ВАЖНО: глобальная локаль ru.866 имеет numpunct, который вставляет байт 0xFF
+    // (видится как 'я') как разделитель тысяч/неразрывный пробел.
+    // Берём ru.866 для ctype/collate/etc., а числовые фасеты — из C-локали (без разделителей).
+    {
+        std::locale baseRu("Russian_Russia.866");
+        std::locale combined(baseRu, std::locale::classic(), std::locale::numeric);
+        std::locale::global(combined);
+    }
 
     std::set_terminate(myTerminateHandler);
     SetUnhandledExceptionFilter(myUnhandledFilter);

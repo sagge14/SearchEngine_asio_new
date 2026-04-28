@@ -94,6 +94,17 @@ void LogFile::ensureCurrentFile()
         // Фиксируем C locale, чтобы не появлялись нестандартные разделители тысяч/десятичные.
         stream_.imbue(std::locale::classic());
         currentPath_ = newPath;
+
+        // Однократный отметочный лог — помогает понять, перезаписывается ли файл
+        // или вы смотрите на устаревшую версию.
+        if (stream_.is_open()) {
+            stream_ << timestamp()
+                    << "LogFile opened: name=" << name_
+                    << " path=" << newPath
+                    << " mode=app"
+                    << '\n';
+            stream_.flush();
+        }
     }
 }
 
