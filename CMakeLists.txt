@@ -29,11 +29,29 @@ else()
     message(FATAL_ERROR "Could not find Boost libraries. Please check your Boost installation.")
 endif()
 
-# Установка путей к OpenSSL
-set(OPENSSL_ROOT_DIR "C:/Program Files/OpenSSL-Win64")
-set(OPENSSL_INCLUDE_DIR "C:/Program Files/OpenSSL-Win64/include")
-set(OPENSSL_CRYPTO_LIBRARY "C:/Program Files/OpenSSL-Win64/lib/VC/x64/MT/libcrypto.lib")
-set(OPENSSL_SSL_LIBRARY "C:/Program Files/OpenSSL-Win64/lib/VC/x64/MT/libssl.lib")
+## OpenSSL
+## Важно: архитектура должна совпадать (x86 ↔ Win32, x64 ↔ Win64).
+if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(OPENSSL_ROOT_DIR "C:/Program Files (x86)/OpenSSL-Win32")
+    set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
+    set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/VC/x86/MT/libcrypto.lib")
+    set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/VC/x86/MT/libssl.lib")
+else()
+    set(OPENSSL_ROOT_DIR "C:/Program Files/OpenSSL-Win64")
+    set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
+    set(OPENSSL_CRYPTO_LIBRARY "${OPENSSL_ROOT_DIR}/lib/VC/x64/MT/libcrypto.lib")
+    set(OPENSSL_SSL_LIBRARY "${OPENSSL_ROOT_DIR}/lib/VC/x64/MT/libssl.lib")
+endif()
+
+if (NOT EXISTS "${OPENSSL_INCLUDE_DIR}")
+    message(FATAL_ERROR "OpenSSL include dir not found: ${OPENSSL_INCLUDE_DIR}. Install matching OpenSSL for your target architecture.")
+endif()
+if (NOT EXISTS "${OPENSSL_CRYPTO_LIBRARY}")
+    message(FATAL_ERROR "OpenSSL crypto lib not found: ${OPENSSL_CRYPTO_LIBRARY}. Install matching OpenSSL for your target architecture.")
+endif()
+if (NOT EXISTS "${OPENSSL_SSL_LIBRARY}")
+    message(FATAL_ERROR "OpenSSL ssl lib not found: ${OPENSSL_SSL_LIBRARY}. Install matching OpenSSL for your target architecture.")
+endif()
 
 include_directories(${OPENSSL_INCLUDE_DIR})
 

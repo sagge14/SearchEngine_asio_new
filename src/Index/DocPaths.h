@@ -23,7 +23,13 @@ public:
                     std::filesystem::file_time_type newTime,
                     uint64_t newSize) const;                       // точечная проверка
 
-    void markRemoved(uint32_t id);                                  // удалить по id
+    void markRemoved(uint32_t id);                                  // пометить как удалённый (след сохраняется)
+
+    /// Файл помечен как удалённый (исчез с диска), но след в индексе сохранён.
+    [[nodiscard]] bool isDeleted(uint32_t id) const;
+
+    /// Получить метаданные файла по id (для live-зеркала). false, если нет.
+    [[nodiscard]] bool getInfo(uint32_t id, int64_t& mtimeTicks, uint64_t& fsize) const;
 
     std::pair<uint32_t,bool>         // {id, changed}
     upsert(const std::wstring& path,
@@ -31,6 +37,21 @@ public:
            uint64_t                     fsize);
 
     bool tryGetId(const std::wstring& path, uint32_t& outId) const;
+
+    struct RawRow {
+        uint32_t id{};
+        std::wstring path;
+        int64_t mtimeTicks{};   // ticks of std::filesystem::file_time_type::duration
+        uint64_t fsize{};
+        bool deleted{false};
+    };
+
+    /// Экспорт состояния для внешнего хранилища (SQLite/и т.д.).
+    [[nodiscard]] std::vector<RawRow> exportRows() const;
+
+    /// Восстановить состояние из внешнего хранилища.
+    /// Полностью перезаписывает текущее содержимое.
+    void rebuildFromRows(std::vector<RawRow>&& rows);
 
     /* === сериализация ============================================= */
     template<class Ar> void serialize(Ar& ar, const unsigned) {
@@ -53,8 +74,9 @@ private:
         std::filesystem::file_time_type mtime;
         uint64_t fsize{};
         uint32_t id{};
+        bool deleted{false};   // файл удалён с диска, но след сохранён
         template<class Ar> void serialize(Ar& ar, const unsigned) {
-            ar & mtime & fsize & id;
+            ar & mtime & fsize & id & deleted;
         }
     };
 

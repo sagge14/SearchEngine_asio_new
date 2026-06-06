@@ -57,6 +57,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
     jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
+    jsonSettings["config"]["sqlite_mirror_flush_interval_sec"] = val.sqliteMirrorFlushIntervalSec;
+    jsonSettings["config"]["sqlite_mirror_max_pending_ops"] = val.sqliteMirrorMaxPendingOps;
 
     std::ofstream jsonFileSettings(jsonPath);
     jsonFileSettings << std::setw(2) << jsonSettings;
@@ -275,6 +277,22 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
+        // sqlite_mirror_flush_interval_sec — интервал сброса очереди SQLite-зеркала
+        if (config.contains("sqlite_mirror_flush_interval_sec")) {
+            config.at("sqlite_mirror_flush_interval_sec").get_to(s.sqliteMirrorFlushIntervalSec);
+        } else {
+            addedFields.push_back("config.sqlite_mirror_flush_interval_sec");
+            needsResave = true;
+        }
+
+        // sqlite_mirror_max_pending_ops — порог очереди live-зеркала
+        if (config.contains("sqlite_mirror_max_pending_ops")) {
+            config.at("sqlite_mirror_max_pending_ops").get_to(s.sqliteMirrorMaxPendingOps);
+        } else {
+            addedFields.push_back("config.sqlite_mirror_max_pending_ops");
+            needsResave = true;
+        }
+
         // Files
         if (jsonSettings.contains("Files")) {
             jsonSettings.at("Files").get_to(s.files);
@@ -397,13 +415,29 @@ std::string ConverterJSON::putAnswers(const listAnswers& answers, const std::str
 
     for(const auto& answer: answers)
     {
+        const auto& key = answer.second;
         if(!answer.first.empty())
         {
-            jsonAnswers["Answers"][answer.second]["result"] = true;
-            jsonAnswers["Answers"][answer.second]["relevance"] = answer.first;
+            jsonAnswers["Answers"][key]["result"] = true;
+
+            // relevance — прежняя схема: массив пар [path, rel] (additive, не ломаем).
+            // results    — новый массив объектов с меткой deleted.
+            auto& relevanceArr = jsonAnswers["Answers"][key]["relevance"];
+            auto& resultsArr   = jsonAnswers["Answers"][key]["results"];
+            relevanceArr = nh::json::array();
+            resultsArr   = nh::json::array();
+            for(const auto& it : answer.first)
+            {
+                relevanceArr.push_back(nh::json::array({ it.path, it.relevance }));
+                resultsArr.push_back({
+                    {"path", it.path},
+                    {"rel", it.relevance},
+                    {"deleted", it.deleted}
+                });
+            }
         }
         else
-            jsonAnswers["Answers"][answer.second]["result"] = false;
+            jsonAnswers["Answers"][key]["result"] = false;
     }
 
     std::ofstream jsonFileSettings(jsonPath);
@@ -559,6 +593,7 @@ void to_json(nh::json& jsonTelega, const Telega &val)
     TO_JSON(jsonTelega, blank)
     TO_JSON(jsonTelega, gde_sht)
     TO_JSON(jsonTelega, last_mesto)
+    TO_JSON(jsonTelega, deleted)
 }
 void from_json(const nh::json& jsonTelega, Telega &val)
 {

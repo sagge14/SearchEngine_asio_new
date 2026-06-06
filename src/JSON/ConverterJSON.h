@@ -22,7 +22,16 @@ class Telega;
 struct PrefixMap;
 
 namespace nh = nlohmann;
-typedef std::list<std::pair<std::string, float>> listAnswer;
+
+// Один результат поиска: путь, относительная релевантность и метка
+// удаления (true = файл удалён с диска, но след в индексе сохранён).
+struct AnswerItem {
+    std::string path;
+    float       relevance{0.0f};
+    bool        deleted{false};
+};
+
+typedef std::list<AnswerItem> listAnswer;
 typedef std::list<std::pair<listAnswer, std::string>> listAnswers;
 
 

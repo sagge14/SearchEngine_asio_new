@@ -14,7 +14,9 @@ namespace search_server {
 
     using namespace std;
     typedef set <size_t> setFileInd;
-    typedef list <pair<string, float>> listAnswer;
+    // listAnswer/listAnswers — те же типы, что в ConverterJSON.h
+    // (элемент списка — ::AnswerItem с полями path/relevance/deleted).
+    typedef list <AnswerItem> listAnswer;
     typedef list <pair<listAnswer, string>> listAnswers;
 
     struct PendingEvt {
@@ -64,6 +66,7 @@ namespace search_server {
         inline static size_t max{0};
         size_t sum{0};
         string filePath;
+        bool deleted{false};   // файл удалён с диска (след сохранён)
 
         [[nodiscard]] float getRelativeIndex() const { return (float) sum / (float) max; }
 
@@ -119,6 +122,10 @@ namespace search_server {
         int maxParallelReaders = 0;
         /// Таймаут ожидания индексации одного файла в updateDocumentBase, секунды.
         int fileIndexingTimeoutSec = 60;
+        /// Интервал сброса очереди SQLite-зеркала на диск, секунды.
+        double sqliteMirrorFlushIntervalSec = 2.0;
+        /// Порог очереди live-зеркала: при превышении — немедленный flush (0 = только по таймеру).
+        int sqliteMirrorMaxPendingOps = 500;
 
         static Settings* getSettings();
         static auto getExtensions() {return getSettings()->extensions;};
