@@ -126,6 +126,10 @@ namespace search_server {
         double sqliteMirrorFlushIntervalSec = 2.0;
         /// Порог очереди live-зеркала: при превышении — немедленный flush (0 = только по таймеру).
         int sqliteMirrorMaxPendingOps = 500;
+        /// Число read-only соединений при восстановлении SQLite (1 = последовательный baseline).
+        int sqliteLoadThreads = 4;
+        /// Делать COUNT(*) по словам и reserve перед загрузкой постингов.
+        bool sqlitePrecountPostings = false;
 
         static Settings* getSettings();
         static auto getExtensions() {return getSettings()->extensions;};

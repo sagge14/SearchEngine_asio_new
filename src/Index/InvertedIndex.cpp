@@ -1117,7 +1117,11 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                  ", sqlite_mirror_flush_interval_sec=" +
                  std::to_string(storage_.sqliteMirrorFlushIntervalSec) +
                  ", sqlite_mirror_max_pending_ops=" +
-                 std::to_string(storage_.sqliteMirrorMaxPendingOps));
+                 std::to_string(storage_.sqliteMirrorMaxPendingOps) +
+                 ", sqlite_load_threads=" +
+                 std::to_string(storage_.sqliteLoadThreads) +
+                 ", sqlite_precount_postings=" +
+                 std::to_string(storage_.sqlitePrecountPostings));
 
         ensureSerializer();
         try {
@@ -1130,6 +1134,20 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
             addToLog(std::string("InvertedIndex: load EXCEPTION: ") + e.what());
         } catch (...) {
             addToLog("InvertedIndex: load unknown exception");
+        }
+
+        // Live-writer запускаем только после завершения восстановления.
+        // Так загрузчик не конкурирует со вторым SQLite-соединением за схему
+        // и получает согласованный снимок базы.
+        if (serializer_ && serializer_->supportsLiveUpdates())
+        {
+            try { serializer_->openLive(); }
+            catch (const std::exception& e) {
+                addToLog(std::string("InvertedIndex: openLive EXCEPTION: ") + e.what());
+            }
+            catch (...) {
+                addToLog("InvertedIndex: openLive unknown exception");
+            }
         }
 }
 
@@ -1148,25 +1166,15 @@ void inverted_index::InvertedIndex::ensureSerializer() const
             storage_.path,
             LiveMirrorConfig{
                 storage_.sqliteMirrorFlushIntervalSec,
-                storage_.sqliteMirrorMaxPendingOps});
+                storage_.sqliteMirrorMaxPendingOps,
+                storage_.sqliteLoadThreads,
+                storage_.sqlitePrecountPostings});
         break;
     default:
         serializer_ = std::make_unique<BoostIndexSerializer>(storage_.path);
         break;
     }
 
-    // Для live-зеркала (SQLite) открываем постоянное соединение и
-    // подготавливаем statements заранее.
-    if (serializer_ && serializer_->supportsLiveUpdates())
-    {
-        try { serializer_->openLive(); }
-        catch (const std::exception& e) {
-            addToLog(std::string("ensureSerializer: openLive EXCEPTION: ") + e.what());
-        }
-        catch (...) {
-            addToLog("ensureSerializer: openLive unknown exception");
-        }
-    }
 }
 
 void inverted_index::InvertedIndex::compact(double thresholdPercent)

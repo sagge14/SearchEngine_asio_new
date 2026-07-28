@@ -19,6 +19,8 @@ namespace inverted_index {
 struct LiveMirrorConfig {
     double flushIntervalSec = 2.0;
     int maxPendingOps = 500;
+    int loadThreads = 4;
+    bool precountPostings = false;
 };
 
 struct LiveMirrorOp {
@@ -68,6 +70,11 @@ private:
 
     void exec(sqlite3* db, const char* sql);
     void initSchema(sqlite3* db);
+    void migratePostingsToWithoutRowid(sqlite3* db);
+    [[nodiscard]] bool tableHasColumn(sqlite3* db,
+                                      const char* table,
+                                      const char* column);
+    [[nodiscard]] std::string tableSql(sqlite3* db, const char* table);
 
     sqlite3_stmt* prepare(sqlite3* db, const char* sql);
     void finalize(sqlite3_stmt* st) noexcept;
@@ -110,7 +117,7 @@ private:
     bool writerActive_{false};
     bool writerStarted_{false};
 
-    static constexpr int kSchemaVersion = 2;
+    static constexpr int kSchemaVersion = 3;
 };
 
 } // namespace inverted_index

@@ -86,6 +86,8 @@ namespace inverted_index {
         std::string path = "inverted_index3.dat";
         double sqliteMirrorFlushIntervalSec = 2.0;
         int sqliteMirrorMaxPendingOps = 500;
+        int sqliteLoadThreads = 4;
+        bool sqlitePrecountPostings = false;
     };
 
     class InvertedIndex {

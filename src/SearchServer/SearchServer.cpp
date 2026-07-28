@@ -251,6 +251,8 @@ index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
     cfg.path = "inverted_index.sqlite";
     cfg.sqliteMirrorFlushIntervalSec = settings.sqliteMirrorFlushIntervalSec;
     cfg.sqliteMirrorMaxPendingOps = settings.sqliteMirrorMaxPendingOps;
+    cfg.sqliteLoadThreads = settings.sqliteLoadThreads;
+    cfg.sqlitePrecountPostings = settings.sqlitePrecountPostings;
 
     index = new inverted_index::InvertedIndex(cpu_pool, io_commit, settings.maxParallelReaders, settings.fileIndexingTimeoutSec, cfg);
 

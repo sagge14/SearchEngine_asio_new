@@ -6,8 +6,11 @@
 
 #include "SQLite/sqlite3.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <limits>
 #include <locale>
 #include <sstream>
 #include <stdexcept>
@@ -27,6 +30,7 @@ SQLiteIndexSerializer::SQLiteIndexSerializer(std::string path, LiveMirrorConfig 
 {
     if (config_.flushIntervalSec <= 0.0)
         config_.flushIntervalSec = 2.0;
+    config_.loadThreads = std::clamp(config_.loadThreads, 1, 16);
 }
 
 SQLiteIndexSerializer::~SQLiteIndexSerializer()
@@ -124,16 +128,15 @@ void SQLiteIndexSerializer::initSchema(sqlite3* db)
     exec(db, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);");
     exec(db, "CREATE TABLE IF NOT EXISTS words(word_id INTEGER PRIMARY KEY, word TEXT NOT NULL);");
     exec(db, "CREATE TABLE IF NOT EXISTS docs(doc_id INTEGER PRIMARY KEY, path TEXT NOT NULL, mtime_ticks INTEGER NOT NULL, size_int64 INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);");
-    exec(db, "CREATE TABLE IF NOT EXISTS postings(word_id INTEGER NOT NULL, doc_id INTEGER NOT NULL, cnt INTEGER NOT NULL, PRIMARY KEY(word_id, doc_id));");
+    exec(db, "CREATE TABLE IF NOT EXISTS postings(word_id INTEGER NOT NULL, doc_id INTEGER NOT NULL, cnt INTEGER NOT NULL, PRIMARY KEY(word_id, doc_id)) WITHOUT ROWID;");
+
+    if (!tableHasColumn(db, "docs", "deleted"))
+        exec(db, "ALTER TABLE docs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;");
+
+    migratePostingsToWithoutRowid(db);
+
     exec(db, "CREATE INDEX IF NOT EXISTS idx_postings_doc ON postings(doc_id);");
     exec(db, "CREATE INDEX IF NOT EXISTS idx_docs_deleted ON docs(deleted);");
-
-    {
-        char* err = nullptr;
-        sqlite3_exec(db, "ALTER TABLE docs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;",
-                     nullptr, nullptr, &err);
-        if (err) sqlite3_free(err);
-    }
 
     {
         sqlite3_stmt* st = prepare(db,
@@ -146,6 +149,126 @@ void SQLiteIndexSerializer::initSchema(sqlite3* db)
         if (rc != SQLITE_DONE)
             throwSqlite(db, "set schema_version", rc);
     }
+}
+
+bool SQLiteIndexSerializer::tableHasColumn(sqlite3* db,
+                                           const char* table,
+                                           const char* column)
+{
+    const std::string sql = "PRAGMA table_info(" + std::string(table) + ");";
+    sqlite3_stmt* st = prepare(db, sql.c_str());
+    bool found = false;
+    while (true)
+    {
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE)
+            break;
+        if (rc != SQLITE_ROW)
+        {
+            finalize(st);
+            throwSqlite(db, "table_info", rc);
+        }
+
+        const unsigned char* name = sqlite3_column_text(st, 1);
+        if (name && std::string(reinterpret_cast<const char*>(name)) == column)
+        {
+            found = true;
+            break;
+        }
+    }
+    finalize(st);
+    return found;
+}
+
+std::string SQLiteIndexSerializer::tableSql(sqlite3* db, const char* table)
+{
+    sqlite3_stmt* st = prepare(
+        db,
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?;");
+    sqlite3_bind_text(st, 1, table, -1, SQLITE_TRANSIENT);
+
+    std::string result;
+    const int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW)
+    {
+        const unsigned char* sql = sqlite3_column_text(st, 0);
+        if (sql)
+            result = reinterpret_cast<const char*>(sql);
+    }
+    else if (rc != SQLITE_DONE)
+    {
+        finalize(st);
+        throwSqlite(db, "read table sql", rc);
+    }
+
+    finalize(st);
+    return result;
+}
+
+void SQLiteIndexSerializer::migratePostingsToWithoutRowid(sqlite3* db)
+{
+    const std::string currentSql = tableSql(db, "postings");
+    std::string normalizedSql = currentSql;
+    std::transform(
+        normalizedSql.begin(),
+        normalizedSql.end(),
+        normalizedSql.begin(),
+        [](unsigned char ch) {
+            return static_cast<char>(std::toupper(ch));
+        });
+    if (currentSql.empty() ||
+        normalizedSql.find("WITHOUT ROWID") != std::string::npos)
+    {
+        return;
+    }
+
+    if (!sqlite3_get_autocommit(db))
+        throw std::runtime_error(
+            "SQLite postings migration requires autocommit mode");
+
+    const auto t0 = std::chrono::steady_clock::now();
+    LogFile::getIndex().write(
+        "SQLITE_SCHEMA_MIGRATION_BEGIN from=2 to=3 table=postings");
+
+    bool committed = false;
+    beginImmediate(db);
+    try
+    {
+        if (!tableSql(db, "postings_rowid_v2").empty())
+            throw std::runtime_error(
+                "SQLite migration: temporary table postings_rowid_v2 already exists");
+
+        exec(db, "DROP INDEX IF EXISTS idx_postings_doc;");
+        exec(db, "ALTER TABLE postings RENAME TO postings_rowid_v2;");
+        exec(db,
+             "CREATE TABLE postings("
+             "word_id INTEGER NOT NULL, "
+             "doc_id INTEGER NOT NULL, "
+             "cnt INTEGER NOT NULL, "
+             "PRIMARY KEY(word_id, doc_id)"
+             ") WITHOUT ROWID;");
+        exec(db,
+             "INSERT INTO postings(word_id, doc_id, cnt) "
+             "SELECT word_id, doc_id, cnt "
+             "FROM postings_rowid_v2 "
+             "ORDER BY word_id, doc_id;");
+        exec(db, "DROP TABLE postings_rowid_v2;");
+        exec(db, "CREATE INDEX idx_postings_doc ON postings(doc_id);");
+        commit(db);
+        committed = true;
+    }
+    catch (...)
+    {
+        if (!committed)
+            rollback(db);
+        throw;
+    }
+
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    LogFile::getIndex().write(
+        "SQLITE_SCHEMA_MIGRATION_END from=2 to=3 elapsed_ms=" +
+        std::to_string(elapsedMs));
 }
 
 void SQLiteIndexSerializer::logMirrorFlush(size_t rawOps, size_t coalescedOps, int64_t elapsedMs)
@@ -640,101 +763,440 @@ void SQLiteIndexSerializer::save(const InvertedIndex& idx)
 
 void SQLiteIndexSerializer::load(InvertedIndex& idx)
 {
-    open();
-    initSchema(db_);
+    using Clock = std::chrono::steady_clock;
+    const auto totalStart = Clock::now();
+    auto stageStart = totalStart;
 
-    std::vector<std::string> id2word;
+    const auto logStage = [&](const char* stage, size_t rows)
     {
-        sqlite3_stmt* st = prepare(db_, "SELECT word_id, word FROM words ORDER BY word_id;");
-        while (true)
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - stageStart).count();
+        LogFile::getIndex().write(
+            std::string("SQLITE_LOAD_STAGE stage=") + stage +
+            " elapsed_ms=" + std::to_string(elapsedMs) +
+            " rows=" + std::to_string(rows));
+        stageStart = Clock::now();
+    };
+
+    bool readTransaction = false;
+    size_t postingRows = 0;
+    try
+    {
+        open();
+        initSchema(db_);
+        logStage("open_and_schema", 0);
+
+        // Удерживаем write-reservation до конца восстановления. В WAL это
+        // не мешает нашим read-only соединениям, но не позволяет внешнему
+        // writer изменить слова/документы между параллельными диапазонами.
+        beginImmediate(db_);
+        readTransaction = true;
+
+        std::vector<std::string> id2word;
+        size_t wordRows = 0;
         {
-            const int rc = sqlite3_step(st);
-            if (rc == SQLITE_DONE) break;
-            if (rc != SQLITE_ROW)
+            sqlite3_stmt* st = prepare(
+                db_,
+                "SELECT word_id, word FROM words ORDER BY word_id;");
+            while (true)
+            {
+                const int rc = sqlite3_step(st);
+                if (rc == SQLITE_DONE)
+                    break;
+                if (rc != SQLITE_ROW)
+                {
+                    finalize(st);
+                    throwSqlite(db_, "select words", rc);
+                }
+
+                const sqlite3_int64 wid64 = sqlite3_column_int64(st, 0);
+                if (wid64 < 0 ||
+                    static_cast<uint64_t>(wid64) >
+                        std::numeric_limits<uint32_t>::max())
+                {
+                    finalize(st);
+                    throw std::runtime_error(
+                        "SQLite load: word_id is outside uint32_t range");
+                }
+
+                const size_t wid = static_cast<size_t>(wid64);
+                const unsigned char* w = sqlite3_column_text(st, 1);
+                const std::string word =
+                    w ? reinterpret_cast<const char*>(w) : "";
+
+                if (wid >= id2word.size())
+                    id2word.resize(wid + 1);
+                id2word[wid] = word;
+                ++wordRows;
+            }
+            finalize(st);
+        }
+        logStage("read_words", wordRows);
+
+        std::unordered_map<std::string, uint32_t> word2id;
+        word2id.reserve(id2word.size());
+        for (uint32_t wid = 0;
+             wid < static_cast<uint32_t>(id2word.size());
+             ++wid)
+        {
+            word2id.emplace(id2word[wid], wid);
+        }
+        logStage("build_word_lookup", word2id.size());
+
+        std::vector<DocPaths::RawRow> docs;
+        {
+            sqlite3_stmt* st = prepare(
+                db_,
+                "SELECT doc_id, path, mtime_ticks, size_int64, deleted "
+                "FROM docs ORDER BY doc_id;");
+            while (true)
+            {
+                const int rc = sqlite3_step(st);
+                if (rc == SQLITE_DONE)
+                    break;
+                if (rc != SQLITE_ROW)
+                {
+                    finalize(st);
+                    throwSqlite(db_, "select docs", rc);
+                }
+
+                const sqlite3_int64 did64 = sqlite3_column_int64(st, 0);
+                if (did64 < 0 ||
+                    static_cast<uint64_t>(did64) >
+                        std::numeric_limits<uint32_t>::max())
+                {
+                    finalize(st);
+                    throw std::runtime_error(
+                        "SQLite load: doc_id is outside uint32_t range");
+                }
+
+                DocPaths::RawRow r;
+                r.id = static_cast<uint32_t>(did64);
+                const unsigned char* p = sqlite3_column_text(st, 1);
+                const std::string p8 =
+                    p ? reinterpret_cast<const char*>(p) : "";
+                r.path = encoding::utf8_to_wstring(p8);
+                r.mtimeTicks =
+                    static_cast<int64_t>(sqlite3_column_int64(st, 2));
+                r.fsize =
+                    static_cast<uint64_t>(sqlite3_column_int64(st, 3));
+                r.deleted = sqlite3_column_int(st, 4) != 0;
+                docs.push_back(std::move(r));
+            }
+            finalize(st);
+        }
+        logStage("read_docs", docs.size());
+
+        std::vector<size_t> postingCounts;
+        size_t countedWords = 0;
+        if (config_.precountPostings)
+        {
+            postingCounts.resize(id2word.size(), 0);
+            sqlite3_stmt* st = prepare(
+                db_,
+                "SELECT word_id, COUNT(*) "
+                "FROM postings GROUP BY word_id ORDER BY word_id;");
+            while (true)
+            {
+                const int rc = sqlite3_step(st);
+                if (rc == SQLITE_DONE)
+                    break;
+                if (rc != SQLITE_ROW)
+                {
+                    finalize(st);
+                    throwSqlite(db_, "count postings by word", rc);
+                }
+
+                const sqlite3_int64 wid64 = sqlite3_column_int64(st, 0);
+                const sqlite3_int64 count64 = sqlite3_column_int64(st, 1);
+                if (wid64 < 0 ||
+                    static_cast<uint64_t>(wid64) >= postingCounts.size() ||
+                    count64 < 0 ||
+                    static_cast<uint64_t>(count64) >
+                        std::numeric_limits<size_t>::max())
+                {
+                    finalize(st);
+                    throw std::runtime_error(
+                        "SQLite load: invalid posting count row");
+                }
+
+                postingCounts[static_cast<size_t>(wid64)] =
+                    static_cast<size_t>(count64);
+                ++countedWords;
+            }
+            finalize(st);
+        }
+
+        std::vector<std::unique_ptr<InvertedIndex::Chunk>> newChunks;
+        if (!id2word.empty())
+        {
+            const size_t chunkCount =
+                (id2word.size() + InvertedIndex::CHUNK_SIZE - 1) /
+                InvertedIndex::CHUNK_SIZE;
+            newChunks.reserve(chunkCount);
+            for (size_t i = 0; i < chunkCount; ++i)
+                newChunks.push_back(
+                    std::make_unique<InvertedIndex::Chunk>());
+
+            if (config_.precountPostings)
+            {
+                for (size_t wid = 0; wid < postingCounts.size(); ++wid)
+                {
+                    if (postingCounts[wid] == 0)
+                        continue;
+                    const size_t chunkIndex =
+                        wid / InvertedIndex::CHUNK_SIZE;
+                    const size_t localIndex =
+                        wid % InvertedIndex::CHUNK_SIZE;
+                    newChunks[chunkIndex]->bucket[localIndex].reserve(
+                        postingCounts[wid]);
+                }
+            }
+        }
+        LogFile::getIndex().write(
+            "SQLITE_LOAD_RESERVE enabled=" +
+            std::to_string(config_.precountPostings) +
+            " counted_words=" + std::to_string(countedWords));
+        logStage("count_and_reserve_postings", countedWords);
+
+        decltype(idx.wordRefs) newWordRefs;
+        newWordRefs.reserve(docs.size());
+
+        const size_t requestedThreads =
+            static_cast<size_t>(config_.loadThreads);
+        const size_t loadThreads = newChunks.empty()
+            ? 1
+            : std::min(requestedThreads, newChunks.size());
+
+        const auto loadPostingRange =
+            [&](sqlite3* readDb,
+                size_t wordBegin,
+                size_t wordEnd,
+                decltype(idx.wordRefs)* directWordRefs) -> size_t
+        {
+            sqlite3_stmt* st = nullptr;
+            size_t rows = 0;
+            try
+            {
+                st = prepare(
+                    readDb,
+                    "SELECT word_id, doc_id, cnt "
+                    "FROM postings "
+                    "WHERE word_id >= ? AND word_id < ? "
+                    "ORDER BY word_id, doc_id;");
+                sqlite3_bind_int64(
+                    st, 1, static_cast<sqlite3_int64>(wordBegin));
+                sqlite3_bind_int64(
+                    st, 2, static_cast<sqlite3_int64>(wordEnd));
+
+                while (true)
+                {
+                    const int rc = sqlite3_step(st);
+                    if (rc == SQLITE_DONE)
+                        break;
+                    if (rc != SQLITE_ROW)
+                        throwSqlite(readDb, "select postings range", rc);
+
+                    const sqlite3_int64 wid64 =
+                        sqlite3_column_int64(st, 0);
+                    const sqlite3_int64 did64 =
+                        sqlite3_column_int64(st, 1);
+                    const sqlite3_int64 cnt64 =
+                        sqlite3_column_int64(st, 2);
+                    if (wid64 < 0 ||
+                        static_cast<uint64_t>(wid64) >= id2word.size() ||
+                        did64 < 0 ||
+                        static_cast<uint64_t>(did64) >
+                            std::numeric_limits<uint32_t>::max() ||
+                        cnt64 < 0 ||
+                        static_cast<uint64_t>(cnt64) >
+                            std::numeric_limits<uint16_t>::max())
+                    {
+                        throw std::runtime_error(
+                            "SQLite load: invalid posting row");
+                    }
+
+                    const uint32_t wid =
+                        static_cast<uint32_t>(wid64);
+                    const uint32_t did =
+                        static_cast<uint32_t>(did64);
+                    const size_t chunkIndex =
+                        wid / InvertedIndex::CHUNK_SIZE;
+                    const size_t localIndex =
+                        wid % InvertedIndex::CHUNK_SIZE;
+
+                    newChunks[chunkIndex]
+                        ->bucket[localIndex]
+                        .appendSorted(
+                            did,
+                            static_cast<uint16_t>(cnt64));
+                    if (directWordRefs)
+                        (*directWordRefs)[did].push_back(wid);
+                    ++rows;
+                }
+                finalize(st);
+                return rows;
+            }
+            catch (...)
             {
                 finalize(st);
-                throwSqlite(db_, "select words", rc);
+                throw;
             }
+        };
 
-            const int wid = sqlite3_column_int(st, 0);
-            const unsigned char* w = sqlite3_column_text(st, 1);
-            const std::string word = w ? reinterpret_cast<const char*>(w) : "";
-
-            if (wid >= static_cast<int>(id2word.size()))
-                id2word.resize(static_cast<size_t>(wid) + 1);
-            id2word[static_cast<size_t>(wid)] = word;
-        }
-        finalize(st);
-    }
-
-    std::unordered_map<std::string, uint32_t> word2id;
-    word2id.reserve(id2word.size());
-    for (uint32_t wid = 0; wid < static_cast<uint32_t>(id2word.size()); ++wid)
-        word2id.emplace(id2word[wid], wid);
-
-    std::vector<DocPaths::RawRow> docs;
-    {
-        sqlite3_stmt* st = prepare(db_, "SELECT doc_id, path, mtime_ticks, size_int64, deleted FROM docs ORDER BY doc_id;");
-        while (true)
+        if (id2word.empty())
         {
-            const int rc = sqlite3_step(st);
-            if (rc == SQLITE_DONE) break;
-            if (rc != SQLITE_ROW)
-            {
-                finalize(st);
-                throwSqlite(db_, "select docs", rc);
-            }
-
-            DocPaths::RawRow r;
-            r.id = static_cast<uint32_t>(sqlite3_column_int(st, 0));
-            const unsigned char* p = sqlite3_column_text(st, 1);
-            const std::string p8 = p ? reinterpret_cast<const char*>(p) : "";
-            r.path = encoding::utf8_to_wstring(p8);
-            r.mtimeTicks = static_cast<int64_t>(sqlite3_column_int64(st, 2));
-            r.fsize = static_cast<uint64_t>(sqlite3_column_int64(st, 3));
-            r.deleted = sqlite3_column_int(st, 4) != 0;
-            docs.push_back(std::move(r));
+            postingRows = 0;
         }
-        finalize(st);
-    }
-
-    std::vector<PostingList> dictionary;
-    dictionary.resize(id2word.size());
-    {
-        sqlite3_stmt* st = prepare(db_, "SELECT word_id, doc_id, cnt FROM postings ORDER BY word_id, doc_id;");
-        while (true)
+        else if (loadThreads == 1)
         {
-            const int rc = sqlite3_step(st);
-            if (rc == SQLITE_DONE) break;
-            if (rc != SQLITE_ROW)
+            postingRows = loadPostingRange(
+                db_, 0, id2word.size(), &newWordRefs);
+        }
+        else
+        {
+            std::vector<std::thread> readers;
+            std::vector<size_t> rowsByThread(loadThreads, 0);
+            std::vector<std::exception_ptr> errors(loadThreads);
+            readers.reserve(loadThreads);
+
+            for (size_t worker = 0; worker < loadThreads; ++worker)
             {
-                finalize(st);
-                throwSqlite(db_, "select postings", rc);
+                const size_t chunkBegin =
+                    newChunks.size() * worker / loadThreads;
+                const size_t chunkEnd =
+                    newChunks.size() * (worker + 1) / loadThreads;
+                const size_t wordBegin =
+                    chunkBegin * InvertedIndex::CHUNK_SIZE;
+                const size_t wordEnd = std::min(
+                    id2word.size(),
+                    chunkEnd * InvertedIndex::CHUNK_SIZE);
+
+                readers.emplace_back(
+                    [&, worker, wordBegin, wordEnd]
+                    {
+                        sqlite3* readDb = nullptr;
+                        try
+                        {
+                            const int rc = sqlite3_open_v2(
+                                path_.c_str(),
+                                &readDb,
+                                SQLITE_OPEN_READONLY |
+                                    SQLITE_OPEN_NOMUTEX,
+                                nullptr);
+                            if (rc != SQLITE_OK)
+                                throwSqlite(
+                                    readDb,
+                                    "open parallel SQLite reader",
+                                    rc);
+
+                            sqlite3_busy_timeout(readDb, 3000);
+                            exec(readDb, "BEGIN;");
+                            rowsByThread[worker] = loadPostingRange(
+                                readDb,
+                                wordBegin,
+                                wordEnd,
+                                nullptr);
+                            exec(readDb, "COMMIT;");
+                            sqlite3_close(readDb);
+                            readDb = nullptr;
+                        }
+                        catch (...)
+                        {
+                            if (readDb)
+                            {
+                                rollback(readDb);
+                                sqlite3_close(readDb);
+                            }
+                            errors[worker] =
+                                std::current_exception();
+                        }
+                    });
             }
 
-            const uint32_t wid = static_cast<uint32_t>(sqlite3_column_int(st, 0));
-            const uint32_t did = static_cast<uint32_t>(sqlite3_column_int(st, 1));
-            const uint32_t cnt = static_cast<uint32_t>(sqlite3_column_int(st, 2));
+            for (auto& reader : readers)
+                reader.join();
+            for (const auto& error : errors)
+            {
+                if (error)
+                    std::rethrow_exception(error);
+            }
+            for (size_t rows : rowsByThread)
+                postingRows += rows;
 
-            if (wid >= dictionary.size())
-                dictionary.resize(static_cast<size_t>(wid) + 1);
+            // Параллельные читатели владеют непересекающимися чанками.
+            // Обратные ссылки собираем после join, чтобы не синхронизировать
+            // общий unordered_map на каждом постинге.
+            for (size_t chunkIndex = 0;
+                 chunkIndex < newChunks.size();
+                 ++chunkIndex)
+            {
+                const auto& chunk = newChunks[chunkIndex];
+                for (size_t localIndex = 0;
+                     localIndex < chunk->bucket.size();
+                     ++localIndex)
+                {
+                    const uint32_t wid = static_cast<uint32_t>(
+                        chunkIndex * InvertedIndex::CHUNK_SIZE +
+                        localIndex);
+                    if (wid >= id2word.size())
+                        break;
 
-            dictionary[wid][did] += static_cast<uint16_t>(cnt);
+                    for (const Posting& posting :
+                         chunk->bucket[localIndex])
+                    {
+                        newWordRefs[posting.fileId].push_back(wid);
+                    }
+                }
+            }
         }
-        finalize(st);
-    }
 
+        LogFile::getIndex().write(
+            "SQLITE_LOAD_POSTINGS threads=" +
+            std::to_string(loadThreads) +
+            " rows=" + std::to_string(postingRows));
+        logStage("read_postings_and_build_refs", postingRows);
+
+        exec(db_, "COMMIT;");
+        readTransaction = false;
+
+        {
+            std::lock_guard<std::mutex> lock(idx.mapMutex);
+            idx.wordIds.rebuild(std::move(word2id), std::move(id2word));
+            idx.docPaths.rebuildFromRows(std::move(docs));
+            idx.dictionary.clear();
+            idx.dictionary.shrink_to_fit();
+            idx.dictionaryChunks = std::move(newChunks);
+            idx.wordRefs = std::move(newWordRefs);
+        }
+        logStage("install_index", postingRows);
+
+        close();
+    }
+    catch (...)
     {
-        std::lock_guard<std::mutex> lock(idx.mapMutex);
-        idx.wordIds.rebuild(std::move(word2id), std::move(id2word));
-        idx.docPaths.rebuildFromRows(std::move(docs));
-        idx.dictionary = std::move(dictionary);
-
-        idx.rebuildChunksFromDictionary();
-        idx.reconstructWordIts();
+        if (readTransaction)
+            rollback(db_);
+        close();
+        throw;
     }
 
-    close();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - totalStart).count();
+    const double rowsPerSec =
+        elapsedMs > 0
+            ? static_cast<double>(postingRows) * 1000.0 /
+                  static_cast<double>(elapsedMs)
+            : 0.0;
+
+    std::ostringstream totalLog;
+    totalLog.imbue(std::locale::classic());
+    totalLog << "SQLITE_LOAD_TOTAL elapsed_ms=" << elapsedMs
+             << " postings=" << postingRows
+             << " postings_per_sec=" << rowsPerSec;
+    LogFile::getIndex().write(totalLog.str());
 }
 
 } // namespace inverted_index

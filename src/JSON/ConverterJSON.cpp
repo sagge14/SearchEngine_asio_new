@@ -59,6 +59,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
     jsonSettings["config"]["sqlite_mirror_flush_interval_sec"] = val.sqliteMirrorFlushIntervalSec;
     jsonSettings["config"]["sqlite_mirror_max_pending_ops"] = val.sqliteMirrorMaxPendingOps;
+    jsonSettings["config"]["sqlite_load_threads"] = val.sqliteLoadThreads;
+    jsonSettings["config"]["sqlite_precount_postings"] = val.sqlitePrecountPostings;
 
     std::ofstream jsonFileSettings(jsonPath);
     jsonFileSettings << std::setw(2) << jsonSettings;
@@ -290,6 +292,22 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("sqlite_mirror_max_pending_ops").get_to(s.sqliteMirrorMaxPendingOps);
         } else {
             addedFields.push_back("config.sqlite_mirror_max_pending_ops");
+            needsResave = true;
+        }
+
+        // sqlite_load_threads — число параллельных диапазонов при восстановлении
+        if (config.contains("sqlite_load_threads")) {
+            config.at("sqlite_load_threads").get_to(s.sqliteLoadThreads);
+        } else {
+            addedFields.push_back("config.sqlite_load_threads");
+            needsResave = true;
+        }
+
+        // sqlite_precount_postings — предварительный COUNT(*) + reserve
+        if (config.contains("sqlite_precount_postings")) {
+            config.at("sqlite_precount_postings").get_to(s.sqlitePrecountPostings);
+        } else {
+            addedFields.push_back("config.sqlite_precount_postings");
             needsResave = true;
         }
 
