@@ -59,7 +59,7 @@ std::vector<uint8_t> GetSqlJsonAnswearCmd::execute(const std::vector<uint8_t>& _
 
     std::set<std::pair<std::string, Telega::TYPE>> set_num_type;
 
-    std::list<std::pair<std::string, float>> results = server_->getAnswer(request);
+    auto results = server_->getAnswer(request);
 
     std::vector<Telega> telegi;
     telegi.reserve(results.size());
@@ -67,9 +67,9 @@ std::vector<uint8_t> GetSqlJsonAnswearCmd::execute(const std::vector<uint8_t>& _
     Telega::b_prm = Telega::getBases(Telega::TYPE::VHOD);
     Telega::b_prd = Telega::getBases(Telega::TYPE::ISHOD);
 
-    for(const auto& [std_str_file_path,rel]:results)
+    for(const auto& item : results)
     {
-        auto fs_path = std::filesystem::path{std_str_file_path};
+        auto fs_path = std::filesystem::path{item.path};
         auto num = Telega::getNumFromFileName(fs_path);
 
         if(num.empty())
@@ -78,7 +78,7 @@ std::vector<uint8_t> GetSqlJsonAnswearCmd::execute(const std::vector<uint8_t>& _
         auto type= Telega::getTypeFromDir(fs_path);
 
         if((set_num_type.insert({num,type}).second))
-            telegi.emplace_back(fs_path,rel);
+            telegi.emplace_back(fs_path, item.relevance, item.deleted);
     }
 
 

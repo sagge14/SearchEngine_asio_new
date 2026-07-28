@@ -12,7 +12,10 @@ void ContextRuntime::Context::stop() {
 ContextRuntime::ContextRuntime(size_t totalThreads)
     : cpu_pool_(totalThreads > 0
                 ? std::max(size_t(1), static_cast<size_t>(totalThreads))
-                : std::max(size_t(1), std::thread::hardware_concurrency()))
+                : std::max(
+                        size_t(1),
+                        static_cast<size_t>(std::thread::hardware_concurrency())
+                  ))
 {
     calcThreads(totalThreads);
 }

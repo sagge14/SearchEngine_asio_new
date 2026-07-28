@@ -1,6 +1,7 @@
 # игнорируем каталоги сборки (CLion, CMake)
 build/
 cmake-build-*/
+out/
 lib/
 minizip/
 other/

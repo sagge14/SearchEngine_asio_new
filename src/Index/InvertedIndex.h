@@ -22,6 +22,7 @@
 #include <boost/asio/experimental/channel.hpp>
 #include <boost/asio/strand.hpp>
 #include <future>
+#include <memory>
 #include <optional>
 #include <semaphore>
 #include "WordID.h"
@@ -30,6 +31,7 @@
 #include "MyUtils/OEMCase.h"
 
 #include "DocPaths.h"
+#include "IIndexSerializer.h"
 
 namespace search_server
 {
@@ -38,6 +40,9 @@ namespace search_server
 }
 
 namespace inverted_index {
+
+    class BoostIndexSerializer;
+    class SQLiteIndexSerializer;
 
 
     using namespace std;
@@ -69,6 +74,18 @@ namespace inverted_index {
         size_t emptyPostings;    // holes - пустые постинг-листы
         size_t totalFiles;        // docPaths.size()
         size_t memoryBytes;      // примерный размер постингов в памяти
+    };
+
+    enum class IndexSerializationKind {
+        BoostBinary,
+        SQLite
+    };
+
+    struct IndexStorageConfig {
+        IndexSerializationKind kind = IndexSerializationKind::BoostBinary;
+        std::string path = "inverted_index3.dat";
+        double sqliteMirrorFlushIntervalSec = 2.0;
+        int sqliteMirrorMaxPendingOps = 500;
     };
 
     class InvertedIndex {
@@ -173,6 +190,15 @@ namespace inverted_index {
 
         mutable std::vector<PostingList> dictionary;
 
+        IndexStorageConfig storage_{};
+        mutable std::unique_ptr<IIndexSerializer> serializer_;
+
+        void ensureSerializer() const;
+
+        // Доступ сериализатора к внутреннему состоянию (для SQLite/Boost и т.п.)
+        friend class BoostIndexSerializer;
+        friend class SQLiteIndexSerializer;
+
 
         void safeEraseFileInternal(FileId fileId);
         friend class search_server::SearchServer;
@@ -238,10 +264,18 @@ namespace inverted_index {
         PostingList getWordCount(const string& word);
         void dictonaryToLog() const;
         DictionaryStats getStats() const;
+
+        /// Файл с данным id помечен удалённым (исчез с диска), но его след
+        /// сохранён в индексе и продолжает находиться поиском.
+        [[nodiscard]] bool isFileDeleted(uint32_t fileId) const { return docPaths.isDeleted(fileId); }
+
+        /// Путь файла по id (валиден и для удалённых файлов — вечный след).
+        [[nodiscard]] const std::wstring& filePathById(uint32_t fileId) const { return docPaths.pathById(fileId); }
         explicit InvertedIndex(boost::asio::thread_pool& cpu_pool,
                                boost::asio::io_context& io_commit,
                                int maxParallelReaders = 0,
-                               int fileIndexingTimeoutSec = 60);
+                               int fileIndexingTimeoutSec = 60,
+                               IndexStorageConfig storage = {});
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
         ~InvertedIndex();

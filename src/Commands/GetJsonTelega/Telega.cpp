@@ -235,7 +235,7 @@ std::string Telega::getNumFromFileName(const std::filesystem::path& path)
         return {};
 }
 
-Telega::Telega(const std::filesystem::path& _p, float _rel) : Telega(TYPE::NOTTG, _p, _rel) {
+Telega::Telega(const std::filesystem::path& _p, float _rel, bool _deleted) : Telega(TYPE::NOTTG, _p, _rel, _deleted) {
 
     type = getTypeFromDir(_p);
 

@@ -1,6 +1,47 @@
 #include "DocPaths.h"
 #include <fstream>   // для отладочного лога (по желанию)
 
+std::vector<DocPaths::RawRow> DocPaths::exportRows() const
+{
+    std::vector<RawRow> out;
+    out.reserve(path2info.size());
+    for (const auto& [path, info] : path2info)
+    {
+        RawRow r;
+        r.id = info.id;
+        r.path = path;
+        r.fsize = info.fsize;
+        r.mtimeTicks = info.mtime.time_since_epoch().count();
+        r.deleted = info.deleted;
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
+void DocPaths::rebuildFromRows(std::vector<RawRow>&& rows)
+{
+    path2info.clear();
+    id2path.clear();
+
+    uint32_t maxId = 0;
+    for (const auto& r : rows)
+        if (r.id > maxId) maxId = r.id;
+
+    id2path.resize(static_cast<size_t>(maxId) + 1);
+
+    for (auto& r : rows)
+    {
+        if (r.id >= id2path.size())
+            id2path.resize(static_cast<size_t>(r.id) + 1);
+
+        id2path[r.id] = r.path;
+
+        std::filesystem::file_time_type::duration dur{ r.mtimeTicks };
+        std::filesystem::file_time_type mtime{ dur };
+        path2info.emplace(r.path, FileInfo{ mtime, r.fsize, r.id, r.deleted });
+    }
+}
+
 UpdatePack DocPaths::getUpdate(const std::vector<std::wstring>& paths)
 {
     UpdatePack pack;
@@ -19,14 +60,20 @@ UpdatePack DocPaths::getUpdate(const std::vector<std::wstring>& paths)
         {   /* новый файл */
             uint32_t id = nextId();
             id2path.push_back(p);
-            path2info.emplace(p, FileInfo{mtime, fsize, id});
+            path2info.emplace(p, FileInfo{mtime, fsize, id, false});
             pack.added.push_back(id);
         }
         else
         {   /* файл уже был */
-            seen.insert(p);
             auto& info = it->second;
-            if (info.mtime != mtime || info.fsize != fsize)
+            if (info.deleted)
+            {   /* файл вернулся на диск -> реактивация + переиндексация */
+                info.deleted = false;
+                info.mtime = mtime;
+                info.fsize = fsize;
+                pack.updated.push_back(info.id);
+            }
+            else if (info.mtime != mtime || info.fsize != fsize)
             {
                 info.mtime = mtime;
                 info.fsize = fsize;
@@ -36,16 +83,14 @@ UpdatePack DocPaths::getUpdate(const std::vector<std::wstring>& paths)
     }
 
     /* ── 2. ищем исчезнувшие файлы ───────────────────────────────── */
-    for (auto it = path2info.begin(); it != path2info.end(); )
+    /* Вечный след: не удаляем запись, а только помечаем deleted.       */
+    for (auto& [path, info] : path2info)
     {
-        if (!seen.contains(it->first))
+        if (!info.deleted && !seen.contains(path))
         {
-            pack.removed.push_back(it->second.id);
-            id2path[it->second.id].clear();        // tombstone
-            it = path2info.erase(it);
+            info.deleted = true;
+            pack.removed.push_back(info.id);
         }
-        else
-            ++it;
     }
     return pack;
 }
@@ -69,8 +114,26 @@ bool DocPaths::needUpdate(uint32_t id,
 void DocPaths::markRemoved(uint32_t id)
 {
     if (id >= id2path.size() || id2path[id].empty()) return;
-    path2info.erase(id2path[id]);
-    id2path[id].clear();
+    auto it = path2info.find(id2path[id]);
+    if (it != path2info.end())
+        it->second.deleted = true;   // вечный след: путь и метаданные сохраняем
+}
+
+bool DocPaths::isDeleted(uint32_t id) const
+{
+    if (id >= id2path.size() || id2path[id].empty()) return false;
+    auto it = path2info.find(id2path[id]);
+    return it != path2info.end() && it->second.deleted;
+}
+
+bool DocPaths::getInfo(uint32_t id, int64_t& mtimeTicks, uint64_t& fsize) const
+{
+    if (id >= id2path.size() || id2path[id].empty()) return false;
+    auto it = path2info.find(id2path[id]);
+    if (it == path2info.end()) return false;
+    mtimeTicks = it->second.mtime.time_since_epoch().count();
+    fsize = it->second.fsize;
+    return true;
 }
 
 
@@ -91,6 +154,13 @@ DocPaths::upsert(const std::wstring& path,
 
 
     FileInfo& info = it->second;
+    if (info.deleted)                                 // --- вернулся после удаления ---
+    {
+        info.deleted = false;
+        info.mtime = mtime;
+        info.fsize = fsize;
+        return {info.id, true};
+    }
     if (info.mtime != mtime || info.fsize != fsize)   // --- изменился ---
     {
         info.mtime = mtime;

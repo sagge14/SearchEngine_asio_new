@@ -25,6 +25,8 @@
 #include "OEMFastTokenizer.h"
 #include <future>
 #include <psapi.h>
+#include "BoostIndexSerializer.h"
+#include "SQLiteIndexSerializer.h"
 
 static size_t process_memory()
 {
@@ -155,11 +157,18 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
         robin_hood::unordered_map<uint32_t, uint32_t> widMap;
         widMap.reserve(batch.list.size());
 
+        // Для live-зеркала: собираем новые слова (wid >= wordsBefore).
+        const size_t wordsBefore = wordIds.size();
+        std::vector<std::pair<uint32_t, std::string>> newWords;
+
         // 1.1. Преобразуем слова → wid + суммируем counts
         for (auto& [word, count] : batch.list)
         {
             uint32_t wid = wordIds.getId(word);
             widMap[wid] += count;
+
+            if (wid >= wordsBefore)
+                newWords.emplace_back(wid, word);
 
             // wordRefs обновляется здесь (в strand!)
             auto& refv = wordRefs[batch.fileId];
@@ -198,6 +207,34 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
                 if (promise) { try { promise->set_exception(std::current_exception()); } catch (...) {} }
             }
         });
+
+        // 4. Live-зеркало: ставим файл в очередь SQLite (не блокируем strand_).
+        ensureSerializer();
+        if (serializer_ && serializer_->supportsLiveUpdates())
+        {
+            std::vector<std::pair<uint32_t, uint16_t>> widCounts;
+            widCounts.reserve(widMap.size());
+            for (auto& [wid, count] : widMap)
+                widCounts.emplace_back(
+                    wid,
+                    static_cast<uint16_t>(count > 0xFFFFu ? 0xFFFFu : count));
+
+            int64_t mtimeTicks = 0;
+            uint64_t fsize = 0;
+            docPaths.getInfo(batch.fileId, mtimeTicks, fsize);
+            std::wstring path = docPaths.pathById(batch.fileId);
+
+            try {
+                serializer_->writeFile(batch.fileId, path, mtimeTicks, fsize,
+                                       widCounts, newWords, /*wasUpdate*/ true);
+            }
+            catch (const std::exception& e) {
+                addToLog(std::string("processBatch: live enqueue EXCEPTION: ") + e.what());
+            }
+            catch (...) {
+                addToLog("processBatch: live enqueue unknown exception");
+            }
+        }
 
     }
     catch (...)
@@ -368,8 +405,11 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     // 1. diff
     UpdatePack pack = docPaths.getUpdate({ vecPaths.begin(), vecPaths.end() });
 
-    std::vector<FileId> toDelete = pack.removed;
-    toDelete.insert(toDelete.end(), pack.updated.begin(), pack.updated.end());
+    // ВАЖНО (вечный след): для исчезнувших файлов (pack.removed) постинги
+    // НЕ стираем — лишь помечаем deleted. Стирание из памяти нужно только
+    // для изменённых файлов (pack.updated), чтобы заменить старое содержимое.
+    std::vector<FileId> toErase = pack.updated;
+    std::vector<FileId> toMarkDeleted = pack.removed;
 
     std::vector<FileId> toIndex = pack.added;
     toIndex.insert(toIndex.end(), pack.updated.begin(), pack.updated.end());
@@ -382,7 +422,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     addToLog(diffLog.str());
 
     // Нет работы — сразу готовый future
-    if (toDelete.empty() && toIndex.empty())
+    if (toErase.empty() && toMarkDeleted.empty() && toIndex.empty())
     {
         std::promise<void> p;
         p.set_value();
@@ -403,11 +443,29 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
             std::promise<void> delPromise;
             auto delFuture = delPromise.get_future();
 
-            boost::asio::post(strand_, [this, &toDelete, &delPromise]()
+            boost::asio::post(strand_, [this, &toErase, &toMarkDeleted, &delPromise]()
             {
                 try {
-                    for (FileId fileId : toDelete)
+                    // Изменённые файлы: стираем старые постинги в памяти.
+                    for (FileId fileId : toErase)
                         safeEraseFileInternal(fileId);
+
+                    // Исчезнувшие файлы: вечный след — постинги в памяти
+                    // сохраняем, лишь помечаем deleted в зеркале SQLite.
+                    ensureSerializer();
+                    if (serializer_ && serializer_->supportsLiveUpdates())
+                    {
+                        for (FileId fileId : toMarkDeleted)
+                        {
+                            try { serializer_->markFileDeleted(fileId); }
+                            catch (const std::exception& e) {
+                                addToLog(std::string("updateDocumentBase: markFileDeleted EXCEPTION: ") + e.what());
+                            }
+                            catch (...) {
+                                addToLog("updateDocumentBase: markFileDeleted unknown exception");
+                            }
+                        }
+                    }
 
                     addToLog("updateDocumentBase: deletions done");
                     delPromise.set_value();
@@ -535,6 +593,21 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
                  << ", dictionary_memory=" << (stats.memoryBytes / 1024 / 1024) << " MB"
                  << ", process_memory=" << (memBytes / 1024 / 1024) << " MB";
         addToLog(statsLog.str());
+
+        ensureSerializer();
+        if (serializer_ && serializer_->supportsLiveUpdates())
+        {
+            try {
+                serializer_->flushPending();
+                addToLog("updateDocumentBase: sqlite mirror flushPending done");
+            }
+            catch (const std::exception& e) {
+                addToLog(std::string("updateDocumentBase: flushPending EXCEPTION: ") + e.what());
+            }
+            catch (...) {
+                addToLog("updateDocumentBase: flushPending unknown exception");
+            }
+        }
 
         const auto t1 = std::chrono::steady_clock::now();
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
@@ -968,7 +1041,24 @@ void inverted_index::InvertedIndex::saveIndex() const {
     }
 
     try {
-        // Пересобираем dictionary из chunks перед сохранением (если он пустой)
+        ensureSerializer();
+        if (!serializer_) {
+            addToLog("saveIndex() -> ERROR: serializer not configured");
+            return;
+        }
+
+        // Live-зеркало (SQLite): данные уже записаны инкрементально по ходу
+        // индексации/удаления. Полный снапшот не нужен — достаточно сбросить
+        // WAL на диск контрольной точкой. Это убирает пик ОЗУ от материализации.
+        if (serializer_->supportsLiveUpdates()) {
+            serializer_->flushPending();
+            serializer_->checkpoint();
+            addToLog("saveIndex() -> live mirror: flushPending + checkpoint done");
+            return;
+        }
+
+        // Полный снапшот (Boost): стримим из chunks внутри сериализатора,
+        // dictionary материализуем только если он пуст.
         InvertedIndex* nonConstThis = const_cast<InvertedIndex*>(this);
         bool rebuiltFromChunks = false;
         {
@@ -981,21 +1071,11 @@ void inverted_index::InvertedIndex::saveIndex() const {
         addToLog(std::string("saveIndex() -> trace: rebuild_from_chunks=") +
                  (rebuiltFromChunks ? "yes" : "no"));
 
-        // Сохраняем индекс
-        std::ofstream ofs("inverted_index3.dat", std::ios::binary);
-        if (ofs.is_open()) {
-            boost::archive::binary_oarchive oa(ofs);
-            {
-                std::lock_guard<std::mutex> lock(mapMutex);
-                addToLog("saveIndex() -> trace: serialize begin");
-                oa << *this;
-                addToLog("saveIndex() -> trace: serialize end");
-            }
-            ofs.close();
-            addToLog("saveIndex() -> saved successfully");
-        } else {
-            addToLog("saveIndex() -> ERROR: Failed to open file for saving index.");
-        }
+        addToLog("saveIndex() -> trace: serialize begin");
+        serializer_->save(*this);
+        addToLog("saveIndex() -> trace: serialize end");
+
+        addToLog("saveIndex() -> saved successfully");
 
         // Очищаем dictionary после сохранения
         {
@@ -1017,10 +1097,12 @@ inverted_index::InvertedIndex::~InvertedIndex() = default;
 inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                                              boost::asio::io_context& io_commit,
                                              int maxParallelReaders,
-                                             int fileIndexingTimeoutSec)
+                                             int fileIndexingTimeoutSec,
+                                             IndexStorageConfig storage)
         : io_commit_(io_commit)
         , cpu_pool_(cpu_pool)
         , strand_(boost::asio::make_strand(io_commit_))
+        , storage_(std::move(storage))
 {
         maxParallelReaders_ = maxParallelReaders;
         if (maxParallelReaders > 0)
@@ -1031,21 +1113,60 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
         addToLog("InvertedIndex: maxParallelReaders=" +
                  std::to_string(maxParallelReaders) +
                  ", fileIndexingTimeoutSec=" +
-                 std::to_string(fileIndexingTimeoutSec_));
+                 std::to_string(fileIndexingTimeoutSec_) +
+                 ", sqlite_mirror_flush_interval_sec=" +
+                 std::to_string(storage_.sqliteMirrorFlushIntervalSec) +
+                 ", sqlite_mirror_max_pending_ops=" +
+                 std::to_string(storage_.sqliteMirrorMaxPendingOps));
 
-        // Проверка наличия файла с индексом
-        if (std::filesystem::exists("inverted_index3.dat")) {
-            // Если файл существует, загружаем данные
-            std::ifstream ifs("inverted_index3.dat", std::ios::binary);
-            if (ifs.is_open()) {
-                boost::archive::binary_iarchive ia(ifs);
-                ia >> *this; // Загрузка данных через Boost.Serialization
+        ensureSerializer();
+        try {
+            if (serializer_ && serializer_->exists()) {
+                serializer_->load(*this);
+                dictionary.clear();
+                dictionary.shrink_to_fit();
             }
-
-            dictionary.clear();
-            dictionary.shrink_to_fit();
-
+        } catch (const std::exception& e) {
+            addToLog(std::string("InvertedIndex: load EXCEPTION: ") + e.what());
+        } catch (...) {
+            addToLog("InvertedIndex: load unknown exception");
         }
+}
+
+void inverted_index::InvertedIndex::ensureSerializer() const
+{
+    if (serializer_)
+        return;
+
+    switch (storage_.kind)
+    {
+    case IndexSerializationKind::BoostBinary:
+        serializer_ = std::make_unique<BoostIndexSerializer>(storage_.path);
+        break;
+    case IndexSerializationKind::SQLite:
+        serializer_ = std::make_unique<SQLiteIndexSerializer>(
+            storage_.path,
+            LiveMirrorConfig{
+                storage_.sqliteMirrorFlushIntervalSec,
+                storage_.sqliteMirrorMaxPendingOps});
+        break;
+    default:
+        serializer_ = std::make_unique<BoostIndexSerializer>(storage_.path);
+        break;
+    }
+
+    // Для live-зеркала (SQLite) открываем постоянное соединение и
+    // подготавливаем statements заранее.
+    if (serializer_ && serializer_->supportsLiveUpdates())
+    {
+        try { serializer_->openLive(); }
+        catch (const std::exception& e) {
+            addToLog(std::string("ensureSerializer: openLive EXCEPTION: ") + e.what());
+        }
+        catch (...) {
+            addToLog("ensureSerializer: openLive unknown exception");
+        }
+    }
 }
 
 void inverted_index::InvertedIndex::compact(double thresholdPercent)
@@ -1308,64 +1429,25 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
         }
     }
 
-    // помечаем файл как удалённый
+    // Вечный след: помечаем файл как удалённый, но НЕ стираем постинги
+    // (ни в памяти, ни в SQLite). Поиск продолжит находить файл с флагом
+    // "отсутствует". wordRefs сохраняем — пригодится при реактивации/замене.
     boost::asio::post(strand_, [this, id, path]() {
 
-        std::wcout << L"[strand/docPaths] markRemoved: " << path << L" (id=" << id << L")" << std::endl;
+        std::wcout << L"[strand/docPaths] markRemoved (soft, eternal trace): "
+                   << path << L" (id=" << id << L")" << std::endl;
         docPaths.markRemoved(id);
 
-    });
-
-    // чистим постинги и wordRefs
-    boost::asio::post(strand_, [this, id]() {
-
-        std::wcout << L"[strand/dictionary] Starting cleanup for id=" << id << std::endl;
-
-        auto refIt = wordRefs.find(id);
-        if (refIt == wordRefs.end()) {
-            std::wcout << L"[strand/dictionary] Already removed, id=" << id << std::endl;
-            return;
-        }
-
-        const auto &widList = refIt->second;
-
-        std::vector<std::pair<Chunk*, size_t>> targets;
-        targets.reserve(widList.size());
+        ensureSerializer();
+        if (serializer_ && serializer_->supportsLiveUpdates())
         {
-            std::lock_guard<std::mutex> g(mapMutex);
-            for (uint32_t wid : widList)
-            {
-                const size_t chunkIndex = wid / CHUNK_SIZE;
-                const size_t localIndex = wid % CHUNK_SIZE;
-
-                if (chunkIndex >= dictionaryChunks.size())
-                    continue;
-
-                auto& up = dictionaryChunks[chunkIndex];
-                if (!up)
-                    continue;
-
-                targets.emplace_back(up.get(), localIndex);
+            try { serializer_->markFileDeleted(id); }
+            catch (const std::exception& e) {
+                addToLog(std::string("enqueueFileDeletion: markFileDeleted EXCEPTION: ") + e.what());
             }
-        }
-
-        for (auto [chunk, localIndex] : targets)
-        {
-            std::unique_lock<std::shared_mutex> lk(chunk->mutex);
-
-            auto& posting = chunk->bucket[localIndex];
-            posting.erase(id);
-        }
-
-        std::wcout << L"[strand/dictionary] Cleaned "
-                   << widList.size() << L" postings for id=" << id << std::endl;
-
-        auto it = wordRefs.find(id);
-        if (it != wordRefs.end()) {
-            wordRefs.erase(it);
-            std::wcout << L"[strand/wordRefs] Erased id=" << id << std::endl;
-        } else {
-            std::wcout << L"[strand/wordRefs] Already erased id=" << id << std::endl;
+            catch (...) {
+                addToLog("enqueueFileDeletion: markFileDeleted unknown exception");
+            }
         }
     });
 

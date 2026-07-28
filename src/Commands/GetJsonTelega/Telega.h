@@ -27,6 +27,7 @@ struct Telega {
     std::string last_mesto;
     std::string gde_sht;
     float rel;
+    bool deleted{false};   // файл-источник удалён с диска (след в индексе сохранён)
 
     static inline std::vector<std::string> b_prm = {};
     static inline std::vector<std::string> b_prd = {};
@@ -35,7 +36,8 @@ struct Telega {
     static inline std::string year = {};
 
     void initTelega(const std::map<std::string, std::string>& _record);
-    Telega(TYPE _t, const std::filesystem::path& _p, float _rel = 1):type{_t},dir{_p.string()}, rel{_rel}{};
+    Telega(TYPE _t, const std::filesystem::path& _p, float _rel = 1, bool _deleted = false)
+        :type{_t},dir{_p.string()}, rel{_rel}, deleted{_deleted}{};
 
 public:
 
@@ -55,7 +57,7 @@ public:
     static std::string getNumFromFileName(const std::filesystem::path& path);
 
     Telega(const std::map<std::string, std::string>& _record, TYPE _type, float _rel = 1);
-    explicit Telega(const std::filesystem::path& p, float _rel = 1);
+    explicit Telega(const std::filesystem::path& p, float _rel = 1, bool _deleted = false);
 
     Telega& operator==(Telega&& t)
     {

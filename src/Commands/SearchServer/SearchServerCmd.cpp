@@ -15,12 +15,15 @@ std::vector<uint8_t> SoloRequestCmd::getAnswerBytes(const std::string& _request)
 
 
     // Получение ответа от сервера
-    std::list<std::pair<std::string, float>> results = server_->getAnswer(_request);
+    auto results = server_->getAnswer(_request);
 
-    // Запись результатов в строку
+    // Запись результатов в строку.
+    // Формат additive: к прежним "path;relevance" добавлена третья колонка
+    // deleted (1 = файл удалён с диска, след сохранён; 0 = присутствует).
     std::string result_str;
     for (const auto& result : results) {
-        result_str += result.first + ";" + std::to_string(result.second) + "\n";
+        result_str += result.path + ";" + std::to_string(result.relevance) + ";" +
+                      (result.deleted ? "1" : "0") + "\n";
     }
 
     // Преобразование строки в вектор байт

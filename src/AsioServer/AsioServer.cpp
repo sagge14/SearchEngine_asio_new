@@ -244,11 +244,13 @@ boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
         buffer->resize(bytesRead);
 
         boost::system::error_code ec;
-
-        co_await write_channel_.async_send(ec, buffer, boost::asio::use_awaitable);
+        co_await boost::asio::async_write(
+                socket_,
+                boost::asio::buffer(*buffer),
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
 
         if (ec) {
-            search_server::addToLog("sendNextFileChunk channel error: " + ec.message());
+            search_server::addToLog("sendNextFileChunk socket error: " + ec.message());
             stop("file send error");
             co_return;
         }

@@ -160,7 +160,7 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
         if(!settings.dir.empty())
         //    out.emplace_back(to_string(r.fileInd),r.getRelativeIndex());
        // else
-            out.emplace_back(r.filePath,r.getRelativeIndex());
+            out.push_back(AnswerItem{ r.filePath, r.getRelativeIndex(), r.deleted });
 
         i++;
         if(i == settings.maxResponse)
@@ -246,13 +246,13 @@ index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
     settings = (_settings);
     trustSettings();
 
-  //  initWatchers(settings);
-    index = new inverted_index::InvertedIndex(
-            cpu_pool_,
-            io_commit,
-            settings.maxParallelReaders,
-            settings.fileIndexingTimeoutSec);
-    // Создаем поток для update и оборачиваем его в перезапускающий мониторинг
+    inverted_index::IndexStorageConfig cfg;
+    cfg.kind = inverted_index::IndexSerializationKind::SQLite;
+    cfg.path = "inverted_index.sqlite";
+    cfg.sqliteMirrorFlushIntervalSec = settings.sqliteMirrorFlushIntervalSec;
+    cfg.sqliteMirrorMaxPendingOps = settings.sqliteMirrorMaxPendingOps;
+
+    index = new inverted_index::InvertedIndex(cpu_pool, io_commit, settings.maxParallelReaders, settings.fileIndexingTimeoutSec, cfg);
 
 }
 
@@ -386,6 +386,7 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
 
     const std::wstring& wpath = _index->docPaths.pathById(_fileInd);
     filePath = encoding::wstring_to_utf8(wpath);
+    deleted  = _index->isFileDeleted(_fileInd);
 
     auto checkWordAndFileInd = [_index, _fileInd](const std::string& w)
     {
