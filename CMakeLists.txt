@@ -485,6 +485,9 @@ if(BUILD_BACKUP_SERVICE)
     add_executable(
             BackupService
             tools/backup/main.cpp
+            tools/backup/BackupServiceApplication.cpp
+            tools/backup/BackupServiceOptions.cpp
+            tools/backup/BackupWindowsService.cpp
             src/Backup/BackupCache.cpp
             src/Backup/BackupConfig.cpp
             src/Backup/BackupEngine.cpp
@@ -520,7 +523,7 @@ if(BUILD_BACKUP_SERVICE)
             BOOST_SYSTEM_NO_LIB
     )
     if(WIN32)
-        target_link_libraries(BackupService PRIVATE ws2_32)
+        target_link_libraries(BackupService PRIVATE ws2_32 advapi32)
     endif()
     searchengine_configure_target(BackupService)
 endif()
@@ -628,6 +631,8 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/AbstractScheduledTask.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/BackupTask.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/backup/BackupServiceApplication.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/backup/BackupServiceOptions.cpp"
     )
 
     add_executable(SearchEngine_test ${test_sources} ${shared_test_sources})
@@ -638,6 +643,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/lib"
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
             "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/backup"
     )
     target_link_libraries(
             SearchEngine_test

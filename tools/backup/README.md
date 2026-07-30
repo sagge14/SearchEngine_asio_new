@@ -20,6 +20,7 @@ SQLite 3.53.4.
 
 ```text
 BackupService --config Backup.json
+BackupService --console --config Backup.json --data-dir C:\BackupRuntime
 ```
 
 Все задания запускаются сразу, затем повторяются через свой `period_sec`.
@@ -107,3 +108,7 @@ BackupService --config Backup.json --once
 
 Формат снимков и восстановление описаны в
 `docs/BACKUP_SNAPSHOTS.md`.
+
+Запуск под Windows SCM, service account/ACL, несколько экземпляров и
+install/uninstall-скрипты описаны в
+[`WINDOWS_SERVICE.md`](WINDOWS_SERVICE.md).
