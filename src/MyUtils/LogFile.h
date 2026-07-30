@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <mutex>
@@ -13,6 +14,11 @@
 class LogFile
 {
 public:
+    /// Override the log root before the first log object is requested.
+    /// The default remains the historical relative "logs" directory.
+    static void setLogsDirectory(const std::filesystem::path& directory);
+    static std::filesystem::path logsDirectory();
+
     /// Создать каталог logs/ (вызывается автоматически при первом открытии лога).
     static void ensureLogsDir();
 
@@ -50,14 +56,14 @@ public:
 
 private:
     explicit LogFile(const std::string& name);
-    std::string path() const;
+    std::filesystem::path path() const;
     static std::string timestamp();
     std::string toUtf8(const std::wstring& ws) const;
     void ensureCurrentFile();
     static std::string getDatePath();
 
     std::string   name_;
-    std::string   currentPath_;
+    std::filesystem::path currentPath_;
     std::ofstream stream_;
     std::mutex    m_;
 };

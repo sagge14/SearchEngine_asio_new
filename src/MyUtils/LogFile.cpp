@@ -3,15 +3,28 @@
 #include <filesystem>
 
 namespace {
-    std::once_flag g_logsDirOnce;
+    std::mutex g_logsDirectoryMutex;
+    std::filesystem::path g_logsDirectory{"logs"};
+}
+
+void LogFile::setLogsDirectory(const std::filesystem::path& directory)
+{
+    std::lock_guard<std::mutex> lock(g_logsDirectoryMutex);
+    g_logsDirectory = directory.empty()
+        ? std::filesystem::path{"logs"}
+        : directory;
+}
+
+std::filesystem::path LogFile::logsDirectory()
+{
+    std::lock_guard<std::mutex> lock(g_logsDirectoryMutex);
+    return g_logsDirectory;
 }
 
 void LogFile::ensureLogsDir()
 {
-    std::call_once(g_logsDirOnce, []() {
-        std::error_code ec;
-        std::filesystem::create_directories("logs", ec);
-    });
+    std::error_code ec;
+    std::filesystem::create_directories(logsDirectory(), ec);
 }
 
 std::string LogFile::timestamp()
@@ -61,15 +74,14 @@ LogFile::LogFile(const std::string& name) : name_(name), currentPath_()
     ensureCurrentFile();
 }
 
-std::string LogFile::path() const
+std::filesystem::path LogFile::path() const
 {
-    std::string datePath = getDatePath();
-    return "logs/" + datePath + "/" + name_ + ".log";
+    return logsDirectory() / getDatePath() / (name_ + ".log");
 }
 
 void LogFile::ensureCurrentFile()
 {
-    std::string newPath = path();
+    const std::filesystem::path newPath = path();
     
     // Если путь изменился (сменилась дата) или файл не открыт, переоткрываем файл
     if (currentPath_ != newPath || !stream_.is_open()) {
@@ -79,18 +91,8 @@ void LogFile::ensureCurrentFile()
         
         // Создаём структуру папок: logs/YYYY/MM/dd.MM.YYYY/
         std::error_code ec;
-#ifdef _WIN32
-        // На Windows создаем путь через wstring для корректной обработки UTF-8
-        std::wstring wPath = encoding::utf8_to_wstring(newPath);
-        std::filesystem::path fsPath(wPath);
-        std::filesystem::create_directories(fsPath.parent_path(), ec);
-        // Открываем файл через wstring путь
-        stream_.open(fsPath, std::ios::app);
-#else
-        std::filesystem::path fsPath(newPath);
-        std::filesystem::create_directories(fsPath.parent_path(), ec);
+        std::filesystem::create_directories(newPath.parent_path(), ec);
         stream_.open(newPath, std::ios::app);
-#endif
         // Фиксируем C locale, чтобы не появлялись нестандартные разделители тысяч/десятичные.
         stream_.imbue(std::locale::classic());
         currentPath_ = newPath;
@@ -100,7 +102,7 @@ void LogFile::ensureCurrentFile()
         if (stream_.is_open()) {
             stream_ << timestamp()
                     << "LogFile opened: name=" << name_
-                    << " path=" << newPath
+                    << " path=" << newPath.string()
                     << " mode=app"
                     << '\n';
             stream_.flush();
@@ -113,16 +115,9 @@ void LogFile::clear()
     std::lock_guard<std::mutex> lk(m_);
     ensureCurrentFile();
     stream_.close();
-#ifdef _WIN32
-    std::wstring wPath = encoding::utf8_to_wstring(currentPath_);
-    stream_.open(wPath, std::ios::trunc);
-    stream_.close();
-    stream_.open(wPath, std::ios::app);
-#else
     stream_.open(currentPath_, std::ios::trunc);
     stream_.close();
     stream_.open(currentPath_, std::ios::app);
-#endif
 }
 
 void LogFile::write(const std::string& msg)
