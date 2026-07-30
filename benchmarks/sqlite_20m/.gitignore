@@ -1,0 +1,6 @@
+inverted_index.sqlite
+inverted_index.sqlite-*
+generate_sqlite_20m.exe
+generate_sqlite_20m.obj
+generation.log
+generation.err.log
