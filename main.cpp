@@ -74,7 +74,6 @@
 #include "scheduler/TaskID.h"
 #include "scheduler/PeriodicIndexUpdateTask.h"
 #include "scheduler/FlushPendingTask.h"
-#include "scheduler/BackupTask.h"
 #include "scheduler/DelayEventTickTask.h"
 
 
@@ -270,21 +269,6 @@ int main()
             2s,
             scheduler
     );
-
-    // ------------------------------------------------------------------------
-    // Backup tasks
-    // ------------------------------------------------------------------------
-    auto jobs = ConverterJSON::parseBackupJobs("Backup.json");
-    for (const auto& job : jobs) {
-        scheduler.addTask<BackupTask>(
-                TaskId::BackupTask,
-                runtime.scheduler(),
-                runtime.cpu_pool().get_executor(),
-                std::chrono::seconds(job.period_sec),
-                job.backup_dir,
-                job.targets
-        );
-    }
 
     LG("Scheduler initialized");
     LG("All file logs: logs/ (startup, watcher, index, errors, backup, scan, record, ping)");

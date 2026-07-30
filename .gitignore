@@ -1,8 +1,11 @@
 # игнорируем каталоги сборки (CLion, CMake)
 build/
+build_zag_editor*/
 cmake-build-*/
 out/
-lib/
+lib/*
+!lib/backup_sqlite/
+!lib/backup_sqlite/**
 minizip/
 other/
 test/

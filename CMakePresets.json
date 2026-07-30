@@ -11,6 +11,11 @@
       "hidden": true,
       "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "vendor": {
+        "jetbrains.com/clion": {
+          "toolchain": "Visual Studio"
+        }
+      },
       "cacheVariables": {
         "BUILD_SEARCHENGINE": "ON",
         "BUILD_TESTS": "OFF",

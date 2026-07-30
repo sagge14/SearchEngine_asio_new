@@ -35,7 +35,6 @@ typedef std::list<AnswerItem> listAnswer;
 typedef std::list<std::pair<listAnswer, std::string>> listAnswers;
 
 
-class BackupGroup;
 class ConverterJSON {
 
 public:
@@ -61,7 +60,6 @@ public:
     static search_server::Settings getSettings(const std::string& jsonPath = "Settings.json");
     static std::vector<std::string> getRequests(const std::string& jsonPath = "Requests.json");
     static std::vector<std::string> getRequestsFromString(const std::string& jsonString);
-    static std::vector<BackupGroup> parseBackupJobs(const std::string& jsonString = "Backup.json");
     static std::string putAnswers(const listAnswers& answers, const std::string& jsonPath = "Answers.json");
     static void saveAttachPrefixLogin(const PrefixMap &pm, const std::filesystem::path &path);
 };

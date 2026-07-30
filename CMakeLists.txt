@@ -44,6 +44,7 @@ endif()
 option(BUILD_SEARCHENGINE "Build the SearchEngine executable" ON)
 option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
+option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
 option(SEARCHENGINE_ENABLE_AVX2 "Require AVX2 instructions" OFF)
 option(
         SEARCHENGINE_DISABLE_NINJA_MANIFEST
@@ -168,7 +169,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_TESTS OR BUILD_ZAGEDITOR)
+if(BUILD_SEARCHENGINE OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE)
     set(_build_any_target ON)
 endif()
 
@@ -415,6 +416,11 @@ if(BUILD_SEARCHENGINE)
             "${PROJECT_SOURCE_DIR}/src/*.cpp"
             "${PROJECT_SOURCE_DIR}/src/*.c"
     )
+    list(
+            FILTER searchengine_sources
+            EXCLUDE REGEX
+            "/src/Backup/|/src/scheduler/BackupTask\\.cpp$"
+    )
 
     add_executable(SearchEngine ${searchengine_sources} main.cpp)
     target_include_directories(
@@ -470,6 +476,53 @@ if(BUILD_SEARCHENGINE)
     else()
         message(WARNING "PowerShell was not found; versioned post-build copy is disabled")
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# BackupService
+# ---------------------------------------------------------------------------
+if(BUILD_BACKUP_SERVICE)
+    add_executable(
+            BackupService
+            tools/backup/main.cpp
+            src/Backup/BackupCache.cpp
+            src/Backup/BackupConfig.cpp
+            src/Backup/BackupEngine.cpp
+            src/Backup/FileHash.cpp
+            src/Backup/MirrorHistory.cpp
+            src/Backup/SQLiteBackup.cpp
+            lib/backup_sqlite/sqlite3.c
+            src/scheduler/AbstractScheduledTask.cpp
+            src/scheduler/BackupTask.cpp
+            src/MyUtils/LogFile.cpp
+            src/MyUtils/Encoding.cpp
+    )
+    target_include_directories(
+            BackupService
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/backup"
+    )
+    target_link_libraries(
+            BackupService
+            PRIVATE
+            nlohmann_json::nlohmann_json
+            Boost::headers
+    )
+    target_compile_definitions(
+            BackupService
+            PRIVATE
+            BOOST_ALL_NO_LIB
+            BOOST_ERROR_CODE_HEADER_ONLY
+            BOOST_SYSTEM_NO_LIB
+    )
+    if(WIN32)
+        target_link_libraries(BackupService PRIVATE ws2_32)
+    endif()
+    searchengine_configure_target(BackupService)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -544,7 +597,6 @@ if(BUILD_TESTS)
         endforeach()
     endif()
 
-    include(GoogleTest)
     enable_testing()
 
     file(
@@ -552,19 +604,30 @@ if(BUILD_TESTS)
             test_sources
             CONFIGURE_DEPENDS
             "${PROJECT_SOURCE_DIR}/test/*.cpp"
+            "${PROJECT_SOURCE_DIR}/tests/*.cpp"
     )
     if(NOT test_sources)
         message(
                 WARNING
-                "BUILD_TESTS is ON, but no *.cpp files were found under "
-                "${PROJECT_SOURCE_DIR}/test. SearchEngine_test will contain "
+                "BUILD_TESTS is ON, but no *.cpp files were found under test/ "
+                "or tests/. SearchEngine_test will contain "
                 "only GoogleTest's main() and CTest will report no tests."
         )
     endif()
     set(
             shared_test_sources
+              "${PROJECT_SOURCE_DIR}/src/Backup/BackupConfig.cpp"
+              "${PROJECT_SOURCE_DIR}/src/Backup/BackupCache.cpp"
+              "${PROJECT_SOURCE_DIR}/src/Backup/BackupEngine.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Backup/FileHash.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Backup/MirrorHistory.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Backup/SQLiteBackup.cpp"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite/sqlite3.c"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
+            "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
+            "${PROJECT_SOURCE_DIR}/src/scheduler/AbstractScheduledTask.cpp"
+            "${PROJECT_SOURCE_DIR}/src/scheduler/BackupTask.cpp"
     )
 
     add_executable(SearchEngine_test ${test_sources} ${shared_test_sources})
@@ -573,6 +636,7 @@ if(BUILD_TESTS)
             PRIVATE
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
             "${PROJECT_SOURCE_DIR}/src"
     )
     target_link_libraries(
@@ -590,5 +654,5 @@ if(BUILD_TESTS)
         target_link_libraries(SearchEngine_test PRIVATE ws2_32)
     endif()
     searchengine_configure_target(SearchEngine_test)
-    gtest_discover_tests(SearchEngine_test DISCOVERY_MODE PRE_TEST)
+    add_test(NAME SearchEngine_test COMMAND SearchEngine_test)
 endif()

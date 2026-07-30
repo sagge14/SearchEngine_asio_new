@@ -19,7 +19,6 @@
 
 #include "ConverterJSON.h"
 #include "SearchServer/SearchServer.h"
-#include "scheduler/BackupTask.h"
 #include "Commands/GetAttachments/PrefixMap.h"
 #include "Commands/GetJsonTelega/Telega.h"
 
@@ -465,45 +464,6 @@ std::string ConverterJSON::putAnswers(const listAnswers& answers, const std::str
     jsonFileSettings.close();
     return move(ss);
 }
-
-std::vector<BackupGroup> ConverterJSON::parseBackupJobs(const std::string& path) {
-
-    std::ifstream file(path);
-    std::vector<BackupGroup> groups;
-    nh::json jsonData;
-    try {
-        jsonData = nh::json::parse(file);
-    } catch (...) {
-        return groups;
-    }
-
-    if (!jsonData.contains("BackupJobs") || !jsonData["BackupJobs"].is_array())
-        return groups;
-
-    for (const auto& groupJson : jsonData["BackupJobs"]) {
-        try {
-            BackupGroup group;
-            group.backup_dir = groupJson.at("backup_dir").get<std::string>();
-            group.period_sec = groupJson.value("period_sec", 3600);
-            if (!groupJson.contains("targets") || !groupJson["targets"].is_array())
-                continue;
-
-            for (const auto& entry : groupJson["targets"]) {
-                BackupTarget t;
-                t.src = entry.at("src").get<std::string>();
-                t.max_versions = entry.value("max_versions", 5);
-                t.is_directory = entry.value("is_directory", false);
-                group.targets.push_back(std::move(t));
-            }
-            if (!group.targets.empty())
-                groups.push_back(std::move(group));
-        } catch (...) {
-            continue;
-        }
-    }
-    return groups;
-}
-
 
 std::vector<std::string> ConverterJSON::getRequestsFromString(const std::string &jsonString) {
 
