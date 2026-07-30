@@ -35,12 +35,26 @@ std::string getCurrentTime() {
     return std::string(buffer);
 }
 
+static std::string escapeSqlLiteral(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+
+    for (const char ch : value) {
+        escaped.push_back(ch);
+        if (ch == '\'')
+            escaped.push_back('\'');
+    }
+
+    return escaped;
+}
+
 
 [[maybe_unused]] TelegaWay::TelegaWay(const std::string& num, Telega::TYPE _type) {
 
 
     std::string type_str = _type == Telega::TYPE::VHOD ? "1" : "2";
-    auto condition = "where type = " + type_str + " and number = " + num;
+    const std::string sql_num = "'" + escapeSqlLiteral(num) + "'";
+    auto condition = "where type = " + type_str + " and number = " + sql_num;
 
     auto db_way = SQLiteConnectionManager::instance().getConnection(base_way_dir);
     db_way->execSql("select * from way " +  condition);
@@ -51,11 +65,14 @@ std::string getCurrentTime() {
     const std::string currentYear = getCurrentYear();
 
 
-    condition = "where type = " + type_str + " and number = " + num + " and print = 0";
+    condition =
+        "where type = " + type_str +
+        " and print = '0'"
+        " and (trim(number) = " + sql_num +
+        " or trim(number) = trim(coalesce(Sr, '') || ' ' || " + sql_num + "))"
+        " order by ind desc limit 1";
 
-    auto db_f12 = SQLiteConnectionManager::instance().getConnection(base_way_dir);
-    db_way->execSql("select * from way " +  condition);
-
+    auto db_f12 = SQLiteConnectionManager::instance().getConnection(base_f12_dir);
     db_f12->execSql( "select * from tab " +  condition);
 
     if (db_f12->empty())
