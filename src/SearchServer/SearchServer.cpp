@@ -446,6 +446,7 @@ void search_server::Settings::show() const
     else
         std::cout << std::thread::hardware_concurrency() << std::endl;
     std::cout << "Index database update period:\t" << indTime << " seconds" << std::endl;
+    std::cout << "Scan on startup:\t\t" << std::boolalpha << scanOnStartup << std::endl;
     std::cout << "Asio port:\t\t\t" << port << std::endl;
     std::cout << "Show request as text:\t\t" << std::boolalpha << requestText << std::endl;
     std::cout << "Use exact search:\t\t" << std::boolalpha << exactSearch << std::endl;
@@ -463,6 +464,7 @@ search_server::Settings::Settings() {
     exactSearch = false;
     compactThresholdPercent = 5.0;
     saveDictionaryToFile = true;
+    scanOnStartup = true;
 
 }
 

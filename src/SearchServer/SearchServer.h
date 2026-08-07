@@ -117,6 +117,9 @@ namespace search_server {
         double compactThresholdPercent = 5.0;  // Порог для compact (%)
         /// Сохранять inverted_index3.dat; вызывает SearchServer (не InvertedIndex в конце апдейта).
         bool saveDictionaryToFile = true;
+        /// Запускать полный scan/updateStep сразу после старта (после загрузки словаря).
+        /// false = только по таймеру ind_time.
+        bool scanOnStartup = true;
         /// Максимум одновременно читающих файлы воркеров (HDD: 1, SATA SSD: 2-4, NVMe: 4-8).
         /// 0 = без ограничения (текущее поведение, обратная совместимость).
         int maxParallelReaders = 0;

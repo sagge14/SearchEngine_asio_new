@@ -259,7 +259,8 @@ int main()
             runtime.scheduler(),
             runtime.cpu_pool().get_executor(),
             std::chrono::seconds(settings.indTime),
-            &server
+            &server,
+            settings.scanOnStartup
     );
 
     scheduler.addTask<DelayEventTickTask<TaskId>>(

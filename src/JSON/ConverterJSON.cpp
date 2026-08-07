@@ -54,6 +54,7 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
     jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
+    jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
     jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
     jsonSettings["config"]["sqlite_mirror_flush_interval_sec"] = val.sqliteMirrorFlushIntervalSec;
@@ -259,6 +260,14 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("save_dictionary_to_file").get_to(s.saveDictionaryToFile);
         } else {
             addedFields.push_back("config.save_dictionary_to_file");
+            needsResave = true;
+        }
+
+        // scan_on_startup — полный scan/updateStep сразу после загрузки словаря
+        if (config.contains("scan_on_startup")) {
+            config.at("scan_on_startup").get_to(s.scanOnStartup);
+        } else {
+            addedFields.push_back("config.scan_on_startup");
             needsResave = true;
         }
 
