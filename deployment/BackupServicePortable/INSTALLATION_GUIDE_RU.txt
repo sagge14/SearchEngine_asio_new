@@ -1,0 +1,127 @@
+ИНСТРУКЦИЯ: ПЕРЕНОСИМАЯ УСТАНОВКА BACKUP SERVICE
+================================================
+
+Комплект: {{PACKAGE_NAME}}
+Архитектура: {{ARCHITECTURE}}
+Минимальная система: {{MINIMUM_WINDOWS}}
+Пакет VC++ Runtime: {{VC_REDIST_FILE}}
+
+1. ЧТО НУЖНО СКОПИРОВАТЬ
+------------------------
+
+Копируйте на носитель и на целевой компьютер всю папку {{PACKAGE_NAME}}.
+Отдельно взятый BAT или EXE работать не будет: установщик ищет все компоненты
+относительно собственной папки.
+
+{{PACKAGE_NAME}}
+|
+|-- Install-BackupService.bat       установка и переустановка
+|-- Restart-BackupService.bat       перезапуск службы
+|-- Uninstall-BackupService.bat     резервирование и полное удаление
+|-- Verify-Package.bat              проверка SHA-256
+|-- README.txt
+|-- INSTALLATION_GUIDE_RU.txt
+|-- package-manifest.json
+|-- package-checksums.sha256
+|
+|-- app
+|   `-- BackupService.exe           служба нужной архитектуры
+|
+|-- data
+|   |-- Backup.json                 экономный профиль AutoPad (Backup.economical)
+|   `-- logs                        начальный каталог логов
+|
+`-- prerequisites
+    `-- {{VC_REDIST_FILE}}          автономный Microsoft VC++ Runtime
+
+На машине сборки PowerShell используется только упаковщиком. На целевом
+компьютере все версии комплекта работают через BAT и штатные средства Windows.
+
+Firewall не настраивается: BackupService не слушает сеть.
+
+2. ЧТО СДЕЛАТЬ ДО ЗАПУСКА
+-------------------------
+
+1) Распаковать или скопировать комплект на локальный диск. Не запускать прямо
+   из архива и не копировать только отдельные файлы.
+2) Открыть data\Backup.json обычным текстовым редактором (UTF-8).
+3) Проверить backup_dir каждой группы — каталог назначения снимков.
+4) Проверить src каждого target — файлы и каталоги источников.
+5) Создать отсутствующие локальные каталоги назначения.
+6) Для сети указывать UNC-путь вида \\server\share, а не диск Z:.
+7) Запустить Install-BackupService.bat от имени администратора.
+
+Установщик копирует Backup.json в ProgramData как есть. Интерактивного
+редактора заданий нет: пути правятся вручную до установки.
+
+Проверка конфигурации без установки:
+
+  Install-BackupService.bat /validate
+
+или напрямую:
+
+  app\BackupService.exe --validate-config --config data\Backup.json --data-dir data
+
+3. УСТАНОВКА
+------------
+
+Установщик:
+
+1) проверяет SHA-256 комплекта;
+2) вызывает BackupService.exe --validate-config;
+3) устанавливает Microsoft Visual C++ Runtime из prerequisites;
+4) при переустановке останавливает службу и предлагает архив настроек/логов;
+5) копирует программу в Program Files\SearchEngineBackupService\bin;
+6) копирует данные в C:\ProgramData\SearchEngineBackupService;
+7) регистрирует службу SearchEngineBackupService (delayed-auto, recovery);
+8) запускает службу и ждёт состояния RUNNING.
+
+Учётная запись по умолчанию — LocalSystem. Для UNC-путей после установки
+смените учётную запись службы в services.msc на доменную/служебную с правами
+на сеть, src и backup_dir.
+
+4. РАСПОЛОЖЕНИЕ ФАЙЛОВ ПОСЛЕ УСТАНОВКИ
+--------------------------------------
+
+Program Files\SearchEngineBackupService\
+  bin\BackupService.exe
+  README.txt
+  INSTALLATION_GUIDE_RU.txt
+
+C:\ProgramData\SearchEngineBackupService\
+  Backup.json
+  logs\
+
+Снимки и mirror history создаются в backup_dir из Backup.json и не являются
+частью ProgramData.
+
+5. УПРАВЛЕНИЕ
+-------------
+
+  Restart-BackupService.bat
+  Uninstall-BackupService.bat
+  sc query SearchEngineBackupService
+  sc stop SearchEngineBackupService
+  sc start SearchEngineBackupService
+
+Разовый прогон без службы (после установки):
+
+  "C:\Program Files\SearchEngineBackupService\bin\BackupService.exe" --once ^
+    --config "C:\ProgramData\SearchEngineBackupService\Backup.json" ^
+    --data-dir "C:\ProgramData\SearchEngineBackupService"
+
+6. УДАЛЕНИЕ
+-----------
+
+Uninstall-BackupService.bat предлагает архив настроек и логов, затем удаляет
+службу, Program Files и ProgramData. Каталоги backup_dir (снимки, кэш,
+история) не удаляются — их нужно чистить отдельно при необходимости.
+
+7. ЗАМЕЧАНИЯ
+------------
+
+- Не запускайте одновременно economical/Backup.all и перекрывающие их
+  Backup.databases.json / Backup.programs.json на одних и тех же путях.
+- Mapped drive letters службой не видны; установщик отклоняет такие пути.
+- Классический snapshot-профиль Backup.all.json можно подставить при сборке:
+  -ConfigPath tools\backup\configs\autopad\Backup.all.json

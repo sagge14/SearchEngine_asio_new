@@ -1,0 +1,49 @@
+{
+  "Files": [
+    "test_files\\7voysinb.txt",
+    "test_files\\1\\be0er.txt",
+    "test_files\\1\\grendel2.txt",
+    "test_files\\1\\hackrfoe.txt",
+    "test_files\\1\\musijoke.txt"
+  ],
+  "config": {
+    "Name": "mySearchEngine_S",
+    "Version": "1.1",
+    "asio_port": 15006,
+    "compact_threshold_percent": 5.0,
+    "dir": "F:\\12",
+    "dirs": [
+      "F:\\1",
+      "D:\\АПРЕЛЬ",
+      "D:\\МАРТ",
+      "D:\\TLG"
+    ],
+    "exact_search": true,
+    "exclude_dirs": [
+      "D:\\TLG\\OUT"
+    ],
+    "extensions": [
+      "txt",
+      "atl",
+      "shp",
+      ""
+    ],
+    "enable_prm_short_content_autodetect": true,
+    "file_indexing_timeout_sec": 120,
+    "hide_mode": false,
+    "ind_time": 500,
+    "max_parallel_readers": 0,
+    "max_response": 50000,
+    "prd_base_dir": "D:\\BASES_PRD",
+    "prm_base_dir": "D:\\BASES",
+    "save_dictionary_to_file": true,
+    "scan_on_startup": true,
+    "sqlite_load_threads": 4,
+    "sqlite_mirror_flush_interval_sec": 2.0,
+    "sqlite_mirror_max_pending_ops": 500,
+    "sqlite_precount_postings": false,
+    "text_request": true,
+    "thread_count": 4,
+    "year": "2026"
+  }
+}

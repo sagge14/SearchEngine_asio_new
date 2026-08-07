@@ -1,0 +1,361 @@
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+
+set "SERVICE_NAME=SearchEngineBackupService"
+set "DISPLAY_NAME=SearchEngine Backup Service"
+set "TARGET_ARCH={{ARCHITECTURE}}"
+set "PACKAGE_ROOT=%~dp0"
+set "DATA_DIR=%ProgramData%\SearchEngineBackupService"
+set "BINARY=%PACKAGE_ROOT%app\BackupService.exe"
+set "CONFIG_TEMPLATE=%PACKAGE_ROOT%data\Backup.json"
+set "VC_REDIST=%PACKAGE_ROOT%prerequisites\{{VC_REDIST_FILE}}"
+set "ROLLBACK_READY=0"
+set "REINSTALL=0"
+set "BACKUP_MODE=none"
+
+if /I "%TARGET_ARCH%"=="x86" goto :SET_X86_ROOT
+set "PROGRAM_ROOT=%ProgramW6432%"
+if "%PROGRAM_ROOT%"=="" set "PROGRAM_ROOT=%ProgramFiles%"
+goto :ROOT_READY
+
+:SET_X86_ROOT
+set "PROGRAM_ROOT=%ProgramFiles%"
+if not "%ProgramFiles(x86)%"=="" set "PROGRAM_ROOT=%ProgramFiles(x86)%"
+
+:ROOT_READY
+set "INSTALL_ROOT=%PROGRAM_ROOT%\SearchEngineBackupService"
+set "INSTALLED_BIN=%INSTALL_ROOT%\bin"
+
+echo SearchEngineBackupService portable installer ^(%TARGET_ARCH%^)
+echo.
+
+if not exist "%BINARY%" goto :PACKAGE_MISSING
+if not exist "%CONFIG_TEMPLATE%" goto :PACKAGE_MISSING
+if not exist "%VC_REDIST%" goto :PACKAGE_MISSING
+if not exist "%PACKAGE_ROOT%Verify-Package.bat" goto :PACKAGE_MISSING
+
+call "%PACKAGE_ROOT%Verify-Package.bat" /quiet
+if errorlevel 1 goto :PACKAGE_DAMAGED
+
+"%BINARY%" --validate-config --config "%CONFIG_TEMPLATE%" --data-dir "%PACKAGE_ROOT%data"
+if errorlevel 1 goto :CONFIG_INVALID
+
+if /I "%~1"=="/validate" goto :VALIDATED
+
+fsutil.exe dirty query %SystemDrive% >nul 2>&1
+if errorlevel 1 goto :NOT_ADMIN
+
+sc.exe query "%SERVICE_NAME%" >nul 2>&1
+if errorlevel 1 goto :CLEAN_DESTINATION_CHECK
+set "REINSTALL=1"
+echo An installed SearchEngineBackupService was found.
+echo   1 - Reinstall or update it ^(recommended^)
+echo   2 - Cancel
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :CANCELLED
+call :CHOOSE_BACKUP
+if errorlevel 1 goto :CANCELLED
+goto :INSTALL_STEPS
+
+:CLEAN_DESTINATION_CHECK
+call :CHECK_EMPTY_DIRECTORY "%INSTALL_ROOT%"
+if errorlevel 1 goto :INSTALL_NOT_EMPTY
+call :CHECK_EMPTY_DIRECTORY "%DATA_DIR%"
+if errorlevel 1 goto :DATA_NOT_EMPTY
+
+:INSTALL_STEPS
+echo.
+echo Configuration file: %CONFIG_TEMPLATE%
+echo Edit data\Backup.json in the portable folder before installation if paths
+echo must match this computer. The installer copies it into ProgramData as-is.
+echo.
+echo   1 - Continue installation
+echo   2 - Cancel and edit Backup.json
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :CANCELLED
+
+echo [1/6] Installing Microsoft Visual C++ Runtime...
+start "" /wait "%VC_REDIST%" /install /quiet /norestart
+set "REDIST_EXIT=%ERRORLEVEL%"
+if "%REDIST_EXIT%"=="0" goto :REDIST_OK
+if "%REDIST_EXIT%"=="1638" goto :REDIST_OK
+if "%REDIST_EXIT%"=="3010" goto :REDIST_RESTART
+echo Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
+goto :FAILED
+
+:REDIST_RESTART
+echo WARNING: Windows must be restarted after the installation.
+
+:REDIST_OK
+if "%REINSTALL%"=="0" goto :COPY_FILES
+echo [2/6] Stopping the installed service...
+call :STOP_SERVICE
+if errorlevel 1 goto :FAILED
+
+if "%BACKUP_MODE%"=="none" goto :PREPARE_ROLLBACK
+echo [3/6] Exporting the previous settings and logs...
+call :EXPORT_SETTINGS_LOGS
+if errorlevel 1 goto :RESTART_OLD_SERVICE_AND_FAIL
+
+:PREPARE_ROLLBACK
+set "ROLLBACK_INSTALL=%INSTALL_ROOT%.rollback-%RANDOM%-%RANDOM%"
+set "ROLLBACK_DATA=%DATA_DIR%.rollback-%RANDOM%-%RANDOM%"
+if exist "%ROLLBACK_INSTALL%" goto :ROLLBACK_PREPARE_FAILED
+if exist "%ROLLBACK_DATA%" goto :ROLLBACK_PREPARE_FAILED
+if exist "%INSTALL_ROOT%" move "%INSTALL_ROOT%" "%ROLLBACK_INSTALL%" >nul
+if exist "%INSTALL_ROOT%" goto :ROLLBACK_PREPARE_FAILED
+if exist "%DATA_DIR%" move "%DATA_DIR%" "%ROLLBACK_DATA%" >nul
+if exist "%DATA_DIR%" goto :ROLLBACK_PREPARE_FAILED
+set "ROLLBACK_READY=1"
+goto :COPY_FILES
+
+:COPY_FILES
+echo [4/6] Copying application and data files...
+md "%INSTALLED_BIN%" >nul 2>&1
+md "%DATA_DIR%" >nul 2>&1
+md "%DATA_DIR%\logs" >nul 2>&1
+if not exist "%INSTALLED_BIN%\" goto :COPY_FAILED
+if not exist "%DATA_DIR%\" goto :COPY_FAILED
+xcopy.exe "%PACKAGE_ROOT%app\*" "%INSTALLED_BIN%\" /E /I /H /R /Y >nul
+if errorlevel 1 goto :COPY_FAILED
+copy /Y "%PACKAGE_ROOT%README.txt" "%INSTALL_ROOT%\README.txt" >nul
+if errorlevel 1 goto :COPY_FAILED
+copy /Y "%PACKAGE_ROOT%INSTALLATION_GUIDE_RU.txt" "%INSTALL_ROOT%\INSTALLATION_GUIDE_RU.txt" >nul
+if errorlevel 1 goto :COPY_FAILED
+copy /Y "%CONFIG_TEMPLATE%" "%DATA_DIR%\Backup.json" >nul
+if errorlevel 1 goto :COPY_FAILED
+
+"%INSTALLED_BIN%\BackupService.exe" --validate-config --config "%DATA_DIR%\Backup.json" --data-dir "%DATA_DIR%"
+if errorlevel 1 goto :INSTALLED_CONFIG_INVALID
+
+echo [5/6] Registering and configuring the Windows service...
+if "%REINSTALL%"=="1" goto :CONFIG_EXISTING_SERVICE
+sc.exe create "%SERVICE_NAME%" binPath= "\"%INSTALLED_BIN%\BackupService.exe\" --service --service-name \"%SERVICE_NAME%\" --config \"%DATA_DIR%\Backup.json\" --data-dir \"%DATA_DIR%\"" start= delayed-auto DisplayName= "%DISPLAY_NAME%" >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+goto :CONFIGURE_SERVICE_COMMON
+
+:CONFIG_EXISTING_SERVICE
+sc.exe config "%SERVICE_NAME%" binPath= "\"%INSTALLED_BIN%\BackupService.exe\" --service --service-name \"%SERVICE_NAME%\" --config \"%DATA_DIR%\Backup.json\" --data-dir \"%DATA_DIR%\"" start= delayed-auto DisplayName= "%DISPLAY_NAME%" >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+
+:CONFIGURE_SERVICE_COMMON
+sc.exe description "%SERVICE_NAME%" "Scheduled snapshot and SQLite backup service" >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+sc.exe failure "%SERVICE_NAME%" reset= 86400 actions= restart/60000/restart/60000/restart/300000 >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+sc.exe failureflag "%SERVICE_NAME%" 1 >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\%SERVICE_NAME%" /v PreshutdownTimeout /t REG_DWORD /d 1800000 /f >nul
+if errorlevel 1 goto :SERVICE_SETUP_FAILED
+
+echo [6/6] Starting the service...
+sc.exe start "%SERVICE_NAME%" >nul
+if errorlevel 1 goto :SERVICE_START_FAILED
+call :WAIT_FOR_RUNNING
+if errorlevel 1 goto :SERVICE_START_FAILED
+
+if "%ROLLBACK_READY%"=="0" goto :INSTALLED
+rmdir /S /Q "%ROLLBACK_INSTALL%" >nul 2>&1
+if exist "%ROLLBACK_INSTALL%" echo WARNING: old application directory could not be removed: %ROLLBACK_INSTALL%
+rmdir /S /Q "%ROLLBACK_DATA%" >nul 2>&1
+if exist "%ROLLBACK_DATA%" echo WARNING: old data directory could not be removed: %ROLLBACK_DATA%
+set "ROLLBACK_READY=0"
+
+:INSTALLED
+echo.
+echo Installation completed successfully.
+echo Service:     %SERVICE_NAME% ^(RUNNING^)
+echo Application: %INSTALLED_BIN%
+echo Data:        %DATA_DIR%
+echo Config:      %DATA_DIR%\Backup.json
+echo Logs:        %DATA_DIR%\logs
+echo.
+echo Snapshot directories live under backup_dir from Backup.json and are separate
+echo from ProgramData.
+echo.
+pause
+exit /b 0
+
+:VALIDATED
+echo Package and Backup.json validation completed successfully.
+exit /b 0
+
+:CHOOSE_BACKUP
+echo.
+echo Backup before replacing the installed files:
+echo   1 - Settings and logs ^(recommended^)
+echo   2 - Do not create a backup
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :CONFIRM_NO_BACKUP
+set "BACKUP_MODE=settings-logs"
+:READ_BACKUP_DESTINATION
+set "BACKUP_DESTINATION="
+set /p "BACKUP_DESTINATION=Destination disk or folder, for example E:\Backups: "
+if "%BACKUP_DESTINATION%"=="" goto :READ_BACKUP_DESTINATION
+exit /b 0
+:CONFIRM_NO_BACKUP
+echo No backup means that old settings and logs will be deleted
+echo only after the new service reaches RUNNING.
+echo   1 - Cancel ^(recommended^)
+echo   2 - Continue without backup
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 set "BACKUP_MODE=none"
+if errorlevel 2 exit /b 0
+exit /b 1
+
+:EXPORT_SETTINGS_LOGS
+set "STAMP="
+for /f "tokens=1-3 delims=/. " %%A in ("%DATE%") do set "STAMP=%%C%%B%%A"
+for /f "tokens=1-2 delims=:." %%A in ("%TIME%") do set "STAMP=%STAMP%-%%A%%B"
+set "STAMP=%STAMP: =0%"
+set "EXPORT_ROOT=%BACKUP_DESTINATION%\SearchEngineBackupService-reinstall-%STAMP%"
+md "%EXPORT_ROOT%" >nul 2>&1
+if not exist "%EXPORT_ROOT%\" exit /b 1
+if exist "%DATA_DIR%\Backup.json" copy /Y "%DATA_DIR%\Backup.json" "%EXPORT_ROOT%\Backup.json" >nul
+if exist "%DATA_DIR%\logs\" xcopy.exe "%DATA_DIR%\logs\*" "%EXPORT_ROOT%\logs\" /E /I /H /R /Y >nul
+echo Backup exported to: %EXPORT_ROOT%
+exit /b 0
+
+:STOP_SERVICE
+sc.exe stop "%SERVICE_NAME%" >nul 2>&1
+set /a WAIT_SECONDS=0
+:WAIT_STOPPED_LOOP
+sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
+if not errorlevel 1 exit /b 0
+set /a WAIT_SECONDS+=1
+if %WAIT_SECONDS% GEQ 120 goto :OFFER_FORCE_STOP
+ping.exe 127.0.0.1 -n 2 >nul
+goto :WAIT_STOPPED_LOOP
+:OFFER_FORCE_STOP
+echo The service did not stop within 120 seconds.
+echo   1 - Force-terminate its process and continue
+echo   2 - Cancel
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 exit /b 1
+set "SERVICE_PID="
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /I "PID"') do set "SERVICE_PID=%%P"
+set "SERVICE_PID=%SERVICE_PID: =%"
+echo(%SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
+if errorlevel 1 exit /b 1
+taskkill.exe /PID %SERVICE_PID% /T /F >nul 2>&1
+if errorlevel 1 exit /b 1
+ping.exe 127.0.0.1 -n 3 >nul
+sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:WAIT_FOR_RUNNING
+set /a WAIT_SECONDS=0
+:WAIT_RUNNING_LOOP
+sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]4[ ]*RUNNING" >nul
+if not errorlevel 1 exit /b 0
+set /a WAIT_SECONDS+=1
+if %WAIT_SECONDS% GEQ 120 exit /b 1
+ping.exe 127.0.0.1 -n 2 >nul
+goto :WAIT_RUNNING_LOOP
+
+:CHECK_EMPTY_DIRECTORY
+if not exist "%~1\" exit /b 0
+dir /b /a "%~1" 2>nul | findstr.exe "." >nul
+if errorlevel 1 exit /b 0
+exit /b 1
+
+:RESTART_OLD_SERVICE_AND_FAIL
+sc.exe start "%SERVICE_NAME%" >nul 2>&1
+goto :FAILED
+
+:ROLLBACK_PREPARE_FAILED
+echo ERROR: Cannot move the previous installation into rollback directories.
+if exist "%ROLLBACK_INSTALL%" if not exist "%INSTALL_ROOT%" move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
+if exist "%ROLLBACK_DATA%" if not exist "%DATA_DIR%" move "%ROLLBACK_DATA%" "%DATA_DIR%" >nul
+sc.exe start "%SERVICE_NAME%" >nul 2>&1
+goto :FAILED
+
+:COPY_FAILED
+echo ERROR: Cannot copy installation files.
+goto :ROLLBACK_OR_FAIL
+
+:INSTALLED_CONFIG_INVALID
+echo ERROR: Installed Backup.json failed validation.
+goto :ROLLBACK_OR_FAIL
+
+:SERVICE_SETUP_FAILED
+echo ERROR: Cannot configure the Windows service.
+goto :ROLLBACK_OR_FAIL
+
+:SERVICE_START_FAILED
+echo ERROR: The service did not reach RUNNING state within 120 seconds.
+sc.exe query "%SERVICE_NAME%"
+echo Check logs in %DATA_DIR%\logs
+goto :ROLLBACK_OR_FAIL
+
+:ROLLBACK_OR_FAIL
+if "%ROLLBACK_READY%"=="1" goto :ROLLBACK_REINSTALL
+sc.exe query "%SERVICE_NAME%" >nul 2>&1
+if errorlevel 1 goto :FAILED_WITH_FILES
+call :STOP_SERVICE
+sc.exe delete "%SERVICE_NAME%" >nul 2>&1
+goto :FAILED_WITH_FILES
+
+:ROLLBACK_REINSTALL
+echo Restoring the previous working installation...
+call :STOP_SERVICE
+if errorlevel 1 goto :ROLLBACK_STOP_FAILED
+rmdir /S /Q "%INSTALL_ROOT%" >nul 2>&1
+rmdir /S /Q "%DATA_DIR%" >nul 2>&1
+if exist "%INSTALL_ROOT%" goto :ROLLBACK_FILES_FAILED
+if exist "%DATA_DIR%" goto :ROLLBACK_FILES_FAILED
+move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
+move "%ROLLBACK_DATA%" "%DATA_DIR%" >nul
+if not exist "%INSTALL_ROOT%" goto :ROLLBACK_FILES_FAILED
+if not exist "%DATA_DIR%" goto :ROLLBACK_FILES_FAILED
+set "ROLLBACK_READY=0"
+sc.exe start "%SERVICE_NAME%" >nul 2>&1
+echo Previous application and data files were restored.
+goto :FAILED
+
+:ROLLBACK_STOP_FAILED
+echo ERROR: The new service could not be stopped for automatic rollback.
+echo Both rollback directories were preserved:
+echo   %ROLLBACK_INSTALL%
+echo   %ROLLBACK_DATA%
+goto :FAILED
+
+:ROLLBACK_FILES_FAILED
+echo ERROR: Automatic rollback could not replace the new directories.
+echo Rollback data was preserved where possible:
+echo   %ROLLBACK_INSTALL%
+echo   %ROLLBACK_DATA%
+goto :FAILED
+
+:NOT_ADMIN
+echo ERROR: Run Install-BackupService.bat as Administrator.
+goto :FAILED
+:PACKAGE_MISSING
+echo ERROR: The portable package is incomplete. Copy the entire folder again.
+goto :FAILED
+:PACKAGE_DAMAGED
+echo ERROR: Package verification failed. Copy the entire folder again.
+goto :FAILED
+:CONFIG_INVALID
+echo ERROR: data\Backup.json is invalid. Edit paths or restore the package.
+echo Run: app\BackupService.exe --validate-config --config data\Backup.json --data-dir data
+goto :FAILED
+:INSTALL_NOT_EMPTY
+echo ERROR: Application directory is not empty: %INSTALL_ROOT%
+goto :FAILED
+:DATA_NOT_EMPTY
+echo ERROR: Data directory is not empty: %DATA_DIR%
+goto :FAILED
+:FAILED_WITH_FILES
+echo Partial files were preserved for diagnostics:
+echo   %INSTALL_ROOT%
+echo   %DATA_DIR%
+:FAILED
+echo.
+echo Installation failed. Read the error above.
+pause
+exit /b 1
+:CANCELLED
+echo Installation cancelled. No installed files were changed.
+exit /b 1

@@ -24,6 +24,11 @@ cmake --build --preset windows-x64-release
 Для Win32 использовать `windows-x86` и `windows-x86-release`. Сборочные
 каталоги находятся под `out/build` и не должны попадать в Git.
 
+App-версия portable-релизов: `app-version.json` /
+`app-version.<Product>.json` → PE VERSIONINFO через
+`cmake/generated/<Product>/`. Release naming и bump — в
+`docs/BUILDING_WINDOWS.md` и `scripts/Build-*Package.ps1`.
+
 - Основные цели: `SearchEngine`, `BackupService` и `ZagEditor`.
 - `BUILD_TESTS` по умолчанию выключен. Запускать CTest только после явной
   конфигурации с тестами и не считать пустой набор тестов успешной проверкой.
@@ -42,6 +47,13 @@ cmake --build --preset windows-x64-release
   источника и контрольной суммы.
 - Существующий untracked-каталог `.cursor\` принадлежит пользовательской среде:
   не читать его содержимое, не добавлять и не удалять.
+
+## BackupRestore GUI
+
+- Консольное ядро восстановления: цель `BackupRestore` / `BackupRestoreCore`.
+- Задача сделать VCL/FMX GUI поверх ядра: следовать
+  [`docs/BACKUP_RESTORE_GUI_AGENT_GUIDE.md`](docs/BACKUP_RESTORE_GUI_AGENT_GUIDE.md).
+  Не дублировать парсинг манифестов и не линковать MSVC `.lib` в RAD Studio.
 
 ## Проверка результата
 

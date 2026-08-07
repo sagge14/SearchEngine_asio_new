@@ -21,6 +21,34 @@ cmake --build --preset windows-x64-debug
 Не используйте один build-каталог для разных архитектур или генераторов.
 Presets размещают их раздельно в `out/build/`.
 
+## App-версия и release-пакеты
+
+Канон версии продукта — `app-version.json` (SearchEngineService) и
+`app-version.<Product>.json` для BackupService / ZagEditor / BackupRestore.
+
+- Формат: `major.minor.patch`
+- PE: `ProductVersion=A.B.C`, `FileVersion=A.B.C.0`
+- Generated resources: `cmake/generated/<Product>/*_version.rc`
+- Имена EXE **не** меняются (`SearchEngine.exe`, не `SearchEngine_v001.exe` в
+  portable/ZIP; legacy `copy_with_version.ps1` к release naming не относится)
+
+Release-сборка одного продукта (bump patch → build → package → cloud при
+настроенном `WORKSPACE_RELEASE_CLOUD_ROOT`):
+
+```powershell
+.\scripts\Build-SearchEngineServicePackage.ps1 -Architecture x64
+```
+
+Локальный пакет и ZIP на Drive:
+
+```text
+out\package\<A.B.C>\SearchEngineService-x64\
+Releases\SearchEngineService\<A.B.C>\SearchEngineService-x64-<A.B.C>.zip
+```
+
+IDE/PostBuild упаковывает текущую версию **без** bump. Чтобы собрать без
+увеличения patch: `-SkipVersionBump`. Без облака: `-SkipCloudPublish`.
+
 ## Требуемые локальные зависимости
 
 По умолчанию CMake использует:

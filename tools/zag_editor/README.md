@@ -39,3 +39,24 @@ input_files=D:\one.zag
 ZagEditor --config zag_editor.ini --dict D:\BASES_PRD\EXPORT.INI --no-backup  D:\TEMP_ZAG  D:\one.zag
 ```
 
+### Portable package и Google Drive
+
+После Release-пересборки цели `ZagEditor` в presets `windows-x64` /
+`windows-x86` / `windows7-x86` PostBuild вызывает
+`scripts\PostBuild-ZagEditorPackage.ps1` → `New-ZagEditorPackage.ps1` и при
+заданном `WORKSPACE_RELEASE_CLOUD_ROOT` публикует ZIP в
+`...\ZagEditor\<yyyy.MM.dd>\`.
+
+```powershell
+cmake --build --preset windows-x64-release --target ZagEditor
+# → out\package\ZagEditor-x64 + Drive ZIP
+
+.\scripts\New-ZagEditorPackage.ps1 -Architecture x64
+.\scripts\Build-ZagEditorPackage.ps1 -Architecture x86-modern
+```
+
+В пакет входят `app\ZagEditor.exe`, шаблоны `data\zag_editor.ini` /
+`data\EXPORT.INI` (заменить на рабочий словарь), VC++ Redistributable и
+`Run-ZagEditor.bat`. Production `EXPORT.INI` и пути `D:\BASES_PRD\...` в
+пакет не кладутся.
+
