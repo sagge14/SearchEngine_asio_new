@@ -21,9 +21,62 @@
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
 #include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include <mutex>
+#include <algorithm>
 #include <boost/concept_check.hpp>
 
 using boost::asio::ip::tcp;
+
+bool asio_server::ServerActivity::tryStartCommand()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (stopping)
+        return false;
+    ++active_commands;
+    return true;
+}
+
+void asio_server::ServerActivity::finishCommand() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (active_commands > 0)
+        --active_commands;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+bool asio_server::ServerActivity::tryStartSession()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (stopping)
+        return false;
+    ++active_sessions;
+    return true;
+}
+
+void asio_server::ServerActivity::finishSession() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (active_sessions > 0)
+        --active_sessions;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+void asio_server::ServerActivity::stopAccepting() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    stopping = true;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+void asio_server::ServerActivity::wait()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [this]() {
+        return active_commands == 0 && active_sessions == 0;
+    });
+}
 
 void asio_server::session::start()
 {
@@ -115,22 +168,41 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                 co_return;
             }
 
-            co_spawn(
+            if (!activity_ || !activity_->tryStartCommand()) {
+                command_running_ = false;
+                co_return;
+            }
+
+            try {
+                co_spawn(
                     cpu_pool_,
                     [self = shared_from_this()]() -> boost::asio::awaitable<void> {
-                        try {
-                            co_await self->commandExec();
-                        } catch (const std::exception& e) {
-                            search_server::addToLog(
-                                    std::string("commandExec failed: ") + e.what()
-                            );
-                        }
-
-                        self->command_running_ = false;
+                        co_await self->commandExec();
                         co_return;
                     },
-                    boost::asio::detached
-            );
+                    [self = shared_from_this()](const std::exception_ptr& eptr) {
+                        if (eptr) {
+                            try { std::rethrow_exception(eptr); }
+                            catch (const std::exception& e) {
+                                search_server::addToLog(
+                                    std::string("commandExec failed: ") + e.what()
+                                );
+                            }
+                            catch (...) {
+                                search_server::addToLog(
+                                    "commandExec failed: unknown exception"
+                                );
+                            }
+                        }
+                        self->command_running_ = false;
+                        self->activity_->finishCommand();
+                    }
+                );
+            } catch (...) {
+                command_running_ = false;
+                activity_->finishCommand();
+                throw;
+            }
 
 
 
@@ -150,10 +222,21 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
 
 void asio_server::session::stop(const char* why)
 {
+    auto self = shared_from_this();
+    boost::asio::dispatch(
+        socket_.get_executor(),
+        [self, reason = std::string(why ? why : "unspecified")]() {
+            self->stopOnExecutor(reason);
+        }
+    );
+}
+
+void asio_server::session::stopOnExecutor(const std::string& why)
+{
     // идемпотентно
     if (stopped_.exchange(true)) return;
 
-    search_server::addToLog(std::string("Session stop: ") + why + " " + getRemoteIP());
+    search_server::addToLog("Session stop: " + why + " " + getRemoteIP());
 
     boost::system::error_code ec;
 
@@ -168,6 +251,7 @@ void asio_server::session::stop(const char* why)
 
     // 3) логировать DISCONNECT один раз
     logutil::log(userName_, "EMPTY", "DISCONNECT");
+    finishSession();
 }
 
 
@@ -207,6 +291,7 @@ boost::asio::awaitable<void> asio_server::session::writeLoop()
 
 asio_server::session::~session()
 {
+    finishSession();
     boost::system::error_code ec;
     if (socket_.is_open()) {
         socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
@@ -348,7 +433,10 @@ boost::asio::awaitable<void>  asio_server::session::commandExec() {
 }
 
 std::string asio_server::session::getRemoteIP() const {
-    boost::asio::ip::tcp::endpoint remote_ep = socket_.remote_endpoint();
+    boost::system::error_code ec;
+    boost::asio::ip::tcp::endpoint remote_ep = socket_.remote_endpoint(ec);
+    if (ec)
+        return "<disconnected>";
     boost::asio::ip::address remote_ad = remote_ep.address();
 
     return remote_ad.to_string();
@@ -416,13 +504,56 @@ std::string asio_server::Interface::getYear() {
 }
 
 void asio_server::AsioServer::do_accept() {
+    if (stopping_.load(std::memory_order_acquire))
+        return;
+
     acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
-                if (!ec)
-                    std::make_shared<session>(std::move(socket), cpu_pool_)->start();
+                if (!ec && !stopping_.load(std::memory_order_acquire)) {
+                    if (activity_->tryStartSession()) {
+                        bool session_created = false;
+                        try {
+                            auto new_session = std::make_shared<session>(
+                                std::move(socket),
+                                cpu_pool_,
+                                activity_
+                            );
+                            session_created = true;
+                            {
+                                std::lock_guard<std::mutex> lock(sessions_mutex_);
+                                std::erase_if(sessions_, [](const auto& item) {
+                                    return item.expired();
+                                });
+                                sessions_.push_back(new_session);
+                            }
+                            new_session->start();
+                        } catch (...) {
+                            if (!session_created)
+                                activity_->finishSession();
+                            search_server::addToLog(
+                                "failed to create or start client session"
+                            );
+                        }
+                    }
+                } else if (ec != boost::asio::error::operation_aborted &&
+                           !stopping_.load(std::memory_order_acquire)) {
+                    search_server::addToLog(
+                        std::string("accept failed: ") + ec.message()
+                    );
+                }
 
-                do_accept();
+                if (!stopping_.load(std::memory_order_acquire))
+                    do_accept();
             });
+}
+
+void asio_server::session::finishSession() noexcept
+{
+    if (!session_finished_.exchange(true, std::memory_order_acq_rel) &&
+        activity_)
+    {
+        activity_->finishSession();
+    }
 }
 
 asio_server::AsioServer::AsioServer(
@@ -433,8 +564,43 @@ asio_server::AsioServer::AsioServer(
         : net_io_(net_io)
         , cpu_pool_(cpu_pool)
         , acceptor_(net_io_, tcp::endpoint(tcp::v4(), port))
+        , activity_(std::make_shared<ServerActivity>())
 {
     do_accept();
+}
+
+asio_server::AsioServer::~AsioServer()
+{
+    stop();
+}
+
+void asio_server::AsioServer::stop()
+{
+    if (stopping_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    activity_->stopAccepting();
+
+    boost::system::error_code ec;
+    acceptor_.cancel(ec);
+    acceptor_.close(ec);
+
+    std::vector<std::shared_ptr<session>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions.reserve(sessions_.size());
+        for (auto& item : sessions_)
+            if (auto active = item.lock())
+                sessions.push_back(std::move(active));
+        sessions_.clear();
+    }
+    for (auto& active : sessions)
+        active->stop("server shutdown");
+}
+
+void asio_server::AsioServer::wait()
+{
+    activity_->wait();
 }
 
 
@@ -468,4 +634,11 @@ bool asio_server::session::safe_send_to_channel(T&& item) {
         return false;
     }
     return true;
+}
+
+void asio_server::Interface::shutdown()
+{
+    cmdMap.clear();
+    searchServer_ = nullptr;
+    year_.clear();
 }

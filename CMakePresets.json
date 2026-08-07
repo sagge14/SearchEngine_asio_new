@@ -18,6 +18,7 @@
       },
       "cacheVariables": {
         "BUILD_SEARCHENGINE": "ON",
+        "BUILD_CONFIG_TOOL": "ON",
         "BUILD_TESTS": "OFF",
         "BUILD_ZAGEDITOR": "ON",
         "SEARCHENGINE_ENABLE_AVX2": "OFF"
@@ -48,6 +49,27 @@
         "SEARCHENGINE_BOOST_ROOT": "C:/Boost/windows32",
         "SEARCHENGINE_OPENSSL_ROOT": "C:/Program Files (x86)/OpenSSL-Win32"
       }
+    },
+    {
+      "name": "windows7-x86",
+      "displayName": "Windows 7 SP1 x86 (Visual Studio 2019 v142)",
+      "generator": "Visual Studio 16 2019",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "architecture": {
+        "value": "Win32",
+        "strategy": "set"
+      },
+      "cacheVariables": {
+        "BUILD_SEARCHENGINE": "ON",
+        "BUILD_CONFIG_TOOL": "ON",
+        "BUILD_TESTS": "OFF",
+        "BUILD_ZAGEDITOR": "ON",
+        "BUILD_BACKUP_SERVICE": "ON",
+        "SEARCHENGINE_ENABLE_AVX2": "OFF",
+        "SEARCHENGINE_WINDOWS_TARGET_VERSION": "0x0601",
+        "SEARCHENGINE_BOOST_ROOT": "C:/Boost/windows32",
+        "SEARCHENGINE_OPENSSL_ROOT": "C:/Program Files (x86)/OpenSSL-Win32"
+      }
     }
   ],
   "buildPresets": [
@@ -69,6 +91,11 @@
     {
       "name": "windows-x86-release",
       "configurePreset": "windows-x86",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows7-x86-release",
+      "configurePreset": "windows7-x86",
       "configuration": "Release"
     }
   ]

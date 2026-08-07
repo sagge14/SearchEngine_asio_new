@@ -2,7 +2,6 @@
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
-#include <boost/asio/detached.hpp>
 #include <boost/asio/experimental/channel.hpp>
 #include <boost/asio.hpp>
 #include <cstdint>
@@ -11,6 +10,10 @@
 #include <variant>
 #include <map>
 #include <queue>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <unordered_set>
 #include "Commands/Command.h"
 
 
@@ -88,6 +91,21 @@ namespace asio_server
 /** ------------------------session_START------------------------ **/
     class Interface;
 
+    struct ServerActivity {
+        bool tryStartCommand();
+        void finishCommand() noexcept;
+        bool tryStartSession();
+        void finishSession() noexcept;
+        void stopAccepting() noexcept;
+        void wait();
+
+        std::mutex mutex;
+        std::condition_variable condition;
+        std::size_t active_commands{0};
+        std::size_t active_sessions{0};
+        bool stopping{false};
+    };
+
     class session : public std::enable_shared_from_this<session>
     {
         /// Буфер ответов: 1 = минимум (тест), 4–8 = меньше блокировок commandExec и надёжнее доставка try_send(ошибок)
@@ -108,6 +126,8 @@ namespace asio_server
         std::string userName_ = "default_user";
         std::atomic_bool stopped_{false};
         std::atomic<bool> command_running_{false};
+        std::atomic<bool> session_finished_{false};
+        std::shared_ptr<ServerActivity> activity_;
 
 
         std::unique_ptr<std::ifstream> file_stream;
@@ -117,7 +137,8 @@ namespace asio_server
         boost::asio::awaitable<void> commandExec();
         bool trustCommand();
         std::string getRemoteIP() const;
-        void stop(const char* why);
+        void stopOnExecutor(const std::string& why);
+        void finishSession() noexcept;
 
         template<typename T>
         bool safe_send_to_channel(T&& item);
@@ -135,9 +156,13 @@ namespace asio_server
     public:
 
         void start();
-        explicit session(tcp::socket socket, boost::asio::thread_pool& cpu_pool)
+        void stop(const char* why);
+        explicit session(tcp::socket socket,
+                         boost::asio::thread_pool& cpu_pool,
+                         std::shared_ptr<ServerActivity> activity)
             :socket_(std::move(socket))
             ,cpu_pool_(cpu_pool)
+            ,activity_(std::move(activity))
             ,write_channel_(socket_.get_executor(), kWriteChannelCapacity){};
        ~session();
 
@@ -151,6 +176,10 @@ namespace asio_server
                     boost::asio::thread_pool& cpu_pool,
                     unsigned short port
             );
+            ~AsioServer();
+
+            void stop();
+            void wait();
 
         private:
 
@@ -159,6 +188,10 @@ namespace asio_server
             boost::asio::io_context& net_io_;
             boost::asio::thread_pool& cpu_pool_;
             tcp::acceptor acceptor_;
+            std::atomic<bool> stopping_{false};
+            std::shared_ptr<ServerActivity> activity_;
+            std::mutex sessions_mutex_;
+            std::vector<std::weak_ptr<session>> sessions_;
     };
 /** ------------------------session_END------------------------ **/
 
@@ -173,6 +206,7 @@ namespace asio_server
         static void setYear(const std::string& year);
         static std::string getYear();
         static void setSearchServer(search_server::SearchServer* _server);
+        static void shutdown();
         static void setCommand(COMMAND command, std::unique_ptr<Command> myCmd);
         static std::vector<uint8_t> execCommand(COMMAND _command, std::vector<uint8_t>& _request);
     };

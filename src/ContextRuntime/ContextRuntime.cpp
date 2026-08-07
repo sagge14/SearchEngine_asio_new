@@ -34,6 +34,10 @@ void ContextRuntime::calcThreads([[maybe_unused]] size_t totalThreads) {
 }
 
 void ContextRuntime::start() {
+    bool expected = false;
+    if (!started_.compare_exchange_strong(expected, true))
+        return;
+
     auto run = [this](Context& ctx, size_t count) {
         for (size_t i = 0; i < count; ++i) {
 
@@ -55,6 +59,13 @@ void ContextRuntime::start() {
 }
 
 void ContextRuntime::stop() {
+    if (stopped_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    // All producers are stopped by SearchEngineApplication before this call.
+    // join() drains queued CPU work; stop() would discard it.
+    cpu_pool_.join();
+
     net_.stop();
     scheduler_.stop();
     commit_.stop();

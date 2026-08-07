@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <atomic>
 
 
 
@@ -47,4 +48,6 @@ private:
     // Размер задаётся из ctor: 0 = по числу ядер (авто), иначе из конфига (thread_count).
     // Resize пула в рантайме Boost.Asio не поддерживает.
     boost::asio::thread_pool cpu_pool_;
+    std::atomic<bool> started_{false};
+    std::atomic<bool> stopped_{false};
 };

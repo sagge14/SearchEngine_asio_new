@@ -38,3 +38,9 @@ logs/
 
 # если не хочешь игнорировать src/
 !src/
+
+# IDE agent plans
+.cursor/
+
+# Generated Win32 version resources (rebuilt from app-version*.json)
+cmake/generated/

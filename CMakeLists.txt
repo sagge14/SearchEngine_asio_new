@@ -29,6 +29,8 @@ endif()
 
 project(SearchEngine LANGUAGES C CXX)
 
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/Win32VersionInfo.cmake")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -42,9 +44,16 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(BUILD_SEARCHENGINE "Build the SearchEngine executable" ON)
+option(BUILD_CONFIG_TOOL "Build the portable SearchEngineConfig helper" ${WIN32})
 option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
+option(BUILD_BACKUP_RESTORE "Build the BackupRestore CLI and core library" ON)
+option(
+        SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
+        "After Release build of SearchEngine/BackupService/ZagEditor/BackupRestore in packagable presets (windows-x64, windows-x86, windows7-x86), run New-*Package and cloud-publish when configured"
+        ON
+)
 option(SEARCHENGINE_ENABLE_AVX2 "Require AVX2 instructions" OFF)
 option(
         SEARCHENGINE_DISABLE_NINJA_MANIFEST
@@ -169,7 +178,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE)
+if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE)
     set(_build_any_target ON)
 endif()
 
@@ -185,6 +194,40 @@ if(_build_any_target)
         )
     endif()
     add_subdirectory(lib/nlohmann_json EXCLUDE_FROM_ALL)
+endif()
+
+# ---------------------------------------------------------------------------
+# Portable configuration and installation helper
+# ---------------------------------------------------------------------------
+if(BUILD_CONFIG_TOOL)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SearchEngineConfig currently supports Windows only")
+    endif()
+
+    add_executable(SearchEngineConfig tools/config/main.cpp)
+    target_include_directories(
+            SearchEngineConfig
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/lib"
+    )
+    target_link_libraries(
+            SearchEngineConfig
+            PRIVATE
+            nlohmann_json::nlohmann_json
+            ws2_32
+    )
+    target_compile_definitions(
+            SearchEngineConfig
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    searchengine_configure_target(SearchEngineConfig)
+    searchengine_target_win32_versioninfo(
+            SearchEngineConfig
+            PRODUCT_NAME "SearchEngineService"
+            ORIGINAL_FILENAME "SearchEngineConfig.exe"
+    )
 endif()
 
 # ---------------------------------------------------------------------------
@@ -241,7 +284,7 @@ set(
         "Boost.Build toolset tag, for example vc143 or vc142"
 )
 
-if(_build_any_target)
+if(BUILD_SEARCHENGINE OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE)
     set(Boost_USE_STATIC_LIBS ON)
     set(Boost_USE_STATIC_RUNTIME OFF)
     set(Boost_USE_MULTITHREADED ON)
@@ -443,9 +486,14 @@ if(BUILD_SEARCHENGINE)
             SearchEngine::utf8proc
     )
     if(WIN32)
-        target_link_libraries(SearchEngine PRIVATE ws2_32)
+        target_link_libraries(SearchEngine PRIVATE ws2_32 advapi32)
     endif()
     searchengine_configure_target(SearchEngine)
+    searchengine_target_win32_versioninfo(
+            SearchEngine
+            PRODUCT_NAME "SearchEngineService"
+            ORIGINAL_FILENAME "SearchEngine.exe"
+    )
 
     if(
             MSVC
@@ -476,6 +524,24 @@ if(BUILD_SEARCHENGINE)
     else()
         message(WARNING "PowerShell was not found; versioned post-build copy is disabled")
     endif()
+endif()
+
+# Portable package + optional Drive publish after Release builds of the
+# service targets. Packagable presets:
+#   windows-x64      → x64
+#   windows-x86      → x86-modern (VS2022/v143)
+#   windows7-x86     → x86 (Win7/v142 portable)
+get_filename_component(_searchengine_package_preset "${CMAKE_BINARY_DIR}" NAME)
+set(_searchengine_package_arch "")
+if(_searchengine_package_preset STREQUAL "windows-x64")
+    set(_searchengine_package_arch "x64")
+elseif(_searchengine_package_preset STREQUAL "windows-x86")
+    set(_searchengine_package_arch "x86-modern")
+elseif(_searchengine_package_preset STREQUAL "windows7-x86")
+    set(_searchengine_package_arch "x86")
+endif()
+if(NOT _powershell_executable)
+    find_program(_powershell_executable NAMES pwsh powershell)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -526,6 +592,150 @@ if(BUILD_BACKUP_SERVICE)
         target_link_libraries(BackupService PRIVATE ws2_32 advapi32)
     endif()
     searchengine_configure_target(BackupService)
+    searchengine_target_win32_versioninfo(
+            BackupService
+            PRODUCT_NAME "BackupService"
+            ORIGINAL_FILENAME "BackupService.exe"
+    )
+endif()
+
+if(
+        WIN32
+        AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
+        AND _searchengine_package_arch
+        AND _powershell_executable
+)
+    if(TARGET SearchEngine)
+        if(TARGET SearchEngineConfig)
+            add_dependencies(SearchEngine SearchEngineConfig)
+        endif()
+        add_custom_command(
+                TARGET SearchEngine
+                POST_BUILD
+                COMMAND
+                "${_powershell_executable}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${CMAKE_SOURCE_DIR}/scripts/PostBuild-SearchEngineServicePackage.ps1"
+                -Architecture
+                "${_searchengine_package_arch}"
+                -BuildDirectory
+                "$<TARGET_FILE_DIR:SearchEngine>"
+                -Configuration
+                "$<CONFIG>"
+                VERBATIM
+                COMMENT
+                "Packaging SearchEngineService ${_searchengine_package_arch} and publishing when cloud root is configured"
+        )
+    endif()
+    if(TARGET BackupService)
+        add_custom_command(
+                TARGET BackupService
+                POST_BUILD
+                COMMAND
+                "${_powershell_executable}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${CMAKE_SOURCE_DIR}/scripts/PostBuild-BackupServicePackage.ps1"
+                -Architecture
+                "${_searchengine_package_arch}"
+                -BuildDirectory
+                "$<TARGET_FILE_DIR:BackupService>"
+                -Configuration
+                "$<CONFIG>"
+                VERBATIM
+                COMMENT
+                "Packaging BackupService ${_searchengine_package_arch} and publishing when cloud root is configured"
+        )
+    endif()
+elseif(
+        WIN32
+        AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
+        AND _searchengine_package_arch
+        AND NOT _powershell_executable
+)
+    message(
+            WARNING
+            "PowerShell was not found; SearchEngine/BackupService/ZagEditor/BackupRestore Release package PostBuild is disabled"
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# BackupRestore (mirror_history restore CLI + core)
+# ---------------------------------------------------------------------------
+if(BUILD_BACKUP_RESTORE)
+    add_library(
+            BackupRestoreCore
+            STATIC
+            src/Backup/FileHash.cpp
+            src/Backup/Restore/MirrorHistoryStore.cpp
+            src/Backup/Restore/MirrorHistoryRestore.cpp
+            src/MyUtils/Encoding.cpp
+    )
+    target_include_directories(
+            BackupRestoreCore
+            PUBLIC
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/lib"
+    )
+    target_link_libraries(
+            BackupRestoreCore
+            PUBLIC
+            nlohmann_json::nlohmann_json
+    )
+    searchengine_configure_target(BackupRestoreCore)
+
+    add_executable(
+            BackupRestore
+            tools/backup_restore/main.cpp
+    )
+    target_include_directories(
+            BackupRestore
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/tools/backup_restore"
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+            BackupRestore
+            PRIVATE
+            BackupRestoreCore
+    )
+    searchengine_configure_target(BackupRestore)
+    searchengine_target_win32_versioninfo(
+            BackupRestore
+            PRODUCT_NAME "BackupRestore"
+            ORIGINAL_FILENAME "BackupRestore.exe"
+    )
+
+    if(
+            WIN32
+            AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
+            AND _searchengine_package_arch
+            AND _powershell_executable
+    )
+        add_custom_command(
+                TARGET BackupRestore
+                POST_BUILD
+                COMMAND
+                "${_powershell_executable}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${CMAKE_SOURCE_DIR}/scripts/PostBuild-BackupRestorePackage.ps1"
+                -Architecture
+                "${_searchengine_package_arch}"
+                -BuildDirectory
+                "$<TARGET_FILE_DIR:BackupRestore>"
+                -Configuration
+                "$<CONFIG>"
+                VERBATIM
+                COMMENT
+                "Packaging BackupRestore ${_searchengine_package_arch} and publishing when cloud root is configured"
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -572,6 +782,38 @@ if(BUILD_ZAGEDITOR)
         target_link_libraries(ZagEditor PRIVATE ws2_32)
     endif()
     searchengine_configure_target(ZagEditor)
+    searchengine_target_win32_versioninfo(
+            ZagEditor
+            PRODUCT_NAME "ZagEditor"
+            ORIGINAL_FILENAME "ZagEditor.exe"
+    )
+
+    if(
+            WIN32
+            AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
+            AND _searchengine_package_arch
+            AND _powershell_executable
+    )
+        add_custom_command(
+                TARGET ZagEditor
+                POST_BUILD
+                COMMAND
+                "${_powershell_executable}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${CMAKE_SOURCE_DIR}/scripts/PostBuild-ZagEditorPackage.ps1"
+                -Architecture
+                "${_searchengine_package_arch}"
+                -BuildDirectory
+                "$<TARGET_FILE_DIR:ZagEditor>"
+                -Configuration
+                "$<CONFIG>"
+                VERBATIM
+                COMMENT
+                "Packaging ZagEditor ${_searchengine_package_arch} and publishing when cloud root is configured"
+        )
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -624,6 +866,8 @@ if(BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/src/Backup/BackupEngine.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/FileHash.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/MirrorHistory.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Backup/Restore/MirrorHistoryStore.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Backup/Restore/MirrorHistoryRestore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/SQLiteBackup.cpp"
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite/sqlite3.c"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
