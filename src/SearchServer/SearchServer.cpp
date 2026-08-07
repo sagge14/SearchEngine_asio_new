@@ -131,6 +131,10 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
      * Размером списока ответов ограничен @param maxResponse.
      * */
 
+    OperationGuard operation(*this);
+    if (!operation)
+        return {};
+
     work = true;
 
     if(index->work)
@@ -327,8 +331,7 @@ search_server::SearchServer::~SearchServer() {
     /**
     Деструктор класса*/
 
-    if (index && settings.saveDictionaryToFile)
-        index->saveIndex();
+    stop();
     delete index;
     index = nullptr;
 
@@ -351,19 +354,35 @@ void search_server::SearchServer::dictionaryToLog() const {
 }
 
 void search_server::SearchServer::flushUpdateAndSaveDictionary() {
-    if (update_is_running || must_start_update)
+    if (stopping_.load(std::memory_order_acquire) || update_is_running)
         return;
 
-    must_start_update = true;
+    bool expected = false;
+    if (!must_start_update.compare_exchange_strong(expected, true))
+        return;
 
-    std::thread([this] {
-        try {
-            updateStep();
-        } catch (const std::exception& e) {
-            // Можно залогировать ошибку
-        }
-        must_start_update = false; // Если нужен сброс флага — синхронизируй при необходимости!
-    }).detach();
+    if (!beginOperation()) {
+        must_start_update = false;
+        return;
+    }
+
+    try {
+        boost::asio::post(cpu_pool_, [this] {
+            try {
+                updateStep();
+            } catch (const std::exception& e) {
+                addToLog(std::string("Background update failed: ") + e.what());
+            } catch (...) {
+                addToLog("Background update failed: unknown exception");
+            }
+            must_start_update = false;
+            finishOperation();
+        });
+    } catch (...) {
+        must_start_update = false;
+        finishOperation();
+        throw;
+    }
 }
 
 
@@ -496,6 +515,12 @@ void search_server::logState(const std::string& where,
 
 void search_server::SearchServer::updateStep()
 {
+    OperationGuard operation(*this);
+    if (!operation) {
+        must_start_update = false;
+        return;
+    }
+
     addToLog("updateStep() ENTER");
 
     std::unique_lock<std::mutex> lock2{updateM};
@@ -602,16 +627,88 @@ void search_server::SearchServer::updateStep()
 
 
 void search_server::SearchServer::addFileToIndex(const std::wstring& path) {
-    if(!index)
+    OperationGuard operation(*this);
+    if(!operation || !index)
         return;
 
     index->enqueueFileUpdate(path);
 }
 
 void search_server::SearchServer::removeFileFromIndex(const std::wstring &path) {
-    if(!index)
+    OperationGuard operation(*this);
+    if(!operation || !index)
         return;
     index->enqueueFileDeletion(path);
+}
+
+search_server::SearchServer::OperationGuard::OperationGuard(
+    SearchServer& server)
+    : server_(&server), active_(server.beginOperation())
+{
+}
+
+search_server::SearchServer::OperationGuard::OperationGuard(
+    const SearchServer& server)
+    : server_(const_cast<SearchServer*>(&server)),
+      active_(server.beginOperation())
+{
+}
+
+search_server::SearchServer::OperationGuard::~OperationGuard()
+{
+    if (active_)
+        server_->finishOperation();
+}
+
+bool search_server::SearchServer::beginOperation() const
+{
+    std::lock_guard<std::mutex> lock(operationsMutex_);
+    if (stopping_.load(std::memory_order_acquire))
+        return false;
+    ++activeOperations_;
+    return true;
+}
+
+void search_server::SearchServer::finishOperation() const noexcept
+{
+    std::lock_guard<std::mutex> lock(operationsMutex_);
+    if (activeOperations_ > 0)
+        --activeOperations_;
+    if (activeOperations_ == 0)
+        operationsCondition_.notify_all();
+}
+
+void search_server::SearchServer::requestStop() noexcept
+{
+    {
+        std::lock_guard<std::mutex> lock(operationsMutex_);
+        stopping_.store(true, std::memory_order_release);
+    }
+    must_start_update = false;
+    cv_search_server.notify_all();
+    if (index)
+        index->requestStop();
+}
+
+void search_server::SearchServer::wait()
+{
+    std::unique_lock<std::mutex> lock(operationsMutex_);
+    operationsCondition_.wait(lock, [this]() {
+        return activeOperations_ == 0;
+    });
+    lock.unlock();
+    if (index)
+        index->waitForIdle();
+}
+
+void search_server::SearchServer::stop()
+{
+    if (stopped_.exchange(true, std::memory_order_acq_rel))
+        return;
+    requestStop();
+    wait();
+    if (index && settings.saveDictionaryToFile)
+        index->saveIndex();
 }
 
 

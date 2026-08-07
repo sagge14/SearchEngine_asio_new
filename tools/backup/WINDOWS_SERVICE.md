@@ -11,11 +11,15 @@ BackupService.exe --console --config C:\Backup\Backup.all.json --data-dir C:\Bac
 BackupService.exe --once --config C:\Backup\Backup.all.json --data-dir C:\Backup
 BackupService.exe --service --service-name SearchEngineBackupService `
   --config C:\Backup\Backup.all.json --data-dir C:\Backup
+BackupService.exe --validate-config --config C:\Backup\Backup.all.json `
+  --data-dir C:\Backup
 ```
 
 - без режима или с `--console` запускается периодический console mode;
 - `--once` выполняет каждую группу один раз;
-- `--service` подключается к SCM и не использует stdin или console signals.
+- `--service` подключается к SCM и не использует stdin или console signals;
+- `--validate-config` разбирает `Backup.json`, отклоняет mapped drive letters
+  и предупреждает о UNC, не запуская scheduler и снимки (код `0` или `2`).
 
 По умолчанию `data-dir` равен каталогу `BackupService.exe`, конфигурация —
 `<data-dir>\Backup.json`, логи — `<data-dir>\logs`. Относительный
@@ -32,12 +36,59 @@ cmake --build --preset windows-x64-release --target BackupService
 
 cmake --preset windows-x86
 cmake --build --preset windows-x86-release --target BackupService
+
+# Windows 7 SP1 x86 (VS2019 v142)
+cmake --preset windows7-x86
+cmake --build --preset windows7-x86-release --target BackupService
 ```
 
 Используйте Release-бинарник той разрядности, которая нужна на машине.
 Служба остаётся console-subsystem executable; нестандартной точки входа нет.
 
-## Установка одного экземпляра
+## Переносимый комплект (целевые машины без PowerShell)
+
+Шаблоны: `deployment/BackupServicePortable/`.
+
+В presets `windows-x64` / `windows-x86` / `windows7-x86` Release-пересборка цели
+`BackupService` сама вызывает `scripts\PostBuild-BackupServicePackage.ps1` →
+`New-BackupServicePackage.ps1` (текущий preset) и при заданном
+`WORKSPACE_RELEASE_CLOUD_ROOT` публикует ZIP на Drive. Отключение:
+`-DSEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF`.
+
+Ручная сборка пакета на машине разработчика:
+
+```powershell
+.\scripts\Build-BackupServicePackage.ps1 -Architecture x64
+.\scripts\Build-BackupServicePackage.ps1 -Architecture x86
+# или оба: -Architecture All
+```
+
+По умолчанию в `data\Backup.json` кладётся
+`tools/backup/configs/autopad-economical/Backup.economical.json`
+(`mirror_history`). Классический snapshot-профиль:
+
+```powershell
+.\scripts\Build-BackupServicePackage.ps1 -Architecture x64 `
+  -ConfigPath tools\backup\configs\autopad\Backup.all.json
+```
+
+Результат: `out/package/BackupService-x64` или
+`out/package/BackupService-x86-Windows7`. На целевом компьютере скопируйте
+всю папку, отредактируйте `data\Backup.json`, затем запустите
+`Install-BackupService.bat` от имени администратора.
+
+Установка кладёт программу в `Program Files\SearchEngineBackupService\bin`,
+конфиг и логи — в `C:\ProgramData\SearchEngineBackupService`. Каталоги
+снимков (`backup_dir`) в пакет не входят и uninstall их не удаляет.
+Firewall не настраивается.
+
+Проверка комплекта без установки: `Install-BackupService.bat /validate`.
+
+Скрипты `tools/backup/scripts/*.ps1` остаются для разработки и админской
+установки с уже готовыми путями; на целевых машинах без PowerShell используйте
+только BAT из пакета.
+
+## Установка одного экземпляра (PowerShell)
 
 Из PowerShell с правами администратора:
 
@@ -56,7 +107,8 @@ tools\backup\scripts\Install-BackupService.ps1 `
 умолчанию, задаёт description, recovery actions и preshutdown timeout.
 Firewall не настраивается: BackupService не слушает сеть.
 
-Рекомендуется один экземпляр с `Backup.all.json`. Не запускайте одновременно
+Рекомендуется один экземпляр с `Backup.economical.json` (портативный
+пакет) или `Backup.all.json` (полные snapshot). Не запускайте одновременно
 объединённый профиль и перекрывающие его `Backup.databases.json` /
 `Backup.programs.json`: одни и те же source/backup_dir будут обрабатываться
 конкурирующими процессами.

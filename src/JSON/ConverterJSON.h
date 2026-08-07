@@ -38,6 +38,10 @@ typedef std::list<std::pair<listAnswer, std::string>> listAnswers;
 class ConverterJSON {
 
 public:
+    /// Enables console/MessageBox diagnostics. Must be disabled before
+    /// loading settings in Windows service mode.
+    static void setInteractiveErrors(bool enabled) noexcept;
+
     /** @param myExp исключения выбрасываемые при проблемах чтения информации из json файлов.
         @param setSettings функция записи настроек сервера в json файл - ни где пока не используется, но может пригодиться..
         @param getSettings функция получения настроек сервера из json файла.

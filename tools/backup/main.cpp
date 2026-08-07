@@ -69,6 +69,11 @@ int backupMain(
             : std::filesystem::path(arguments.front()));
     const BackupRuntimePaths paths =
         resolveBackupRuntimePaths(options, executable);
+
+    if (options.mode == BackupLaunchMode::ValidateConfig) {
+        return validateBackupServiceConfig(paths);
+    }
+
     LogFile::setLogsDirectory(paths.logs);
     LogFile::ensureLogsDir();
 

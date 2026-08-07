@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cctype>
 
+SqlLogger* SqlLogger::instance_ = nullptr;
+std::mutex SqlLogger::instanceMutex_;
+
 inline bool isLikelyFilePath(const std::string& str) {
     if (str.size() < 3) return false;
 
@@ -84,9 +87,13 @@ std::string summarizeSql(const std::string& sql) {
 
 // Асинхронное добавление логов
 void SqlLogger::logRequest(const PersonalRequest& request) {
+    if (stopWorker.load(std::memory_order_acquire))
+        return;
     // Добавляем лог в очередь и уведомляем поток
     {
         std::lock_guard<std::mutex> lock(queueMutex);
+        if (stopWorker.load(std::memory_order_acquire))
+            return;
         logQueue.push(request);
     }
     queueCondVar.notify_one();
@@ -159,10 +166,7 @@ void SqlLogger::processQueue() {
 
 // Singleton-геттер
 SqlLogger& SqlLogger::instance(const std::string& dbPath) {
-    static SqlLogger* instance_ = nullptr;
-    static std::mutex init_mutex;
-
-    std::lock_guard<std::mutex> lock(init_mutex);
+    std::lock_guard<std::mutex> lock(instanceMutex_);
     if (!instance_) {
         if (dbPath.empty()) {
             throw std::runtime_error("SqlLogger must be initialized with database path before first use.");
@@ -170,6 +174,17 @@ SqlLogger& SqlLogger::instance(const std::string& dbPath) {
         instance_ = new SqlLogger(dbPath);
     }
     return *instance_;
+}
+
+void SqlLogger::shutdown() noexcept
+{
+    SqlLogger* instance = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(instanceMutex_);
+        instance = instance_;
+        instance_ = nullptr;
+    }
+    delete instance;
 }
 
 void SqlLogger::logJson(const nh::json& json_log) {

@@ -2,7 +2,7 @@
   "BackupJobs": [
     {
       "backup_dir": "F:\\AutoPadEconomicalBackups",
-      "period_sec": 60,
+      "period_sec": 180,
       "targets": [
         {
           "src": "D:\\BASES",
@@ -10,8 +10,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "1min", "keep": 60},
-            {"every": "1h", "keep": 48},
+            {"every": "3min", "keep": 60},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -23,8 +23,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "1min", "keep": 60},
-            {"every": "1h", "keep": 48},
+            {"every": "3min", "keep": 60},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -34,7 +34,7 @@
     },
     {
       "backup_dir": "F:\\AutoPadEconomicalBackups",
-      "period_sec": 60,
+      "period_sec": 180,
       "targets": [
         {
           "src": "D:\\F12\\base.db",
@@ -42,8 +42,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "1min", "keep": 60},
-            {"every": "1h", "keep": 48},
+            {"every": "3min", "keep": 60},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -55,8 +55,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "1min", "keep": 60},
-            {"every": "1h", "keep": 48},
+            {"every": "3min", "keep": 60},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -66,7 +66,7 @@
     },
     {
       "backup_dir": "F:\\AutoPadEconomicalBackups",
-      "period_sec": 300,
+      "period_sec": 900,
       "targets": [
         {
           "src": "D:\\OTPRAVKA\\Settings.db3",
@@ -74,8 +74,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "5min", "keep": 24},
-            {"every": "1h", "keep": 48},
+            {"every": "15min", "keep": 24},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -87,8 +87,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "5min", "keep": 24},
-            {"every": "1h", "keep": 48},
+            {"every": "15min", "keep": 24},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -100,8 +100,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "5min", "keep": 24},
-            {"every": "1h", "keep": 48},
+            {"every": "15min", "keep": 24},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -113,8 +113,8 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "5min", "keep": 24},
-            {"every": "1h", "keep": 48},
+            {"every": "15min", "keep": 24},
+            {"every": "3h", "keep": 48},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -124,7 +124,7 @@
     },
     {
       "backup_dir": "F:\\AutoPadEconomicalBackups",
-      "period_sec": 3600,
+      "period_sec": 10800,
       "targets": [
         {
           "src": "D:\\F12",
@@ -132,7 +132,7 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "1h", "keep": 24},
+            {"every": "3h", "keep": 24},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}
@@ -142,7 +142,7 @@
     },
     {
       "backup_dir": "F:\\AutoPadEconomicalBackups",
-      "period_sec": 21600,
+      "period_sec": 64800,
       "targets": [
         {
           "src": "D:\\OTPRAVKA",
@@ -150,7 +150,7 @@
           "mode": "auto",
           "strategy": "mirror_history",
           "history_periods": [
-            {"every": "6h", "keep": 8},
+            {"every": "18h", "keep": 8},
             {"every": "1d", "keep": 31},
             {"every": "1w", "keep": 12},
             {"every": "1mo", "keep": 12}

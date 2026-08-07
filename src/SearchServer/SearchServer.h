@@ -125,6 +125,9 @@ namespace search_server {
         int maxParallelReaders = 0;
         /// Таймаут ожидания индексации одного файла в updateDocumentBase, секунды.
         int fileIndexingTimeoutSec = 60;
+        /// Автоматически определять краткое содержание новых файлов и обновлять
+        /// соответствующее поле в базе AutoPad PRM.
+        bool enablePrmShortContentAutodetect = true;
         /// Интервал сброса очереди SQLite-зеркала на диск, секунды.
         double sqliteMirrorFlushIntervalSec = 2.0;
         /// Порог очереди live-зеркала: при превышении — немедленный flush (0 = только по таймеру).
@@ -180,6 +183,26 @@ namespace search_server {
         atomic<bool>must_start_update = false;
 
         mutable std::condition_variable_any cv_search_server;
+        std::atomic<bool> stopping_{false};
+        std::atomic<bool> stopped_{false};
+        mutable std::mutex operationsMutex_;
+        mutable std::condition_variable operationsCondition_;
+        mutable std::size_t activeOperations_{0};
+
+        class OperationGuard {
+        public:
+            explicit OperationGuard(SearchServer& server);
+            explicit OperationGuard(const SearchServer& server);
+            ~OperationGuard();
+            explicit operator bool() const noexcept { return active_; }
+
+        private:
+            SearchServer* server_;
+            bool active_;
+        };
+
+        bool beginOperation() const;
+        void finishOperation() const noexcept;
 
         /** @param trustSettings функция проверки корректности настроек сервера.*
             @param checkHash функция для сравнения хэша последнего и очередного запроса.*
@@ -244,6 +267,10 @@ namespace search_server {
         explicit SearchServer(const Settings &settings, boost::asio::thread_pool& cpu_pool, boost::asio::io_context& io_commit);
 
         void flushUpdateAndSaveDictionary();
+
+        void requestStop() noexcept;
+        void wait();
+        void stop();
 
         void updateStep();
         ~SearchServer();

@@ -109,6 +109,12 @@ BackupService --config Backup.json --once
 Формат снимков и восстановление описаны в
 `docs/BACKUP_SNAPSHOTS.md`.
 
-Запуск под Windows SCM, service account/ACL, несколько экземпляров и
-install/uninstall-скрипты описаны в
+Запуск под Windows SCM, service account/ACL, несколько экземпляров,
+install/uninstall-скрипты и переносимый BAT-комплект описаны в
 [`WINDOWS_SERVICE.md`](WINDOWS_SERVICE.md).
+
+Сборка портативного пакета (x64 / Win7 x86):
+
+```powershell
+.\scripts\Build-BackupServicePackage.ps1 -Architecture All
+```

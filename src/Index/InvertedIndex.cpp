@@ -187,7 +187,7 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
         }
 
         // 3. Один commit-task в io_commit
-        boost::asio::post(cpu_pool_, [this,
+        postTracked(cpu_pool_, [this,
                 chunkMap = std::move(chunkMap),
                 promise = batch.promise]()
         {
@@ -279,7 +279,7 @@ void inverted_index::InvertedIndex::applyBatchInStrand(PostingBatch batch)
 {
     // ВАЖНО: реальный commit выполняется строго в strand_,
     // чтобы все операции с dictionary/wordRefs были последовательны.
-    boost::asio::post(strand_, [this, batch = std::move(batch)]() mutable
+    postTracked(strand_, [this, batch = std::move(batch)]() mutable
     {
         try {
 
@@ -296,7 +296,7 @@ void inverted_index::InvertedIndex::applyBatchInStrand(PostingBatch batch)
 
 void inverted_index::InvertedIndex::delFromDictionary(const std::vector<FileId>& list)
 {
-    boost::asio::post(strand_, [this, list]() {
+    postTracked(strand_, [this, list]() {
         for (FileId fileId : list)
             safeEraseFile(fileId);   // теперь безопасно, выполняется в commit-потоке
     });
@@ -443,7 +443,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
             std::promise<void> delPromise;
             auto delFuture = delPromise.get_future();
 
-            boost::asio::post(strand_, [this, &toErase, &toMarkDeleted, &delPromise]()
+            postTracked(strand_, [this, &toErase, &toMarkDeleted, &delPromise]()
             {
                 try {
                     // Изменённые файлы: стираем старые постинги в памяти.
@@ -499,7 +499,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
                                           p->get_future()
                                   });
 
-            boost::asio::post(cpu_pool_,
+            postTracked(cpu_pool_,
                               [this, fileId, p, &processedFiles, totalFiles, progressInterval]()
                               {
                                   try {
@@ -941,7 +941,7 @@ void inverted_index::InvertedIndex::compactMemory()
     std::promise<void> done;
     auto fut = done.get_future();
 
-    boost::asio::post(strand_, [this, &done]()
+    postTracked(strand_, [this, &done]()
     {
         try
         {
@@ -1092,7 +1092,39 @@ void inverted_index::InvertedIndex::saveIndex() const {
     }
 }
 
-inverted_index::InvertedIndex::~InvertedIndex() = default;
+void inverted_index::InvertedIndex::beginAsyncOperation()
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    ++activeAsyncOperations_;
+}
+
+void inverted_index::InvertedIndex::finishAsyncOperation() noexcept
+{
+    std::lock_guard<std::mutex> lock(asyncMutex_);
+    if (activeAsyncOperations_ > 0)
+        --activeAsyncOperations_;
+    if (activeAsyncOperations_ == 0)
+        asyncCondition_.notify_all();
+}
+
+void inverted_index::InvertedIndex::requestStop() noexcept
+{
+    stopping_.store(true, std::memory_order_release);
+}
+
+void inverted_index::InvertedIndex::waitForIdle()
+{
+    std::unique_lock<std::mutex> lock(asyncMutex_);
+    asyncCondition_.wait(lock, [this]() {
+        return activeAsyncOperations_ == 0;
+    });
+}
+
+inverted_index::InvertedIndex::~InvertedIndex()
+{
+    requestStop();
+    waitForIdle();
+}
 
 inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                                              boost::asio::io_context& io_commit,
@@ -1132,8 +1164,10 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
             }
         } catch (const std::exception& e) {
             addToLog(std::string("InvertedIndex: load EXCEPTION: ") + e.what());
+            throw;
         } catch (...) {
             addToLog("InvertedIndex: load unknown exception");
+            throw;
         }
 
         // Live-writer запускаем только после завершения восстановления.
@@ -1144,9 +1178,11 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
             try { serializer_->openLive(); }
             catch (const std::exception& e) {
                 addToLog(std::string("InvertedIndex: openLive EXCEPTION: ") + e.what());
+                throw;
             }
             catch (...) {
                 addToLog("InvertedIndex: openLive unknown exception");
+                throw;
             }
         }
 }
@@ -1180,7 +1216,7 @@ void inverted_index::InvertedIndex::ensureSerializer() const
 void inverted_index::InvertedIndex::compact(double thresholdPercent)
 {
     // Внешний вызов compact() должен лишь поставить задачу в strand.
-    boost::asio::post(strand_, [this, thresholdPercent]()
+    postTracked(strand_, [this, thresholdPercent]()
     {
         // Проверяем, не выполняется ли обновление (без блокировки, чтобы избежать deadlock)
         if (work.load(std::memory_order_acquire)) {
@@ -1328,7 +1364,7 @@ void inverted_index::InvertedIndex::safeEraseFile(FileId fileId)
     /*  для каждой Wid-очереди стираем запись hash, если она есть
         (никаких erase по несуществующему индексу)  */
 
-    boost::asio::post(strand_,[this,fileId]()
+    postTracked(strand_,[this,fileId]()
     {
         safeEraseFileInternal(fileId);
     });
@@ -1338,6 +1374,9 @@ void inverted_index::InvertedIndex::safeEraseFile(FileId fileId)
 bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
 {
     namespace fs = std::filesystem;
+
+    if (stopping_.load(std::memory_order_acquire))
+        return false;
 
     std::wcout << L"[enqueueFileUpdate] Request for path: " << path << std::endl;
 
@@ -1354,7 +1393,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
     //
     // Работа с docPaths и удаление — строго в strand
     //
-    boost::asio::post(strand_,
+    postTracked(strand_,
                       [this, path, ts, sz]()
                       {
                           std::wcout << L"[strand/docPaths] Upserting: " << path << std::endl;
@@ -1394,7 +1433,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
                           //
                           std::wcout << L"[strand/index] Scheduling fileIndexing job for id=" << fileId << std::endl;
 
-                          boost::asio::post(cpu_pool_, [this, fileId, promise]()
+                          postTracked(cpu_pool_, [this, fileId, promise]()
                           {
                               try
                               {
@@ -1424,6 +1463,8 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
 
 bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path)
 {
+    if (stopping_.load(std::memory_order_acquire))
+        return false;
     std::wcout << L"[enqueueFileDeletion] Request for path: " << path << std::endl;
 
     FileId id;
@@ -1440,7 +1481,7 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
     // Вечный след: помечаем файл как удалённый, но НЕ стираем постинги
     // (ни в памяти, ни в SQLite). Поиск продолжит находить файл с флагом
     // "отсутствует". wordRefs сохраняем — пригодится при реактивации/замене.
-    boost::asio::post(strand_, [this, id, path]() {
+    postTracked(strand_, [this, id, path]() {
 
         std::wcout << L"[strand/docPaths] markRemoved (soft, eternal trace): "
                    << path << L" (id=" << id << L")" << std::endl;

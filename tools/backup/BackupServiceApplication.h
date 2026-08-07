@@ -64,3 +64,6 @@ int runBackupOnce(
     const std::vector<BackupGroup>& groups,
     bool print_results
 );
+
+// Parse Backup.json, resolve paths, reject mapped drives. Returns 0 or 2.
+int validateBackupServiceConfig(const BackupRuntimePaths& paths);

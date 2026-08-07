@@ -13,6 +13,10 @@
 #include <sstream>
 #include <thread>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -327,4 +331,119 @@ int runBackupOnce(
         }
     }
     return success ? 0 : 1;
+}
+
+namespace {
+
+bool isUncPath(const fs::path& path)
+{
+    const std::wstring native = path.wstring();
+    return native.size() >= 2 && native[0] == L'\\' && native[1] == L'\\';
+}
+
+#ifdef _WIN32
+bool isMappedDrivePath(const fs::path& path)
+{
+    const std::wstring native = path.wstring();
+    if (native.size() < 3 ||
+        native[1] != L':' ||
+        (native[2] != L'\\' && native[2] != L'/'))
+    {
+        return false;
+    }
+
+    const wchar_t root[] = {native[0], L':', L'\\', L'\0'};
+    const UINT drive_type = GetDriveTypeW(root);
+    return drive_type == DRIVE_REMOTE;
+}
+#else
+bool isMappedDrivePath(const fs::path&)
+{
+    return false;
+}
+#endif
+
+fs::path resolveAgainstConfig(
+    const fs::path& config_dir,
+    const fs::path& value)
+{
+    if (value.is_absolute()) {
+        return value.lexically_normal();
+    }
+    return (config_dir / value).lexically_normal();
+}
+
+} // namespace
+
+int validateBackupServiceConfig(const BackupRuntimePaths& paths)
+{
+    const BackupConfigResult config = loadBackupConfig(paths.config);
+    if (!config.ok()) {
+        std::cerr << configErrorText(config) << '\n';
+        return 2;
+    }
+    if (config.groups.empty()) {
+        std::cerr << "Backup config has no BackupJobs: "
+                  << paths.config.string() << '\n';
+        return 2;
+    }
+
+    const fs::path config_dir = paths.config.parent_path();
+    size_t job_count = 0;
+    size_t target_count = 0;
+    bool has_unc = false;
+
+    for (const auto& group : config.groups) {
+        ++job_count;
+        const fs::path backup_dir =
+            resolveAgainstConfig(config_dir, fs::path(group.backup_dir));
+        if (isMappedDrivePath(backup_dir)) {
+            std::cerr
+                << "ERROR: mapped network drive paths are not supported "
+                   "for services: "
+                << backup_dir.string()
+                << "\nUse a local path or UNC with an account that has "
+                   "network access.\n";
+            return 2;
+        }
+        if (isUncPath(backup_dir)) {
+            has_unc = true;
+            std::cerr
+                << "WARNING: UNC path with LocalSystem may be inaccessible: "
+                << backup_dir.string() << '\n';
+        }
+
+        for (const auto& target : group.targets) {
+            ++target_count;
+            const fs::path src =
+                resolveAgainstConfig(config_dir, target.src);
+            if (isMappedDrivePath(src)) {
+                std::cerr
+                    << "ERROR: mapped network drive paths are not supported "
+                       "for services: "
+                    << src.string()
+                    << "\nUse a local path or UNC with an account that has "
+                       "network access.\n";
+                return 2;
+            }
+            if (isUncPath(src)) {
+                has_unc = true;
+                std::cerr
+                    << "WARNING: UNC path with LocalSystem may be inaccessible: "
+                    << src.string() << '\n';
+            }
+        }
+    }
+
+    std::cout
+        << "Backup.json OK\n"
+        << "Config: " << paths.config.string() << '\n'
+        << "DataDir: " << paths.data_dir.string() << '\n'
+        << "Jobs: " << job_count << '\n'
+        << "Targets: " << target_count << '\n';
+    if (has_unc) {
+        std::cout
+            << "Note: UNC paths require a service account with network rights.\n";
+    }
+    return 0;
 }

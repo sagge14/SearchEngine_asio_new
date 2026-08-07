@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <atomic>
 
 #ifdef _WIN32
 // Windows networking (REQUIRED before windows.h)
@@ -28,6 +29,15 @@
 
 #define TO_JSON(J, S) J[#S] = val.S;
 #define FROM_JSON(J, S) J.at(#S).get_to(val.S);
+
+namespace {
+std::atomic<bool> g_interactiveErrors{true};
+}
+
+void ConverterJSON::setInteractiveErrors(bool enabled) noexcept
+{
+    g_interactiveErrors.store(enabled, std::memory_order_release);
+}
 
 void ConverterJSON::setSettings(const search_server::Settings &val, const std::string& jsonPath) {
     /**
@@ -57,6 +67,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
     jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
+    jsonSettings["config"]["enable_prm_short_content_autodetect"] =
+        val.enablePrmShortContentAutodetect;
     jsonSettings["config"]["sqlite_mirror_flush_interval_sec"] = val.sqliteMirrorFlushIntervalSec;
     jsonSettings["config"]["sqlite_mirror_max_pending_ops"] = val.sqliteMirrorMaxPendingOps;
     jsonSettings["config"]["sqlite_load_threads"] = val.sqliteLoadThreads;
@@ -101,7 +113,8 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             jsonFileSettings.close();
             std::string errorMsg = "JSON parse error at byte " + std::to_string(ex.byte);
             LogFile::getStartup().write("ERROR: " + errorMsg);
-            std::cerr << errorMsg << std::endl;
+            if (g_interactiveErrors.load(std::memory_order_acquire))
+                std::cerr << errorMsg << std::endl;
             throw myExp(jsonPath);
         }
     }
@@ -287,6 +300,19 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
+        // enable_prm_short_content_autodetect — изменение поля краткого
+        // содержания в AutoPad PRM для появившихся файлов.
+        if (config.contains("enable_prm_short_content_autodetect")) {
+            config.at("enable_prm_short_content_autodetect").get_to(
+                s.enablePrmShortContentAutodetect
+            );
+        } else {
+            addedFields.push_back(
+                "config.enable_prm_short_content_autodetect"
+            );
+            needsResave = true;
+        }
+
         // sqlite_mirror_flush_interval_sec — интервал сброса очереди SQLite-зеркала
         if (config.contains("sqlite_mirror_flush_interval_sec")) {
             config.at("sqlite_mirror_flush_interval_sec").get_to(s.sqliteMirrorFlushIntervalSec);
@@ -341,26 +367,24 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         // Если есть критические ошибки - логируем и выводим в консоль
         if (!criticalErrors.empty()) {
             // Получаем абсолютный путь к папке logs
-            std::filesystem::path logsPath = std::filesystem::absolute("logs");
+            std::filesystem::path logsPath = LogFile::logsDirectory();
             std::string logsPathStr = logsPath.string();
             
             // Формируем сообщение для консоли
-            std::cout << "\n";
-            std::cout << "========================================\n";
-            std::cout << "  CRITICAL SETTINGS ERRORS DETECTED!\n";
-            std::cout << "========================================\n";
-            std::cout << "\nThe following required settings are missing or empty:\n\n";
-            for (const auto& err : criticalErrors) {
-                std::cout << "  - " << err << "\n";
+            if (g_interactiveErrors.load(std::memory_order_acquire)) {
+                std::cout << "\n";
+                std::cout << "========================================\n";
+                std::cout << "  CRITICAL SETTINGS ERRORS DETECTED!\n";
+                std::cout << "========================================\n";
+                std::cout << "\nThe following required settings are missing or empty:\n\n";
+                for (const auto& err : criticalErrors) {
+                    std::cout << "  - " << err << "\n";
+                }
+                std::cout << "\nPlease fix Settings.json and restart the server.\n";
+                std::cout << "\nDetailed error log: " << logsPathStr << "\n";
+                std::cout << "========================================\n\n";
+                std::cout.flush();
             }
-            std::cout << "\n";
-            std::cout << "Server will continue running but may not function correctly.\n";
-            std::cout << "Please fix Settings.json and restart the server.\n";
-            std::cout << "\n";
-            std::cout << "Detailed error log: " << logsPathStr << "/startup.log\n";
-            std::cout << "========================================\n";
-            std::cout << "\n";
-            std::cout.flush();
             
             // Формируем сообщение для MessageBox
             std::string errorMsg = "CRITICAL SETTINGS ERRORS:\n\n";
@@ -379,7 +403,8 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             LogFile::getStartup().write("Logs directory: " + logsPathStr);
             
             // Если hideMode - показываем окно с ошибкой
-            if (s.hideMode) {
+            if (s.hideMode &&
+                g_interactiveErrors.load(std::memory_order_acquire)) {
                 ShowWindow(GetConsoleWindow(), SW_SHOW);  // Показываем консоль
                 MessageBoxA(nullptr, errorMsg.c_str(), "Search Engine - Critical Settings Error", 
                             MB_OK | MB_ICONERROR | MB_TOPMOST);

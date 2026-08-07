@@ -24,8 +24,19 @@ std::vector<uint8_t> GetJsonTelegaCmd::getSqlJsonTelega(const std::vector<uint8_
         auto res = Telega::findBase(request, _type);
         telegi.reserve(res.size());
 
-        for (const auto& r: res)
-            telegi.emplace_back(r, _type);
+        for (const auto& r: res) {
+            Telega telega(r, _type);
+
+            // SQL search reads message metadata from the archive database,
+            // so the row can outlive the message file itself.  Propagate the
+            // same deletion marker that full-text search returns from its
+            // index, allowing the client to render both result types alike.
+            std::error_code fileError;
+            telega.deleted = telega.dir.empty() ||
+                !std::filesystem::exists(std::filesystem::u8path(telega.dir), fileError);
+
+            telegi.push_back(std::move(telega));
+        }
 
         jsonTelegi = telegi;
     }

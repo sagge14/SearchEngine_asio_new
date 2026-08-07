@@ -21,10 +21,15 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/experimental/channel.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/post.hpp>
 #include <future>
 #include <memory>
 #include <optional>
 #include <semaphore>
+#include <atomic>
+#include <condition_variable>
+#include <type_traits>
+#include <utility>
 #include "WordID.h"
 #include "PostingList.h"
 #include "robin_hood.h"
@@ -194,6 +199,43 @@ namespace inverted_index {
 
         IndexStorageConfig storage_{};
         mutable std::unique_ptr<IIndexSerializer> serializer_;
+        std::atomic<bool> stopping_{false};
+        mutable std::mutex asyncMutex_;
+        mutable std::condition_variable asyncCondition_;
+        std::size_t activeAsyncOperations_{0};
+
+        void beginAsyncOperation();
+        void finishAsyncOperation() noexcept;
+
+        template<typename Executor, typename Handler>
+        void postTracked(Executor& executor, Handler&& handler)
+        {
+            beginAsyncOperation();
+            try {
+                boost::asio::post(
+                    executor,
+                    [this,
+                     operation = std::decay_t<Handler>(
+                         std::forward<Handler>(handler))]() mutable
+                    {
+                        try {
+                            operation();
+                        } catch (const std::exception& exception) {
+                            addToLog(
+                                std::string("tracked async operation failed: ") +
+                                exception.what()
+                            );
+                        } catch (...) {
+                            addToLog("tracked async operation failed: unknown exception");
+                        }
+                        finishAsyncOperation();
+                    }
+                );
+            } catch (...) {
+                finishAsyncOperation();
+                throw;
+            }
+        }
 
         void ensureSerializer() const;
 
@@ -280,6 +322,8 @@ namespace inverted_index {
                                IndexStorageConfig storage = {});
         bool enqueueFileUpdate(const std::wstring& path);
         bool enqueueFileDeletion(const std::wstring& path);
+        void requestStop() noexcept;
+        void waitForIdle();
         ~InvertedIndex();
         void saveIndex() const;
     };

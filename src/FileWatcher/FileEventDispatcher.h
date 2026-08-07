@@ -2,6 +2,7 @@
 #include "FileWatcher/MultiWatcher.h"
 #include "Commands/IFileEventCommand.h"
 #include <queue>
+#include <atomic>
 
 namespace boost::asio {
     class io_context;
@@ -42,4 +43,5 @@ private:
     CommandMap commands_;
     boost::asio::io_context& io_;
     std::vector<std::unique_ptr<MultiDirWatcher>> dirWatchers_;
+    std::atomic<bool> stopping_{false};
 };

@@ -38,6 +38,8 @@ FileEvent merge2(FileEvent old, FileEvent neu)
 
 void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 {
+    if (stopping_.load(std::memory_order_acquire))
+        return;
     if (!matchByExtensions(path)) {
         LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
         return;
@@ -47,6 +49,9 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
     size_t h = std::hash<std::wstring>{}(path);
 
     std::lock_guard lk(mtx_);
+
+    if (stopping_.load(std::memory_order_acquire))
+        return;
 
     auto& st = evtMap_[h];          // создаётся по необходимости
     st.evt  = (st.queued) ? merge2(st.evt, evt) : evt;
@@ -60,6 +65,8 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 
 void FileEventDispatcher::flushPending()
 {
+    if (stopping_.load(std::memory_order_acquire))
+        return;
     std::queue<size_t> local;
 
     {   std::lock_guard lk(mtx_);
@@ -72,6 +79,8 @@ void FileEventDispatcher::flushPending()
 
     while (!local.empty())
     {
+        if (stopping_.load(std::memory_order_acquire))
+            break;
         size_t h = local.front(); local.pop();
         FileEvent evt; std::wstring path;
 
@@ -181,6 +190,13 @@ bool FileEventDispatcher::matchByExtensions(const std::wstring& path) const
 }
 
 void FileEventDispatcher::stopAll() {
+    if (stopping_.exchange(true, std::memory_order_acq_rel))
+        return;
     for(auto& w:dirWatchers_)
         w->stop();
+
+    std::lock_guard lk(mtx_);
+    evtMap_.clear();
+    std::queue<size_t> empty;
+    pendingQ_.swap(empty);
 }

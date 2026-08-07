@@ -41,6 +41,7 @@ bool parseBackupServiceOptions(
     bool console = false;
     bool once = false;
     bool service = false;
+    bool validate_config = false;
 
     for (size_t index = 1; index < arguments.size(); ++index) {
         const std::wstring& argument = arguments[index];
@@ -52,6 +53,8 @@ bool parseBackupServiceOptions(
             once = true;
         } else if (argument == L"--service") {
             service = true;
+        } else if (argument == L"--validate-config") {
+            validate_config = true;
         } else if (argument == L"--config" ||
                    argument == L"--data-dir" ||
                    argument == L"--service-name")
@@ -81,19 +84,31 @@ bool parseBackupServiceOptions(
     const int selected_modes =
         static_cast<int>(console) +
         static_cast<int>(once) +
-        static_cast<int>(service);
+        static_cast<int>(service) +
+        static_cast<int>(validate_config);
     if (selected_modes > 1) {
-        error = "--console, --once and --service are mutually exclusive";
+        error = "--console, --once, --service and --validate-config "
+                "are mutually exclusive";
         return false;
     }
     if (service && options.help) {
         error = "--service and --help are mutually exclusive";
         return false;
     }
+    if (validate_config && options.help) {
+        error = "--validate-config and --help are mutually exclusive";
+        return false;
+    }
 
-    options.mode = service
-        ? BackupLaunchMode::Service
-        : (once ? BackupLaunchMode::Once : BackupLaunchMode::Console);
+    if (validate_config) {
+        options.mode = BackupLaunchMode::ValidateConfig;
+    } else if (service) {
+        options.mode = BackupLaunchMode::Service;
+    } else if (once) {
+        options.mode = BackupLaunchMode::Once;
+    } else {
+        options.mode = BackupLaunchMode::Console;
+    }
     return true;
 }
 
@@ -157,11 +172,14 @@ std::string backupServiceUsage()
         << "  BackupService [--console] [--config <path>] [--data-dir <path>]\n"
         << "  BackupService --once [--config <path>] [--data-dir <path>]\n"
         << "  BackupService --service [--service-name <name>]"
-           " [--config <path>] [--data-dir <path>]\n\n"
+           " [--config <path>] [--data-dir <path>]\n"
+        << "  BackupService --validate-config [--config <path>]"
+           " [--data-dir <path>]\n\n"
         << "Options:\n"
         << "  --console             Run the periodic scheduler in a console\n"
         << "  --once                Run every configured group once and exit\n"
         << "  --service             Run under the Windows Service Control Manager\n"
+        << "  --validate-config     Parse Backup.json and check service paths\n"
         << "  --config <path>       Config path; relative paths use data-dir\n"
         << "  --data-dir <path>     Runtime root; relative paths use the exe directory\n"
         << "  --service-name <name> SCM instance name\n"

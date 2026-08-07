@@ -7,7 +7,8 @@
 enum class BackupLaunchMode {
     Console,
     Once,
-    Service
+    Service,
+    ValidateConfig
 };
 
 struct BackupServiceOptions {

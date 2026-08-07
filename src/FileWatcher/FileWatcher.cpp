@@ -34,14 +34,16 @@ bool FileWatcher::start()
 
 void FileWatcher::stop()
 {
-    if (!running_) return;
-    running_ = false;
+    if (!running_.exchange(false, std::memory_order_acq_rel)) return;
 
     if (hDir_ != INVALID_HANDLE_VALUE) {
         ::CancelIoEx(hDir_, nullptr);
         ::CloseHandle(hDir_);
         hDir_ = INVALID_HANDLE_VALUE;
     }
+
+    std::unique_lock<std::mutex> lock(pendingMutex_);
+    pendingCondition_.wait(lock, [this]() { return pendingReads_ == 0; });
 }
 
 /* ───────── helpers ───────── */
@@ -96,13 +98,19 @@ void FileWatcher::startRead()
             [this, op](const boost::system::error_code& ec,
                        std::size_t                    bytes)
             {
-                if (!ec && bytes) {
+                if (running_.load(std::memory_order_acquire) && !ec && bytes) {
                     parseEvents(bytes);
                     startRead();                      // перезапуск
                 }
                 else if (ec != boost::asio::error::operation_aborted)
                     LogFile::getWatcher().write(std::string("[Watcher] IOCP error: ") + ec.message());
+                finishPendingRead();
             });
+
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex_);
+        ++pendingReads_;
+    }
 
     DWORD dummy = 0;
     BOOL ok = ReadDirectoryChangesW(
@@ -124,6 +132,15 @@ void FileWatcher::startRead()
     {
         op->release();                   // передаём владение Asio
     }
+}
+
+void FileWatcher::finishPendingRead() noexcept
+{
+    std::lock_guard<std::mutex> lock(pendingMutex_);
+    if (pendingReads_ > 0)
+        --pendingReads_;
+    if (pendingReads_ == 0)
+        pendingCondition_.notify_all();
 }
 
 static FileEvent toEvt(DWORD act)

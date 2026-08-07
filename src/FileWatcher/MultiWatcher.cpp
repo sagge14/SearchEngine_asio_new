@@ -41,19 +41,18 @@ void MultiDirWatcher::start()
 
 void MultiDirWatcher::stop()
 {
-    if (!running_) return;
-    running_ = false;
+    if (!running_.exchange(false, std::memory_order_acq_rel)) return;
 
     if (hParent_ != INVALID_HANDLE_VALUE) {
         CancelIoEx(hParent_, nullptr);
         CloseHandle(hParent_);
         hParent_ = INVALID_HANDLE_VALUE;
     }
-    for (auto& [_, w] : inner_) w->stop();
-    inner_.clear();
-
     if (watchThread_.joinable())
         watchThread_.join();
+
+    for (auto& [_, w] : inner_) w->stop();
+    inner_.clear();
 }
 
 void MultiDirWatcher::watchParent()

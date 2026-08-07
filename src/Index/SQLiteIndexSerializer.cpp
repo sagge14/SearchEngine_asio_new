@@ -342,8 +342,17 @@ void SQLiteIndexSerializer::startWriter()
 {
     if (writerStarted_)
         return;
-    writerStarted_ = true;
-    writerThread_ = std::thread([this] { writerLoop(); });
+
+    // Open and validate SQLite synchronously so application startup cannot
+    // report RUNNING while the writer has already failed in the background.
+    openLiveDb();
+    try {
+        writerThread_ = std::thread([this] { writerLoop(); });
+        writerStarted_ = true;
+    } catch (...) {
+        closeLiveDb();
+        throw;
+    }
 }
 
 void SQLiteIndexSerializer::stopWriter()
@@ -468,26 +477,6 @@ void SQLiteIndexSerializer::runCheckpointOnLiveDb()
 
 void SQLiteIndexSerializer::writerLoop()
 {
-    try {
-        openLiveDb();
-    } catch (const std::exception& e) {
-        LogFile::getIndex().write(std::string("SQLITE_MIRROR_WRITER: openLiveDb EXCEPTION: ") + e.what());
-        {
-            std::lock_guard<std::mutex> lock(queueMutex_);
-            queue_.clear();
-            flushDoneCv_.notify_all();
-        }
-        return;
-    } catch (...) {
-        LogFile::getIndex().write("SQLITE_MIRROR_WRITER: openLiveDb unknown exception");
-        {
-            std::lock_guard<std::mutex> lock(queueMutex_);
-            queue_.clear();
-            flushDoneCv_.notify_all();
-        }
-        return;
-    }
-
     const auto interval = std::chrono::duration<double>(config_.flushIntervalSec);
 
     while (true)
