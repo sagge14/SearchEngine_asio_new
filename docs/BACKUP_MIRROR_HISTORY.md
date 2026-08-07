@@ -68,5 +68,10 @@ F:\AutoPadEconomicalBackups\
 отключить сетевых пользователей.
 
 Историческое состояние вручную собирать можно по алгоритму выше, но безопаснее
-использовать отдельную утилиту восстановления: она должна проверить наличие,
-размер и SHA-256 каждого файла до публикации восстановленного каталога.
+использовать утилиту `BackupRestore` (см. `docs/BACKUP_RESTORE_UTILITY_PROPOSAL.md`):
+
+```text
+BackupRestore targets --root F:\AutoPadEconomicalBackups
+BackupRestore points  --root F:\AutoPadEconomicalBackups --target BASES
+BackupRestore restore --root F:\AutoPadEconomicalBackups --target BASES --latest --to D:\Recovered\BASES
+```
