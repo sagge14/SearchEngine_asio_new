@@ -5,8 +5,9 @@ SearchEngineService {{ARCHITECTURE}} — переносимый комплект
 Минимальная система: {{MINIMUM_WINDOWS}}
 
 На целевом компьютере PowerShell не требуется. Установка, переустановка,
-перезапуск и полное удаление выполняются BAT-файлами. Нативный помощник
-tools\SearchEngineConfig.exe имеет ту же архитектуру, что SearchEngine.exe.
+остановка, запуск, перезапуск и полное удаление выполняются BAT-файлами.
+Нативный помощник tools\SearchEngineConfig.exe имеет ту же архитектуру, что
+SearchEngine.exe.
 
 Перед установкой:
 
@@ -42,6 +43,8 @@ C:\ProgramData\SearchEngineService-archive.
 ServiceInstance.cmd или передать первым аргументом, например:
 
   Install-SearchEngineService.bat archive
+  Stop-SearchEngineService.bat archive
+  Start-SearchEngineService.bat archive
   Restart-SearchEngineService.bat archive
   Uninstall-SearchEngineService.bat archive
 
@@ -51,9 +54,20 @@ ServiceInstance.cmd или передать первым аргументом, �
 
 Управление:
 
+  Stop-SearchEngineService.bat
+  Start-SearchEngineService.bat
   Restart-SearchEngineService.bat
   Uninstall-SearchEngineService.bat
   sc query SearchEngineService
+
+Stop и Start — штатная остановка и последующий запуск службы (новый процесс),
+а не Windows Pause/Continue. После Stop → Start служба заново читает
+C:\ProgramData\SearchEngineService[-instance]\Settings.json. Остановленная
+служба с Automatic/Delayed Start снова запустится после перезагрузки Windows;
+для долговременного отключения отдельно переведите Startup Type в Manual или
+Disabled. Изменение порта в Settings.json подхватывается новым процессом, но
+правило Windows Firewall, client-endpoint.txt и база клиента этими скриптами
+не обновляются — проверьте их вручную. Start предупреждает о расхождении порта.
 
 Для именованного экземпляра используйте его имя, например
 sc query SearchEngineService-archive.

@@ -28,13 +28,11 @@ if /I "%SERVICE_INSTANCE%"=="default" (
 )
 set "DATA_DIR=%ProgramData%\%SERVICE_NAME%"
 set "STOP_TIMEOUT_SECONDS=1800"
-set "START_TIMEOUT_SECONDS=120"
 set "IMMEDIATE_GRACE_SECONDS=2"
-set "PID_EXIT_TIMEOUT_SECONDS=30"
 
 fsutil.exe dirty query %SystemDrive% >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Run Restart-BackupService.bat as Administrator.
+    echo ERROR: Run Stop-BackupService.bat as Administrator.
     pause
     exit /b 1
 )
@@ -47,13 +45,17 @@ if errorlevel 1 (
 )
 
 echo Instance: %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
-
-set "PREVIOUS_PID="
-for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "PREVIOUS_PID=%%P"
-set "PREVIOUS_PID=%PREVIOUS_PID: =%"
+echo Installed config: %DATA_DIR%\Backup.json
 
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 goto :START_SERVICE
+if not errorlevel 1 (
+    echo %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^) is already STOPPED.
+    echo Logs: %DATA_DIR%\logs
+    echo Note: Automatic / Delayed Start services will start again after reboot.
+    echo For lasting disable, set Startup Type to Manual or Disabled separately.
+    pause
+    exit /b 0
+)
 
 if defined STOP_MODE goto :HAVE_STOP_MODE
 call :RESOLVE_STOP_MODE
@@ -66,20 +68,39 @@ goto :STOP_GRACEFUL
 
 :STOP_GRACEFUL
 echo Stopping %SERVICE_NAME% ^(StopMode=Graceful^)...
-sc.exe stop "%SERVICE_NAME%" >nul 2>&1
+echo Waiting up to %STOP_TIMEOUT_SECONDS% seconds for a graceful STOPPED state.
+echo A long-running backup operation may delay STOPPED.
+echo This script does not force-terminate the process in Graceful mode.
+sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]3[ ]*STOP_PENDING" >nul
+if not errorlevel 1 goto :WAIT_STOPPED
+sc.exe stop "%SERVICE_NAME%"
+if errorlevel 1 (
+    sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
+    if not errorlevel 1 goto :SUCCESS
+    sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]3[ ]*STOP_PENDING" >nul
+    if errorlevel 1 goto :STOP_COMMAND_FAILED
+)
+
+:WAIT_STOPPED
 set /a WAIT_SECONDS=0
-:WAIT_GRACEFUL_STOPPED
+
+:WAIT_STOPPED_LOOP
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 goto :WAIT_PREVIOUS_PID_EXIT
+if not errorlevel 1 goto :SUCCESS
 set /a WAIT_SECONDS+=1
+set /a PROGRESS_MOD=WAIT_SECONDS %% 30
+if %PROGRESS_MOD%==0 echo Still waiting for STOPPED... %WAIT_SECONDS%s / %STOP_TIMEOUT_SECONDS%s
 if %WAIT_SECONDS% GEQ %STOP_TIMEOUT_SECONDS% goto :STOP_FAILED
 ping.exe 127.0.0.1 -n 2 >nul
-goto :WAIT_GRACEFUL_STOPPED
+goto :WAIT_STOPPED_LOOP
 
 :STOP_IMMEDIATE
 echo WARNING: Immediate stop for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^) will interrupt an in-progress backup.
 echo Unpublished staging ^(.partial_*^) may remain until the next service start.
-set "INITIAL_PID=%PREVIOUS_PID%"
+echo Published snapshots, cache and configuration are not deleted.
+set "INITIAL_PID="
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "INITIAL_PID=%%P"
+set "INITIAL_PID=%INITIAL_PID: =%"
 call :VALIDATE_PID "%INITIAL_PID%"
 if errorlevel 1 goto :INVALID_PID
 
@@ -94,7 +115,10 @@ goto :IMMEDIATE_GRACE_WAIT
 
 :IMMEDIATE_AFTER_GRACE
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 goto :WAIT_PREVIOUS_PID_EXIT
+if not errorlevel 1 (
+    echo %SERVICE_NAME% reached STOPPED without force-terminate.
+    goto :SUCCESS
+)
 
 set "PID_CHECK1="
 for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "PID_CHECK1=%%P"
@@ -102,7 +126,8 @@ set "PID_CHECK1=%PID_CHECK1: =%"
 call :VALIDATE_PID "%PID_CHECK1%"
 if errorlevel 1 goto :INVALID_PID
 if not "%PID_CHECK1%"=="%INITIAL_PID%" (
-    echo ERROR: ProcessId changed from %INITIAL_PID% to %PID_CHECK1%. Force-terminate aborted.
+    echo ERROR: ProcessId changed from %INITIAL_PID% to %PID_CHECK1% for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=Immediate^).
+    echo Force-terminate aborted.
     pause
     exit /b 1
 )
@@ -114,18 +139,23 @@ call :VALIDATE_PID "%PID_CHECK2%"
 if errorlevel 1 goto :INVALID_PID
 if not "%PID_CHECK2%"=="%PID_CHECK1%" (
     echo ERROR: ProcessId changed from %PID_CHECK1% to %PID_CHECK2% between verification queries.
+    echo Force-terminate aborted for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=Immediate^).
     pause
     exit /b 1
 )
 
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 goto :WAIT_PREVIOUS_PID_EXIT
+if not errorlevel 1 (
+    echo %SERVICE_NAME% reached STOPPED before force-terminate.
+    goto :SUCCESS
+)
 
 echo Force-terminating verified PID %PID_CHECK2% for %SERVICE_NAME% ^(StopMode=Immediate^)...
 taskkill.exe /PID %PID_CHECK2% /F >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: taskkill failed for verified PID %PID_CHECK2%.
+    echo ERROR: taskkill failed for verified PID %PID_CHECK2% of %SERVICE_NAME%.
     sc.exe queryex "%SERVICE_NAME%"
+    echo Logs: %DATA_DIR%\logs
     pause
     exit /b 1
 )
@@ -133,53 +163,22 @@ if errorlevel 1 (
 set /a WAIT_SECONDS=0
 :WAIT_IMMEDIATE_STOPPED
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 goto :WAIT_PREVIOUS_PID_EXIT
+if not errorlevel 1 goto :IMMEDIATE_SUCCESS
 set /a WAIT_SECONDS+=1
 if %WAIT_SECONDS% GEQ %STOP_TIMEOUT_SECONDS% goto :STOP_FAILED
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_IMMEDIATE_STOPPED
 
-:WAIT_PREVIOUS_PID_EXIT
-call :VALIDATE_PID "%PREVIOUS_PID%"
-if errorlevel 1 goto :START_SERVICE
-echo Waiting for previous PID %PREVIOUS_PID% to exit before start...
-set /a PROCESS_WAIT_SECONDS=0
-:WAIT_PREVIOUS_PID_LOOP
-tasklist.exe /FI "PID eq %PREVIOUS_PID%" /NH 2>nul | findstr.exe /R /C:"[ ]%PREVIOUS_PID%[ ]" >nul
-if errorlevel 1 goto :START_SERVICE
-set /a PROCESS_WAIT_SECONDS+=1
-if %PROCESS_WAIT_SECONDS% GEQ %PID_EXIT_TIMEOUT_SECONDS% (
-    echo ERROR: Previous PID %PREVIOUS_PID% is still running; refusing to start a second instance of %SERVICE_NAME%.
-    pause
-    exit /b 1
-)
-ping.exe 127.0.0.1 -n 2 >nul
-goto :WAIT_PREVIOUS_PID_LOOP
-
-:START_SERVICE
-sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if errorlevel 1 (
-    echo ERROR: Cannot start %SERVICE_NAME% until it is STOPPED.
-    sc.exe queryex "%SERVICE_NAME%"
-    pause
-    exit /b 1
-)
-echo Starting %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^)...
-sc.exe start "%SERVICE_NAME%" >nul
-if errorlevel 1 goto :START_FAILED
-set /a WAIT_SECONDS=0
-
-:WAIT_RUNNING
-sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]4[ ]*RUNNING" >nul
-if not errorlevel 1 goto :SUCCESS
-set /a WAIT_SECONDS+=1
-if %WAIT_SECONDS% GEQ %START_TIMEOUT_SECONDS% goto :START_FAILED
-ping.exe 127.0.0.1 -n 2 >nul
-goto :WAIT_RUNNING
+:IMMEDIATE_SUCCESS
+echo WARNING: An interrupted backup may leave .partial_* staging until the next start.
+goto :SUCCESS
 
 :SUCCESS
-echo %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^) is RUNNING.
+echo %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=%STOP_MODE%^) is STOPPED.
 echo Logs: %DATA_DIR%\logs
+echo Note: Automatic / Delayed Start services will start again after reboot.
+echo For lasting disable, set Startup Type to Manual or Disabled separately.
+echo Stop -^> Start creates a new process and re-reads the installed Backup.json.
 pause
 exit /b 0
 
@@ -202,7 +201,7 @@ if "%CHOICE%"=="2" (
     exit /b 0
 )
 if "%CHOICE%"=="0" exit /b 1
-echo ERROR: Invalid stop mode choice "%CHOICE%".
+echo ERROR: Invalid stop mode choice "%CHOICE%" for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^).
 exit /b 1
 
 :VALIDATE_PID
@@ -217,24 +216,26 @@ exit /b 0
 :INVALID_PID
 echo ERROR: Refusing invalid or unverified ProcessId for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=Immediate^).
 sc.exe queryex "%SERVICE_NAME%"
+echo Logs: %DATA_DIR%\logs
 pause
 exit /b 1
 
 :CANCELLED
-echo Restart cancelled by user for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^). Service state was not changed.
+echo Stop cancelled by user for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^). Service state was not changed.
+pause
+exit /b 1
+
+:STOP_COMMAND_FAILED
+echo ERROR: sc.exe stop failed for %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=%STOP_MODE%^).
+sc.exe queryex "%SERVICE_NAME%"
+echo Logs: %DATA_DIR%\logs
 pause
 exit /b 1
 
 :STOP_FAILED
 echo ERROR: Service %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%, StopMode=%STOP_MODE%^) did not reach STOPPED within %STOP_TIMEOUT_SECONDS% seconds.
 sc.exe queryex "%SERVICE_NAME%"
-pause
-exit /b 1
-
-:START_FAILED
-echo ERROR: Service %SERVICE_NAME% ^(InstanceId=%SERVICE_INSTANCE%^) did not reach RUNNING state.
-sc.exe query "%SERVICE_NAME%"
-echo Check logs in %DATA_DIR%\logs
+echo Logs: %DATA_DIR%\logs
 pause
 exit /b 1
 

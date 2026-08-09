@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -12,6 +11,15 @@
 #include <string_view>
 
 namespace {
+
+std::uint32_t rotateRight32(std::uint32_t value, unsigned bits)
+{
+    const unsigned shift = bits & 31u;
+    if (shift == 0u) {
+        return value;
+    }
+    return (value >> shift) | (value << (32u - shift));
+}
 
 constexpr std::array<std::uint32_t, 64> round_constants{
     0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u,
@@ -91,12 +99,12 @@ private:
         }
         for (size_t index = 16; index < words.size(); ++index) {
             const std::uint32_t s0 =
-                std::rotr(words[index - 15], 7) ^
-                std::rotr(words[index - 15], 18) ^
+                rotateRight32(words[index - 15], 7) ^
+                rotateRight32(words[index - 15], 18) ^
                 (words[index - 15] >> 3);
             const std::uint32_t s1 =
-                std::rotr(words[index - 2], 17) ^
-                std::rotr(words[index - 2], 19) ^
+                rotateRight32(words[index - 2], 17) ^
+                rotateRight32(words[index - 2], 19) ^
                 (words[index - 2] >> 10);
             words[index] =
                 words[index - 16] + s0 + words[index - 7] + s1;
@@ -113,12 +121,12 @@ private:
 
         for (size_t index = 0; index < words.size(); ++index) {
             const std::uint32_t sum1 =
-                std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25);
+                rotateRight32(e, 6) ^ rotateRight32(e, 11) ^ rotateRight32(e, 25);
             const std::uint32_t choose = (e & f) ^ ((~e) & g);
             const std::uint32_t temporary1 =
                 h + sum1 + choose + round_constants[index] + words[index];
             const std::uint32_t sum0 =
-                std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22);
+                rotateRight32(a, 2) ^ rotateRight32(a, 13) ^ rotateRight32(a, 22);
             const std::uint32_t majority =
                 (a & b) ^ (a & c) ^ (b & c);
             const std::uint32_t temporary2 = sum0 + majority;

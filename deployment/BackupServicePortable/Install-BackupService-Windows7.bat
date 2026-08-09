@@ -1,10 +1,13 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 
+set "PACKAGE_ROOT=%~dp0"
+set "SERVICE_INSTANCE=default"
+if exist "%PACKAGE_ROOT%ServiceInstance.cmd" call "%PACKAGE_ROOT%ServiceInstance.cmd"
+if not "%~1"=="" if /I not "%~1"=="/validate" set "SERVICE_INSTANCE=%~1"
 set "SERVICE_NAME=SearchEngineBackupService"
 set "DISPLAY_NAME=SearchEngine Backup Service"
 set "TARGET_ARCH={{ARCHITECTURE}}"
-set "PACKAGE_ROOT=%~dp0"
 set "DATA_DIR=%ProgramData%\SearchEngineBackupService"
 set "BINARY=%PACKAGE_ROOT%app\BackupService.exe"
 set "CONFIG_TEMPLATE=%PACKAGE_ROOT%data\Backup.json"
@@ -27,11 +30,13 @@ set "INSTALL_ROOT=%PROGRAM_ROOT%\SearchEngineBackupService"
 set "INSTALLED_BIN=%INSTALL_ROOT%\bin"
 
 echo SearchEngineBackupService portable installer ^(%TARGET_ARCH%^)
+echo Instance: %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
 echo.
 
 if not exist "%BINARY%" goto :PACKAGE_MISSING
 if not exist "%CONFIG_TEMPLATE%" goto :PACKAGE_MISSING
 if not exist "%VC_REDIST%" goto :PACKAGE_MISSING
+if not exist "%PACKAGE_ROOT%ServiceInstance.cmd" goto :PACKAGE_MISSING
 if not exist "%PACKAGE_ROOT%Verify-Package.bat" goto :PACKAGE_MISSING
 
 call "%PACKAGE_ROOT%Verify-Package.bat" /quiet
@@ -58,10 +63,29 @@ if errorlevel 1 goto :CANCELLED
 goto :INSTALL_STEPS
 
 :CLEAN_DESTINATION_CHECK
+set "LEFTOVER_DIRECTORIES=0"
 call :CHECK_EMPTY_DIRECTORY "%INSTALL_ROOT%"
-if errorlevel 1 goto :INSTALL_NOT_EMPTY
+if errorlevel 1 set "LEFTOVER_DIRECTORIES=1"
 call :CHECK_EMPTY_DIRECTORY "%DATA_DIR%"
-if errorlevel 1 goto :DATA_NOT_EMPTY
+if errorlevel 1 set "LEFTOVER_DIRECTORIES=1"
+if "%LEFTOVER_DIRECTORIES%"=="0" goto :INSTALL_STEPS
+
+echo.
+echo Files remain from an earlier incomplete uninstall, but the Windows
+echo service %SERVICE_NAME% is not registered.
+if exist "%INSTALL_ROOT%\" echo   Application: %INSTALL_ROOT%
+if exist "%DATA_DIR%\" echo   Data:        %DATA_DIR%
+echo.
+echo Removing these folders permanently deletes their Backup.json and logs.
+echo Snapshot and mirror-history folders from backup_dir are not touched.
+echo   1 - Delete the leftover folders and continue installation
+echo   2 - Cancel ^(recommended if the files must be preserved^)
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :CANCELLED
+call :DELETE_DIRECTORY_RETRY "%INSTALL_ROOT%"
+if errorlevel 1 goto :INSTALL_LEFTOVER_DELETE_FAILED
+call :DELETE_DIRECTORY_RETRY "%DATA_DIR%"
+if errorlevel 1 goto :DATA_LEFTOVER_DELETE_FAILED
 
 :INSTALL_STEPS
 echo.
@@ -121,6 +145,8 @@ if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%README.txt" "%INSTALL_ROOT%\README.txt" >nul
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%INSTALLATION_GUIDE_RU.txt" "%INSTALL_ROOT%\INSTALLATION_GUIDE_RU.txt" >nul
+if errorlevel 1 goto :COPY_FAILED
+copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%CONFIG_TEMPLATE%" "%DATA_DIR%\Backup.json" >nul
 if errorlevel 1 goto :COPY_FAILED
@@ -217,11 +243,16 @@ echo Backup exported to: %EXPORT_ROOT%
 exit /b 0
 
 :STOP_SERVICE
+set "STOPPED_SERVICE_PID="
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "STOPPED_SERVICE_PID=%%P"
+set "STOPPED_SERVICE_PID=%STOPPED_SERVICE_PID: =%"
+echo(%STOPPED_SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
+if errorlevel 1 set "STOPPED_SERVICE_PID="
 sc.exe stop "%SERVICE_NAME%" >nul 2>&1
 set /a WAIT_SECONDS=0
 :WAIT_STOPPED_LOOP
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 goto :WAIT_STOPPED_PROCESS_EXIT
 set /a WAIT_SECONDS+=1
 if %WAIT_SECONDS% GEQ 120 goto :OFFER_FORCE_STOP
 ping.exe 127.0.0.1 -n 2 >nul
@@ -233,7 +264,7 @@ echo   2 - Cancel
 choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 exit /b 1
 set "SERVICE_PID="
-for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /I "PID"') do set "SERVICE_PID=%%P"
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "SERVICE_PID=%%P"
 set "SERVICE_PID=%SERVICE_PID: =%"
 echo(%SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
 if errorlevel 1 exit /b 1
@@ -242,6 +273,28 @@ if errorlevel 1 exit /b 1
 ping.exe 127.0.0.1 -n 3 >nul
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
 if errorlevel 1 exit /b 1
+exit /b 0
+
+:WAIT_STOPPED_PROCESS_EXIT
+if not defined STOPPED_SERVICE_PID exit /b 0
+set /a PROCESS_WAIT_SECONDS=0
+:WAIT_STOPPED_PROCESS_LOOP
+tasklist.exe /FI "PID eq %STOPPED_SERVICE_PID%" /NH 2>nul | findstr.exe /R /C:"[ ]%STOPPED_SERVICE_PID%[ ]" >nul
+if errorlevel 1 exit /b 0
+set /a PROCESS_WAIT_SECONDS+=1
+if %PROCESS_WAIT_SECONDS% GEQ 30 goto :OFFER_FORCE_STOPPED_PROCESS
+ping.exe 127.0.0.1 -n 2 >nul
+goto :WAIT_STOPPED_PROCESS_LOOP
+
+:OFFER_FORCE_STOPPED_PROCESS
+echo The service is STOPPED, but process PID %STOPPED_SERVICE_PID% still holds files.
+echo   1 - Force-terminate this service process and continue
+echo   2 - Cancel without deleting files
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 exit /b 1
+taskkill.exe /PID %STOPPED_SERVICE_PID% /T /F >nul 2>&1
+if errorlevel 1 exit /b 1
+ping.exe 127.0.0.1 -n 3 >nul
 exit /b 0
 
 :WAIT_FOR_RUNNING
@@ -260,12 +313,39 @@ dir /b /a "%~1" 2>nul | findstr.exe "." >nul
 if errorlevel 1 exit /b 0
 exit /b 1
 
+:DELETE_DIRECTORY_RETRY
+set "DELETE_TARGET=%~1"
+if not exist "%DELETE_TARGET%\" exit /b 0
+attrib.exe -R -S -H "%DELETE_TARGET%\*" /S /D >nul 2>&1
+set /a DELETE_ATTEMPT=0
+:DELETE_DIRECTORY_LOOP
+rmdir /S /Q "%DELETE_TARGET%" >nul 2>&1
+if not exist "%DELETE_TARGET%\" exit /b 0
+set /a DELETE_ATTEMPT+=1
+if %DELETE_ATTEMPT% GEQ 30 goto :OFFER_DIRECTORY_DELETE_RETRY
+ping.exe 127.0.0.1 -n 2 >nul
+goto :DELETE_DIRECTORY_LOOP
+
+:OFFER_DIRECTORY_DELETE_RETRY
+echo.
+echo Directory is still in use or access is denied:
+echo   %DELETE_TARGET%
+echo Close Explorer, Total Commander, database tools and other programs that
+echo may have this directory open.
+echo   1 - Retry deletion
+echo   2 - Cancel and preserve the remaining files
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 exit /b 1
+set /a DELETE_ATTEMPT=0
+attrib.exe -R -S -H "%DELETE_TARGET%\*" /S /D >nul 2>&1
+goto :DELETE_DIRECTORY_LOOP
+
 :RESTART_OLD_SERVICE_AND_FAIL
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 
 :ROLLBACK_PREPARE_FAILED
-echo ERROR: Cannot move the previous installation into rollback directories.
+echo ERROR: Cannot move the previous installation into rollback folders.
 if exist "%ROLLBACK_INSTALL%" if not exist "%INSTALL_ROOT%" move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
 if exist "%ROLLBACK_DATA%" if not exist "%DATA_DIR%" move "%ROLLBACK_DATA%" "%DATA_DIR%" >nul
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
@@ -316,7 +396,7 @@ goto :FAILED
 
 :ROLLBACK_STOP_FAILED
 echo ERROR: The new service could not be stopped for automatic rollback.
-echo Both rollback directories were preserved:
+echo Both rollback folders were preserved:
 echo   %ROLLBACK_INSTALL%
 echo   %ROLLBACK_DATA%
 goto :FAILED
@@ -341,11 +421,13 @@ goto :FAILED
 echo ERROR: data\Backup.json is invalid. Edit paths or restore the package.
 echo Run: app\BackupService.exe --validate-config --config data\Backup.json --data-dir data
 goto :FAILED
-:INSTALL_NOT_EMPTY
-echo ERROR: Application directory is not empty: %INSTALL_ROOT%
+:INSTALL_LEFTOVER_DELETE_FAILED
+echo ERROR: Leftover application directory could not be deleted:
+echo   %INSTALL_ROOT%
 goto :FAILED
-:DATA_NOT_EMPTY
-echo ERROR: Data directory is not empty: %DATA_DIR%
+:DATA_LEFTOVER_DELETE_FAILED
+echo ERROR: Leftover data directory could not be deleted:
+echo   %DATA_DIR%
 goto :FAILED
 :FAILED_WITH_FILES
 echo Partial files were preserved for diagnostics:

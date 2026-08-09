@@ -49,14 +49,71 @@ function(searchengine_target_win32_versioninfo target_name)
         set(_version_json "${PROJECT_SOURCE_DIR}/app-version.${ARG_PRODUCT_NAME}.json")
     endif()
     if(EXISTS "${_version_json}")
-        set_property(
-            DIRECTORY
-            APPEND
-            PROPERTY CMAKE_CONFIGURE_DEPENDS "${_version_json}"
-        )
+        # Rebuild the .rc object when the canonical JSON changes. Do NOT add
+        # CMAKE_CONFIGURE_DEPENDS here: Release bump runs during the build and
+        # must not force a mid-build CMake reconfigure.
         set_source_files_properties(
             "${_rc_path}"
             PROPERTIES OBJECT_DEPENDS "${_version_json}"
         )
     endif()
+endfunction()
+
+# Attach a once-per-product Release version bump that runs before the target
+# compiles. Only registered when SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD is ON
+# for a packagable preset (caller must pass the packaging gate).
+function(searchengine_attach_release_version_bump product_name)
+    if(NOT WIN32)
+        return()
+    endif()
+    if(NOT SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD)
+        return()
+    endif()
+    if(NOT _searchengine_package_arch)
+        return()
+    endif()
+    if(NOT _powershell_executable)
+        return()
+    endif()
+    if(ARGC LESS 2)
+        message(
+            FATAL_ERROR
+            "searchengine_attach_release_version_bump(${product_name}): "
+            "at least one target name is required"
+        )
+    endif()
+
+    set(_bump_target "searchengine_release_version_bump_${product_name}")
+    if(NOT TARGET ${_bump_target})
+        add_custom_target(
+            ${_bump_target}
+            COMMAND
+            "${_powershell_executable}"
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File
+            "${PROJECT_SOURCE_DIR}/scripts/Ensure-ReleaseVersionBump.ps1"
+            -ProjectRoot
+            "${PROJECT_SOURCE_DIR}"
+            -ProductName
+            "${product_name}"
+            -Configuration
+            "$<CONFIG>"
+            COMMENT
+            "Bump ${product_name} app-version before Release compile (packagable preset)"
+            VERBATIM
+        )
+        set_property(TARGET ${_bump_target} PROPERTY FOLDER "Versioning")
+    endif()
+
+    foreach(_target_name IN LISTS ARGN)
+        if(NOT TARGET ${_target_name})
+            message(
+                FATAL_ERROR
+                "searchengine_attach_release_version_bump: target "
+                "'${_target_name}' does not exist"
+            )
+        endif()
+        add_dependencies(${_target_name} ${_bump_target})
+    endforeach()
 endfunction()

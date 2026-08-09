@@ -1,6 +1,7 @@
 #include "MirrorHistory.h"
 
 #include "Backup/BackupCache.h"
+#include "Backup/BackupPathFilter.h"
 #include "Backup/FileHash.h"
 #include "Backup/SQLiteBackup.h"
 #include "MyUtils/Encoding.h"
@@ -239,6 +240,7 @@ nh::json stateToJson(const BackupTarget& target,
         {"updated_at", time_string},
         {"updated_unix_seconds", timestamp},
         {"complete", state.complete},
+        {"exclude", target.exclude},
         {"directories", state.directories},
         {"files", std::move(files)},
         {"errors", state.errors}
@@ -385,6 +387,7 @@ bool collectSourceEntries(const BackupTarget& target,
         return true;
     }
 
+    const BackupPathFilter filter(target.exclude);
     std::error_code error;
     for (fs::recursive_directory_iterator it(
              target.src,
@@ -426,8 +429,15 @@ bool collectSourceEntries(const BackupTarget& target,
             return false;
         }
         if (it->is_directory(type_error)) {
+            if (filter.isDirectoryExcluded(relative)) {
+                it.disable_recursion_pending();
+                continue;
+            }
             entries.emplace(relative, EntryKind::Directory);
         } else if (it->is_regular_file(type_error)) {
+            if (filter.isFileExcluded(relative)) {
+                continue;
+            }
             entries.emplace(relative, EntryKind::File);
         } else if (type_error) {
             error_message =
@@ -911,8 +921,15 @@ void collectGarbageObjects(const fs::path& objects_root,
     }
 }
 
-void removeEmptyCurrentDirectories(const fs::path& data_root)
+void removeEmptyCurrentDirectories(
+    const fs::path& data_root,
+    const std::vector<std::string>& keep_directories)
 {
+    std::set<std::string> keep;
+    for (const std::string& directory : keep_directories) {
+        keep.insert(directory);
+    }
+
     std::vector<fs::path> directories;
     std::error_code error;
     if (!fs::exists(data_root, error) || error) {
@@ -942,6 +959,14 @@ void removeEmptyCurrentDirectories(const fs::path& data_root)
         }
     );
     for (const fs::path& directory : directories) {
+        const fs::path relative = fs::relative(directory, data_root, error);
+        if (error) {
+            error.clear();
+            continue;
+        }
+        if (keep.contains(relativeKey(relative))) {
+            continue;
+        }
         fs::remove(directory, error);
         error.clear();
     }
@@ -1247,7 +1272,7 @@ BackupTargetResult updateMirrorHistory(
     }
 
     if (!state.complete) {
-        removeEmptyCurrentDirectories(data_root);
+        removeEmptyCurrentDirectories(data_root, state.directories);
         return BackupTargetResult{
             target.src,
             BackupTargetStatus::Failed,
@@ -1287,7 +1312,7 @@ BackupTargetResult updateMirrorHistory(
 
     rotateRestorePoints(restore_points_root, target.history_tiers);
     collectGarbageObjects(objects_root, state, restore_points_root);
-    removeEmptyCurrentDirectories(data_root);
+    removeEmptyCurrentDirectories(data_root, state.directories);
 
     if (!data_changed && !metadata_changed && !point_created) {
         return BackupTargetResult{

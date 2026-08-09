@@ -14,6 +14,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
+. (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
 $templateRoot = Join-Path $projectRoot 'deployment\BackupServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.backupservice-portable-package'
@@ -226,6 +227,14 @@ try {
             Destination = 'Install-BackupService.bat'
         },
         @{
+            Source = 'Stop-BackupService-Windows7.bat'
+            Destination = 'Stop-BackupService.bat'
+        },
+        @{
+            Source = 'Start-BackupService-Windows7.bat'
+            Destination = 'Start-BackupService.bat'
+        },
+        @{
             Source = 'Restart-BackupService-Windows7.bat'
             Destination = 'Restart-BackupService.bat'
         },
@@ -243,17 +252,18 @@ try {
             -LiteralPath (Join-Path $templateRoot $batchFile.Source) `
             -Destination (Join-Path $stagingDirectory $batchFile.Destination)
     }
-    Get-ChildItem -LiteralPath $stagingDirectory -Filter '*.bat' `
-        -Recurse -File | ForEach-Object {
+    Copy-Item -LiteralPath (Join-Path $templateRoot 'ServiceInstance.cmd') `
+        -Destination (Join-Path $stagingDirectory 'ServiceInstance.cmd')
+    Get-ChildItem -LiteralPath $stagingDirectory -Recurse -File |
+        Where-Object { $_.Extension -in @('.bat', '.cmd') } |
+        ForEach-Object {
             $batchText = [IO.File]::ReadAllText($_.FullName)
             $batchText = $batchText.Replace('{{ARCHITECTURE}}', $Architecture)
             $batchText = $batchText.Replace('{{VC_REDIST_FILE}}', $vcRedistName)
             $batchText = ($batchText -replace "`r?`n", "`r`n")
-            [IO.File]::WriteAllText(
-                $_.FullName,
-                $batchText,
-                [Text.Encoding]::ASCII
-            )
+            # Portable .bat/.cmd must stay strict ASCII for cmd.exe / Windows 7.
+            # Fail loudly instead of silently replacing non-ASCII with '?'.
+            Write-StrictAsciiText -Path $_.FullName -Text $batchText
         }
 
     $textTokens = @{
@@ -294,9 +304,12 @@ try {
     }
     foreach ($name in @(
         'Install-BackupService.bat',
+        'Stop-BackupService.bat',
+        'Start-BackupService.bat',
         'Restart-BackupService.bat',
         'Uninstall-BackupService.bat',
-        'Verify-Package.bat'
+        'Verify-Package.bat',
+        'ServiceInstance.cmd'
     )) {
         $protectedFiles += Get-Item -LiteralPath `
             (Join-Path $stagingDirectory $name)

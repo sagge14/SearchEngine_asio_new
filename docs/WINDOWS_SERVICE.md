@@ -97,10 +97,17 @@ ENTRY и Windows GUI subsystem не используются.
 
 ### Автоматически после Release-сборки цели
 
-В packagable presets после успешной **Release** пересборки цели `SearchEngine`
-CMake PostBuild вызывает `scripts\PostBuild-SearchEngineServicePackage.ps1` →
-`New-SearchEngineServicePackage.ps1` (только текущий preset). Цель
-`BackupService` — аналогично через `PostBuild-BackupServicePackage.ps1`.
+В packagable presets при `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=ON` обычная
+**Release** сборка/Rebuild цели:
+
+1. **До компиляции** повышает patch app-версии продукта
+   (`scripts\Ensure-ReleaseVersionBump.ps1` → `app-version*.json` и
+   `cmake/generated/...` VERSIONINFO). Для SearchEngineService общая версия
+   поднимается один раз до сборки и `SearchEngine.exe`, и
+   `SearchEngineConfig.exe`.
+2. После успешной линковки PostBuild вызывает
+   `PostBuild-*Package.ps1` → `New-*Package.ps1` и упаковывает **ту же** новую
+   версию (только текущий preset).
 
 | Preset | Параметр packager | Папка пакета |
 |---|---|---|
@@ -120,19 +127,26 @@ cmake --preset windows7-x86
 cmake --build --preset windows7-x86-release --target SearchEngine
 ```
 
-`ZagEditor` — отдельная цель `ZagEditor`. После Release-сборки в packagable
-presets PostBuild собирает `out\package\ZagEditor-*` и публикует ZIP на Drive
-(см. `tools\zag_editor\README.md`).
-Debug/RelWithDebInfo упаковку пропускают. Отключить автоупаковку:
+`ZagEditor` / `BackupRestore` — отдельные цели; тот же контракт bump-before-compile
++ PostBuild в packagable presets.
+Debug/RelWithDebInfo/MinSizeRel версию не повышают и пакеты не публикуют.
+Отключить bump и автоупаковку IDE-пути:
 `-DSEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF`.
 
-Если цель уже актуальна и линковка не выполняется, PostBuild не стартует —
-сделайте Rebuild цели или вызовите `New-*` вручную.
+`Build-*Package.ps1` сам делает один bump (или `-SkipVersionBump`), затем
+configure с `PACKAGE_ON_RELEASE_BUILD=OFF` и/или
+`SEARCHENGINE_VERSION_BUMP_MODE=skip`, чтобы не было второго повышения.
+`New-*Package.ps1` только упаковывает текущую версию.
+
+При `PACKAGE_ON_RELEASE_BUILD=ON` Release-сборка цели каждый раз запускает
+bump-target (он всегда out-of-date), обновляет `.rc` и перелинковывает EXE, после
+чего POST_BUILD упаковывает новую версию. Для упаковки без bump используйте
+`New-*Package.ps1` или `Build-*Package.ps1 -SkipVersionBump`.
 
 Если задан User/process env `WORKSPACE_RELEASE_CLOUD_ROOT`, после успешного
 `New-*` ZIP + `.sha256` копируются на Google Drive. Отключение на один запуск
 упаковщика: `-SkipCloudPublish`. Подробности:
-`TOOLS\instructions\RELEASE_CLOUD_PUBLISH.md`.
+`TOOLS\instructions\RELEASE_CLOUD_PUBLISH.md` и `docs/BUILDING_WINDOWS.md`.
 
 ### Ручная / полная упаковка
 
@@ -174,7 +188,7 @@ out\package\SearchEngineService-x86-Windows7\
 - `tools\SearchEngineConfig.exe` той же архитектуры;
 - `data\Settings.json`, `OEM866.INI`, `ignore.txt` и пустые runtime-каталоги;
 - соответствующий подписанный Microsoft VC++ Redistributable;
-- BAT-скрипты установки, переустановки, перезапуска и полного удаления;
+- BAT-скрипты установки, остановки, запуска, перезапуска и полного удаления;
 - подробная `INSTALLATION_GUIDE_RU.txt` с назначением каждого файла;
 - manifest с размерами и SHA-256 обязательных файлов.
 
@@ -304,14 +318,47 @@ restart и задаёт длительный preshutdown timeout. Firewall не 
 
 ## Управление
 
+Штатная остановка и запуск — пара Stop/Start (новый процесс), а не Windows
+Pause/Continue: служба их не поддерживает. После `Stop` → `Start`
+`SearchEngineApplication::start()` заново читает `Settings.json` и
+инициализирует runtime-ресурсы; отдельная перезагрузка конфигурации в C++ не
+нужна.
+
+Остановленная служба с Automatic / Delayed Start снова запустится после
+перезагрузки Windows. Для долговременного отключения отдельно переведите
+Startup Type в Manual или Disabled — скрипты Stop/Start это не делают.
+
+Изменение порта в установленном `Settings.json` подхватывается новым процессом
+и проверяется PING/PONG по актуальному порту. Правило Windows Firewall,
+`client-endpoint.txt` и клиентская база службой и Start-скриптом автоматически
+не обновляются: проверьте их вручную. Start выводит предупреждение при
+расхождении порта.
+
 ```powershell
-Start-Service SearchEngineService
+.\scripts\Stop-SearchEngineService.ps1
+.\scripts\Start-SearchEngineService.ps1
+.\scripts\Stop-SearchEngineService.ps1 -InstanceId archive
+.\scripts\Start-SearchEngineService.ps1 -InstanceId archive
 Get-Service SearchEngineService
 sc.exe queryex SearchEngineService
-Stop-Service SearchEngineService
 .\scripts\Restart-SearchEngineService.ps1
 .\scripts\Restart-SearchEngineService.ps1 -InstanceId archive
 ```
+
+В переносимом комплекте без PowerShell:
+
+```bat
+Stop-SearchEngineService.bat
+Start-SearchEngineService.bat
+Stop-SearchEngineService.bat archive
+Start-SearchEngineService.bat archive
+Restart-SearchEngineService.bat
+```
+
+`Stop-SearchEngineService` ждёт штатный `STOPPED` до 1800 секунд и не предлагает
+`taskkill`. `Start-SearchEngineService` проверяет установленный
+`Settings.json`, дожидается `RUNNING` и выполняет PING/PONG; при уже
+`RUNNING` готовность всё равно проверяется.
 
 Логи находятся под `<data-dir>\logs`; ранние ошибки запуска также отражаются
 ненулевым SCM exit code. Для просмотра последних строк:

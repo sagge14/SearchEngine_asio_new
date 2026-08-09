@@ -1,5 +1,7 @@
 #include "BackupConfig.h"
 
+#include "Backup/BackupPathFilter.h"
+
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -368,6 +370,77 @@ bool addHistoryPeriod(const nh::json& item,
     return true;
 }
 
+bool readExcludePatterns(const nh::json& object,
+                         const std::string& location,
+                         bool is_directory,
+                         bool is_directory_known,
+                         std::vector<std::string>& patterns,
+                         BackupConfigResult& result)
+{
+    const auto it = object.find("exclude");
+    if (it == object.end()) {
+        patterns.clear();
+        return true;
+    }
+    if (!it->is_array()) {
+        addIssue(result, location + ".exclude", "must be an array of strings");
+        return false;
+    }
+
+    if (is_directory_known && !is_directory && !it->empty()) {
+        addIssue(
+            result,
+            location + ".exclude",
+            "is only supported when is_directory is true"
+        );
+        return false;
+    }
+
+    patterns.clear();
+    std::set<std::string> seen;
+    bool ok = true;
+    for (size_t index = 0; index < it->size(); ++index) {
+        const std::string item_location =
+            location + ".exclude[" + std::to_string(index) + "]";
+        const nh::json& item = (*it)[index];
+        if (!item.is_string()) {
+            addIssue(result, item_location, "must be a string");
+            ok = false;
+            continue;
+        }
+
+        const std::string raw = item.get<std::string>();
+        std::string normalized;
+        std::string error_message;
+        if (!validateExcludePattern(raw, normalized, error_message)) {
+            addIssue(result, item_location, error_message);
+            ok = false;
+            continue;
+        }
+
+#ifdef _WIN32
+        std::string duplicate_key = normalized;
+        std::transform(
+            duplicate_key.begin(),
+            duplicate_key.end(),
+            duplicate_key.begin(),
+            [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            }
+        );
+#else
+        const std::string& duplicate_key = normalized;
+#endif
+        if (!seen.insert(duplicate_key).second) {
+            addIssue(result, item_location, "duplicate exclude pattern");
+            ok = false;
+            continue;
+        }
+        patterns.push_back(std::move(normalized));
+    }
+    return ok;
+}
+
 bool readHistoryPeriods(const nh::json& object,
                         const std::string& location,
                         BackupStrategy strategy,
@@ -661,6 +734,14 @@ BackupConfigResult loadBackupConfig(const std::filesystem::path& path)
                     target.history_tiers,
                     result
                 );
+                const bool exclude_ok = readExcludePatterns(
+                    target_json,
+                    target_location,
+                    target.is_directory,
+                    type_ok,
+                    target.exclude,
+                    result
+                );
                 if (source_ok &&
                     retention_ok &&
                     type_ok &&
@@ -668,7 +749,8 @@ BackupConfigResult loadBackupConfig(const std::filesystem::path& path)
                     strategy_ok &&
                     cache_ok &&
                     skip_unchanged_ok &&
-                    periods_ok)
+                    periods_ok &&
+                    exclude_ok)
                 {
                     target.src = std::move(source);
                     group.targets.push_back(std::move(target));

@@ -32,7 +32,22 @@
           "is_directory": true,
           "mode": "auto",
           "cache": true,
-          "skip_unchanged": true
+          "skip_unchanged": true,
+          "exclude": [
+            "__astcache/",
+            ".vs/",
+            ".cursor/",
+            "out/",
+            "Win32/",
+            "Win64/",
+            "*.obj",
+            "*.pch",
+            "*.ilk",
+            "*.tds",
+            "*.dcu",
+            "*.tmp",
+            "Thumbs.db"
+          ]
         },
         {
           "src": "D:\\BASES_PRD",

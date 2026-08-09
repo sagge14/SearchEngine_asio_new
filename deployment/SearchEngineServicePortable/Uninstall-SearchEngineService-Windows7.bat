@@ -166,7 +166,7 @@ exit /b 1
 
 :STOP_SERVICE
 set "STOPPED_SERVICE_PID="
-for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /I "PID"') do set "STOPPED_SERVICE_PID=%%P"
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "STOPPED_SERVICE_PID=%%P"
 set "STOPPED_SERVICE_PID=%STOPPED_SERVICE_PID: =%"
 echo(%STOPPED_SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
 if errorlevel 1 set "STOPPED_SERVICE_PID="
@@ -186,7 +186,7 @@ echo   2 - Cancel without deleting files
 choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 exit /b 1
 set "SERVICE_PID="
-for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /I "PID"') do set "SERVICE_PID=%%P"
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "SERVICE_PID=%%P"
 set "SERVICE_PID=%SERVICE_PID: =%"
 echo(%SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
 if errorlevel 1 exit /b 1

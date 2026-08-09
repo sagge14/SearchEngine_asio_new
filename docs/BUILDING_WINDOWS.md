@@ -32,12 +32,38 @@ Presets размещают их раздельно в `out/build/`.
 - Имена EXE **не** меняются (`SearchEngine.exe`, не `SearchEngine_v001.exe` в
   portable/ZIP; legacy `copy_with_version.ps1` к release naming не относится)
 
-Release-сборка одного продукта (bump patch → build → package → cloud при
-настроенном `WORKSPACE_RELEASE_CLOUD_ROOT`):
+Продукты с отдельным version manifest:
+
+| Продукт | JSON | EXE |
+|---|---|---|
+| SearchEngineService | `app-version.json` | `SearchEngine.exe`, `SearchEngineConfig.exe` (общая версия) |
+| BackupService | `app-version.BackupService.json` | `BackupService.exe` |
+| ZagEditor | `app-version.ZagEditor.json` | `ZagEditor.exe` |
+| BackupRestore | `app-version.BackupRestore.json` | `BackupRestore.exe` |
+
+### Кто повышает patch
+
+| Сценарий | Bump patch | PE / пакет |
+|---|---|---|
+| IDE / CMake **Release** Build/Rebuild цели в packagable preset (`windows-x64`, `windows-x86`, `windows7-x86`) при `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=ON` | Да, **один раз до компиляции** (`Ensure-ReleaseVersionBump.ps1` → sync `.rc`/`.h`) | POST_BUILD упаковывает **ту же** новую версию |
+| `Build-*Package.ps1` | Да, один раз в начале скрипта (до configure/build); `Architecture=All` — одна версия на все архитектуры | Затем build + `New-*Package`; CMake bump отключён (`PACKAGE_ON=OFF` и/или `SEARCHENGINE_VERSION_BUMP_MODE=skip`) |
+| `Build-*Package.ps1 -SkipVersionBump` | Нет | Текущая версия в PE и пакете |
+| `New-*Package.ps1` (повторная упаковка) | Нет | Текущая версия из JSON / PE |
+| Debug / RelWithDebInfo / MinSizeRel | Нет | Пакет не публикуется |
+| `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF` | Нет (IDE/CMake path) | POST_BUILD упаковки нет |
+
+Важно: bump **нельзя** делать только в POST_BUILD — EXE уже собран со старым
+VERSIONINFO. При ошибке компиляции после bump пакет и cloud ZIP не создаются
+(POST_BUILD не запускается).
+
+Release через скрипт (bump → build → package → cloud при настроенном
+`WORKSPACE_RELEASE_CLOUD_ROOT`):
 
 ```powershell
 .\scripts\Build-SearchEngineServicePackage.ps1 -Architecture x64
 ```
+
+Без увеличения patch: `-SkipVersionBump`. Без облака: `-SkipCloudPublish`.
 
 Локальный пакет и ZIP на Drive:
 
@@ -45,9 +71,6 @@ Release-сборка одного продукта (bump patch → build → pac
 out\package\<A.B.C>\SearchEngineService-x64\
 Releases\SearchEngineService\<A.B.C>\SearchEngineService-x64-<A.B.C>.zip
 ```
-
-IDE/PostBuild упаковывает текущую версию **без** bump. Чтобы собрать без
-увеличения patch: `-SkipVersionBump`. Без облака: `-SkipCloudPublish`.
 
 ## Требуемые локальные зависимости
 

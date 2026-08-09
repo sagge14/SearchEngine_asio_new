@@ -86,7 +86,7 @@ echo   2 - Cancel
 choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 goto :STOP_FAILED
 set "SERVICE_PID="
-for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /I "PID"') do set "SERVICE_PID=%%P"
+for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "SERVICE_PID=%%P"
 set "SERVICE_PID=%SERVICE_PID: =%"
 echo(%SERVICE_PID%| findstr.exe /R /X "[1-9][0-9]*" >nul
 if errorlevel 1 goto :STOP_FAILED

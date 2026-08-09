@@ -26,8 +26,10 @@ cmake --build --preset windows-x64-release
 
 App-версия portable-релизов: `app-version.json` /
 `app-version.<Product>.json` → PE VERSIONINFO через
-`cmake/generated/<Product>/`. Release naming и bump — в
-`docs/BUILDING_WINDOWS.md` и `scripts/Build-*Package.ps1`.
+`cmake/generated/<Product>/`. В packagable Release IDE/CMake Build patch
+повышается до компиляции (`scripts/Ensure-ReleaseVersionBump.ps1`);
+`Build-*Package.ps1` делает один bump сам и блокирует повторный. Контракт —
+`docs/BUILDING_WINDOWS.md`.
 
 - Основные цели: `SearchEngine`, `BackupService` и `ZagEditor`.
 - `BUILD_TESTS` по умолчанию выключен. Запускать CTest только после явной

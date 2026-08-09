@@ -41,11 +41,12 @@ ZagEditor --config zag_editor.ini --dict D:\BASES_PRD\EXPORT.INI --no-backup  D:
 
 ### Portable package и Google Drive
 
-После Release-пересборки цели `ZagEditor` в presets `windows-x64` /
-`windows-x86` / `windows7-x86` PostBuild вызывает
+После Release-сборки/Rebuild цели `ZagEditor` в presets `windows-x64` /
+`windows-x86` / `windows7-x86` (при `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=ON`)
+сначала повышается patch app-версии, затем PostBuild вызывает
 `scripts\PostBuild-ZagEditorPackage.ps1` → `New-ZagEditorPackage.ps1` и при
 заданном `WORKSPACE_RELEASE_CLOUD_ROOT` публикует ZIP в
-`...\ZagEditor\<yyyy.MM.dd>\`.
+`...\ZagEditor\<A.B.C>\`. См. `docs/BUILDING_WINDOWS.md`.
 
 ```powershell
 cmake --build --preset windows-x64-release --target ZagEditor

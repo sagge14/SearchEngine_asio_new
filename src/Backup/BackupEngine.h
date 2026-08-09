@@ -39,6 +39,8 @@ struct BackupTarget {
     bool skip_unchanged = false;
     BackupStrategy strategy = BackupStrategy::Snapshot;
     std::vector<BackupHistoryTier> history_tiers;
+    /// Optional gitignore-like exclude patterns relative to src (directories only).
+    std::vector<std::string> exclude;
 };
 
 struct BackupGroup {

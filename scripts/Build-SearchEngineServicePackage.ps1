@@ -56,14 +56,18 @@ foreach ($build in $builds) {
             }
         }
 
-        & cmake --build --preset $build.Build `
-            --target SearchEngine SearchEngineConfig -- /m
-        if ($LASTEXITCODE -ne 0) {
-            throw (
-                "SearchEngine and SearchEngineConfig " +
-                "$($build.Architecture) Release build failed with exit code " +
-                "$LASTEXITCODE."
-            )
+        # Avoid a second bump if this tree still has PACKAGE_ON_RELEASE_BUILD=ON
+        # (e.g. -SkipConfigure after an IDE packagable configure).
+        Invoke-SearchEngineCmakeBuildWithoutVersionBump {
+            & cmake --build --preset $build.Build `
+                --target SearchEngine SearchEngineConfig -- /m
+            if ($LASTEXITCODE -ne 0) {
+                throw (
+                    "SearchEngine and SearchEngineConfig " +
+                    "$($build.Architecture) Release build failed with exit code " +
+                    "$LASTEXITCODE."
+                )
+            }
         }
     } finally {
         Pop-Location

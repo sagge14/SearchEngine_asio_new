@@ -195,3 +195,37 @@ function Get-SearchEngineCloudZipName {
 
     return "$PackageLeaf-$ReleaseId.zip"
 }
+
+function Invoke-SearchEngineCmakeBuildWithoutVersionBump {
+    <#
+    .SYNOPSIS
+      Run cmake --build with SEARCHENGINE_VERSION_BUMP_MODE=skip so CMake
+      Ensure-ReleaseVersionBump.ps1 does not bump again after Build-*Package.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$BuildAction
+    )
+
+    $previousMode = [Environment]::GetEnvironmentVariable(
+        'SEARCHENGINE_VERSION_BUMP_MODE'
+    )
+    [Environment]::SetEnvironmentVariable('SEARCHENGINE_VERSION_BUMP_MODE', 'skip')
+    try {
+        & $BuildAction
+    }
+    finally {
+        if ($null -eq $previousMode -or $previousMode -eq '') {
+            [Environment]::SetEnvironmentVariable(
+                'SEARCHENGINE_VERSION_BUMP_MODE',
+                $null
+            )
+        }
+        else {
+            [Environment]::SetEnvironmentVariable(
+                'SEARCHENGINE_VERSION_BUMP_MODE',
+                $previousMode
+            )
+        }
+    }
+}

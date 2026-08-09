@@ -16,6 +16,8 @@
 {{PACKAGE_NAME}}
 |
 |-- Install-SearchEngineService.bat     установка и переустановка
+|-- Stop-SearchEngineService.bat        штатная остановка службы
+|-- Start-SearchEngineService.bat       запуск и проверка PING/PONG
 |-- Restart-SearchEngineService.bat     перезапуск и проверка ответа
 |-- Uninstall-SearchEngineService.bat   резервирование и полное удаление
 |-- ServiceInstance.cmd                уникальный экземпляр службы
@@ -102,8 +104,8 @@ data\Settings.json является изменяемым пользовател�
 Допустимы 1–32 символа: латинские буквы, цифры, дефис и подчёркивание; первый
 символ должен быть буквой или цифрой. Для автоматического запуска имя можно
 заранее записать в ServiceInstance.cmd или передать первым аргументом:
-Install-SearchEngineService.bat archive. Для restart и uninstall нужно
-использовать тот же идентификатор.
+Install-SearchEngineService.bat archive. Для stop, start, restart и uninstall
+нужно использовать тот же идентификатор.
 
 У каждого экземпляра обязательны отдельный порт, каталог данных и индекс.
 Каталоги индексируемых документов могут быть разными или пересекаться — это
@@ -186,12 +188,49 @@ rollback-каталоги. Новые файлы окончательно зам
 успешного PING/PONG. При ошибке установщик возвращает старые каталоги и пытается
 запустить прежнюю службу.
 
-6. ПЕРЕЗАПУСК И ОСТАНОВКА
--------------------------
+6. ОСТАНОВКА, ЗАПУСК И ПЕРЕЗАПУСК
+---------------------------------
 
-Restart-SearchEngineService.bat ждёт штатную остановку не более 120 секунд.
-Если служба зависла, он предлагает принудительно завершить только PID этой
-службы. После запуска выполняется PING/PONG с таймаутом 10 секунд.
+Stop-SearchEngineService.bat и Start-SearchEngineService.bat — штатная пара
+остановки и последующего запуска Windows-службы. Это не Pause/Continue: служба
+их не поддерживает. После Stop → Start создаётся новый процесс SearchEngine, и
+SearchEngineApplication::start() заново читает рабочий
+C:\ProgramData\SearchEngineService[-instance]\Settings.json и инициализирует
+runtime-ресурсы. Отдельной «перезагрузки конфигурации» в C++ не требуется.
+
+Stop-SearchEngineService.bat:
+
+- требует права администратора;
+- ждёт штатный STOPPED до 1800 секунд (корректное закрытие индекса и фона);
+- если служба уже STOPPED — завершается успешно;
+- не вызывает taskkill и не предлагает принудительное завершение.
+
+Start-SearchEngineService.bat:
+
+- проверяет установленный Settings.json через SearchEngineConfig.exe;
+- при уже RUNNING всё равно выполняет PING/PONG;
+- после start ждёт RUNNING и проверяет PING/PONG (таймаут 10 секунд) на порту
+  из установленного Settings.json, а не из шаблона data\Settings.json пакета;
+- не изменяет Windows Firewall и не трогает клиентскую базу;
+- предупреждает, если порт Settings.json отличается от client-endpoint.txt
+  или от существующего правила установки firewall.
+
+Остановленная служба с Automatic / Delayed Start снова запустится после
+перезагрузки Windows. Для долговременного отключения отдельно переведите
+Startup Type в Manual или Disabled — Stop/Start это автоматически не делают.
+
+Если изменили порт в Settings.json:
+
+1) выполните Stop, затем Start (новый процесс слушает новый порт);
+2) проверьте или пересоздайте inbound-правило Windows Firewall;
+3) обновите параметры клиента (host/port / client-endpoint.txt).
+   Служба и Start-скрипт клиентскую базу не меняют.
+
+Restart-SearchEngineService.bat по-прежнему выполняет stop+start подряд и ждёт
+штатную остановку не более 120 секунд. Если служба зависла, Restart предлагает
+принудительно завершить только PID этой службы. После запуска выполняется
+PING/PONG с таймаутом 10 секунд. Для обычного применения конфигурации без
+force-kill предпочитайте Stop, затем Start.
 
 Ручные команды администратора:
 
@@ -201,6 +240,8 @@ Restart-SearchEngineService.bat ждёт штатную остановку не 
 
 Для экземпляра archive:
 
+  Stop-SearchEngineService.bat archive
+  Start-SearchEngineService.bat archive
   Restart-SearchEngineService.bat archive
   sc query SearchEngineService-archive
 

@@ -414,4 +414,167 @@ TEST(BackupConfig, RejectsAmbiguousAndDuplicateMirrorPeriods)
     );
 }
 
+TEST(BackupConfig, LoadsExcludePatterns)
+{
+    TemporaryConfigFile config(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project",
+          "is_directory": true,
+          "exclude": ["__astcache/", "*.obj", "/Out/"]
+        }
+      ]
+    }
+  ]
+}
+)json");
+
+    const BackupConfigResult result = loadBackupConfig(config.path());
+    ASSERT_TRUE(result.ok());
+    ASSERT_EQ(1u, result.groups.front().targets.size());
+    const auto& exclude = result.groups.front().targets.front().exclude;
+    ASSERT_EQ(3u, exclude.size());
+    EXPECT_EQ("__astcache/", exclude[0]);
+    EXPECT_EQ("*.obj", exclude[1]);
+    EXPECT_EQ("/Out/", exclude[2]);
+}
+
+TEST(BackupConfig, MissingOrEmptyExcludeDefaultsToNone)
+{
+    TemporaryConfigFile missing(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project",
+          "is_directory": true
+        }
+      ]
+    }
+  ]
+}
+)json");
+    TemporaryConfigFile empty_array(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project",
+          "is_directory": true,
+          "exclude": []
+        }
+      ]
+    }
+  ]
+}
+)json");
+
+    const BackupConfigResult missing_result = loadBackupConfig(missing.path());
+    const BackupConfigResult empty_result =
+        loadBackupConfig(empty_array.path());
+    ASSERT_TRUE(missing_result.ok());
+    ASSERT_TRUE(empty_result.ok());
+    EXPECT_TRUE(missing_result.groups.front().targets.front().exclude.empty());
+    EXPECT_TRUE(empty_result.groups.front().targets.front().exclude.empty());
+}
+
+TEST(BackupConfig, RejectsInvalidExcludeValuesWithExactLocations)
+{
+    TemporaryConfigFile not_array(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project",
+          "is_directory": true,
+          "exclude": "*.obj"
+        }
+      ]
+    }
+  ]
+}
+)json");
+    TemporaryConfigFile bad_items(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project",
+          "is_directory": true,
+          "exclude": [1, "", "C:/abs", "../x", "!keep", "__astcache/", "__astcache/"]
+        }
+      ]
+    }
+  ]
+}
+)json");
+    TemporaryConfigFile file_target(R"json(
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:/Backups",
+      "targets": [
+        {
+          "src": "D:/Project/file.txt",
+          "is_directory": false,
+          "exclude": ["*.tmp"]
+        }
+      ]
+    }
+  ]
+}
+)json");
+
+    const BackupConfigResult not_array_result =
+        loadBackupConfig(not_array.path());
+    EXPECT_FALSE(not_array_result.ok());
+    ASSERT_EQ(1u, not_array_result.issues.size());
+    EXPECT_EQ(
+        "BackupJobs[0].targets[0].exclude",
+        not_array_result.issues.front().location
+    );
+
+    const BackupConfigResult bad_items_result =
+        loadBackupConfig(bad_items.path());
+    EXPECT_FALSE(bad_items_result.ok());
+    ASSERT_GE(bad_items_result.issues.size(), 5u);
+    EXPECT_EQ(
+        "BackupJobs[0].targets[0].exclude[0]",
+        bad_items_result.issues[0].location
+    );
+    EXPECT_EQ(
+        "BackupJobs[0].targets[0].exclude[1]",
+        bad_items_result.issues[1].location
+    );
+    EXPECT_NE(
+        std::string::npos,
+        bad_items_result.issues[4].message.find("negative")
+    );
+
+    const BackupConfigResult file_target_result =
+        loadBackupConfig(file_target.path());
+    EXPECT_FALSE(file_target_result.ok());
+    ASSERT_EQ(1u, file_target_result.issues.size());
+    EXPECT_EQ(
+        "BackupJobs[0].targets[0].exclude",
+        file_target_result.issues.front().location
+    );
+    EXPECT_NE(
+        std::string::npos,
+        file_target_result.issues.front().message.find("is_directory")
+    );
+}
+
 } // namespace

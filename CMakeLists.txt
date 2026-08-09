@@ -557,6 +557,7 @@ if(BUILD_BACKUP_SERVICE)
             src/Backup/BackupCache.cpp
             src/Backup/BackupConfig.cpp
             src/Backup/BackupEngine.cpp
+            src/Backup/BackupPathFilter.cpp
             src/Backup/FileHash.cpp
             src/Backup/MirrorHistory.cpp
             src/Backup/SQLiteBackup.cpp
@@ -605,6 +606,27 @@ if(
         AND _searchengine_package_arch
         AND _powershell_executable
 )
+    # Bump app-version before compile (not in POST_BUILD): PE VERSIONINFO must
+    # embed the new patch. Build-*Package sets SEARCHENGINE_VERSION_BUMP_MODE=skip
+    # and usually configures with PACKAGE_ON_RELEASE_BUILD=OFF to avoid a second bump.
+    if(TARGET SearchEngine)
+        if(TARGET SearchEngineConfig)
+            searchengine_attach_release_version_bump(
+                    SearchEngineService
+                    SearchEngineConfig
+                    SearchEngine
+            )
+        else()
+            searchengine_attach_release_version_bump(
+                    SearchEngineService
+                    SearchEngine
+            )
+        endif()
+    endif()
+    if(TARGET BackupService)
+        searchengine_attach_release_version_bump(BackupService BackupService)
+    endif()
+
     if(TARGET SearchEngine)
         if(TARGET SearchEngineConfig)
             add_dependencies(SearchEngine SearchEngineConfig)
@@ -716,6 +738,7 @@ if(BUILD_BACKUP_RESTORE)
             AND _searchengine_package_arch
             AND _powershell_executable
     )
+        searchengine_attach_release_version_bump(BackupRestore BackupRestore)
         add_custom_command(
                 TARGET BackupRestore
                 POST_BUILD
@@ -794,6 +817,7 @@ if(BUILD_ZAGEDITOR)
             AND _searchengine_package_arch
             AND _powershell_executable
     )
+        searchengine_attach_release_version_bump(ZagEditor ZagEditor)
         add_custom_command(
                 TARGET ZagEditor
                 POST_BUILD
@@ -864,6 +888,7 @@ if(BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/src/Backup/BackupConfig.cpp"
               "${PROJECT_SOURCE_DIR}/src/Backup/BackupCache.cpp"
               "${PROJECT_SOURCE_DIR}/src/Backup/BackupEngine.cpp"
+              "${PROJECT_SOURCE_DIR}/src/Backup/BackupPathFilter.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/FileHash.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/MirrorHistory.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/Restore/MirrorHistoryStore.cpp"

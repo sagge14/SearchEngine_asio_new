@@ -147,14 +147,14 @@ bool looksLikeMirrorTargetRoot(const fs::path& path)
          !error && it != end;
          it.increment(error))
     {
-        if (!it->is_directory(error)) {
+        if (!fs::is_directory(it->path(), error) || error) {
             continue;
         }
         for (fs::directory_iterator point_it(it->path(), error), point_end;
              !error && point_it != point_end;
              point_it.increment(error))
         {
-            if (point_it->is_directory(error) &&
+            if (fs::is_directory(point_it->path(), error) && !error &&
                 fs::exists(point_it->path() / "manifest.json", error) &&
                 !error)
             {

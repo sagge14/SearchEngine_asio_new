@@ -107,8 +107,27 @@ bool copyFileBinary(
             "cannot create \"" + pathToUtf8Path(destination) + '"';
         return false;
     }
-    output << input.rdbuf();
-    if (!output.good() || input.bad()) {
+
+    // Buffered copy: empty source (0 bytes) must succeed. operator<< of an
+    // empty rdbuf sets failbit on the ostream and looked like an I/O error.
+    char buffer[64 * 1024];
+    while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
+        const std::streamsize n = input.gcount();
+        if (n > 0) {
+            output.write(buffer, n);
+            if (output.bad()) {
+                error =
+                    "I/O error copying \"" + pathToUtf8Path(source) + '"';
+                return false;
+            }
+        }
+        if (input.bad()) {
+            error =
+                "I/O error copying \"" + pathToUtf8Path(source) + '"';
+            return false;
+        }
+    }
+    if (input.bad() || output.bad()) {
         error =
             "I/O error copying \"" + pathToUtf8Path(source) + '"';
         return false;
@@ -217,7 +236,7 @@ public:
              !ec && it != end;
              it.increment(ec))
         {
-            if (!it->is_directory(ec)) {
+            if (!fs::is_directory(it->path(), ec) || ec) {
                 continue;
             }
             const fs::path target_root = it->path();
@@ -287,7 +306,7 @@ public:
                  !ec && tier_it != tier_end;
                  tier_it.increment(ec))
             {
-                if (!tier_it->is_directory(ec)) {
+                if (!fs::is_directory(tier_it->path(), ec) || ec) {
                     continue;
                 }
                 for (fs::directory_iterator point_it(tier_it->path(), ec),
@@ -295,7 +314,7 @@ public:
                      !ec && point_it != point_end;
                      point_it.increment(ec))
                 {
-                    if (!point_it->is_directory(ec)) {
+                    if (!fs::is_directory(point_it->path(), ec) || ec) {
                         continue;
                     }
                     const fs::path manifest_path =

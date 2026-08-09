@@ -21,18 +21,34 @@ BackupService {{ARCHITECTURE}} — переносимый комплект
 конфигурация и логи — в C:\ProgramData\SearchEngineBackupService.
 Каталоги снимков (backup_dir из JSON) живут отдельно и в комплект не входят.
 
-Повторный запуск установщика предлагает безопасную переустановку и экспорт
-старых настроек/логов. После успешного перехода службы в RUNNING старые
-файлы удаляются из rollback.
+Повторный запуск установщика предлагает безопасную переустановку: экспорт
+настроек/логов, откат через rollback-каталоги, ожидание STOPPED и выхода PID.
+После успешного перехода службы в RUNNING старые файлы удаляются из rollback.
+Если после прерванного uninstall остались папки без службы, установщик
+предложит их удалить или отменить установку.
 
 Управление:
 
+  Stop-BackupService.bat
+  Start-BackupService.bat
   Restart-BackupService.bat
   Uninstall-BackupService.bat
   sc query SearchEngineBackupService
 
-Uninstall предлагает архив настроек и логов, после чего по подтверждению
-удаляет службу, программу и ProgramData. Каталоги backup_dir / snapshots /
-mirror history не удаляются.
+Stop и Start — штатная остановка и последующий запуск службы (новый процесс),
+а не Windows Pause/Continue. После Stop → Start служба заново читает
+установленный C:\ProgramData\SearchEngineBackupService\Backup.json
+(для именованного экземпляра — его отдельный каталог в ProgramData).
+Редактируйте именно этот установленный файл; изменение data\Backup.json
+внутри исходного portable-комплекта не меняет уже установленную службу.
+Остановленная служба с Automatic/Delayed Start снова запустится после
+перезагрузки Windows; Stop предназначен для временной остановки. Для
+долговременного отключения отдельно переведите Startup Type в Manual или
+Disabled — эти скрипты Startup Type не меняют.
+
+Uninstall пишет diagnostic log в %TEMP%, предлагает архив настроек и логов,
+ждёт STOPPED/PID, удаляет файлы с retry, затем снимает регистрацию службы.
+Каталоги backup_dir / snapshots / mirror history не удаляются.
+После завершения нажмите 0, чтобы закрыть окно.
 
 Подробности: INSTALLATION_GUIDE_RU.txt

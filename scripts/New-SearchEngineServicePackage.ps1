@@ -15,6 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
+. (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
 $templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.searchengine-portable-package'
@@ -276,6 +277,14 @@ try {
             Destination = 'Install-SearchEngineService.bat'
         },
         @{
+            Source = 'Stop-SearchEngineService-Windows7.bat'
+            Destination = 'Stop-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Start-SearchEngineService-Windows7.bat'
+            Destination = 'Start-SearchEngineService.bat'
+        },
+        @{
             Source = 'Restart-SearchEngineService-Windows7.bat'
             Destination = 'Restart-SearchEngineService.bat'
         },
@@ -302,11 +311,9 @@ try {
             $batchText = $batchText.Replace('{{ARCHITECTURE}}', $Architecture)
             $batchText = $batchText.Replace('{{VC_REDIST_FILE}}', $vcRedistName)
             $batchText = ($batchText -replace "`r?`n", "`r`n")
-            [IO.File]::WriteAllText(
-                $_.FullName,
-                $batchText,
-                [Text.Encoding]::ASCII
-            )
+            # Portable .bat/.cmd must stay strict ASCII for cmd.exe / Windows 7.
+            # Fail loudly instead of silently replacing non-ASCII with '?'.
+            Write-StrictAsciiText -Path $_.FullName -Text $batchText
         }
 
     $textTokens = @{
@@ -351,6 +358,8 @@ try {
         (Join-Path $stagingDirectory 'data\OEM866.INI')
     foreach ($name in @(
         'Install-SearchEngineService.bat',
+        'Stop-SearchEngineService.bat',
+        'Start-SearchEngineService.bat',
         'Restart-SearchEngineService.bat',
         'Uninstall-SearchEngineService.bat',
         'Verify-Package.bat'

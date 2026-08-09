@@ -16,6 +16,7 @@ param(
     [string]$StartupType = 'AutomaticDelayedStart',
 
     [PSCredential]$Credential,
+    [switch]$UseLocalSystem,
     [switch]$AllowDebugBinary,
     [switch]$Start
 )
@@ -33,6 +34,10 @@ function Assert-Administrator {
 }
 
 function Resolve-RequiredPath([string]$Path, [string]$Kind) {
+    if (-not [IO.Path]::IsPathRooted($Path) -or
+        [IO.Path]::GetPathRoot($Path) -eq '\') {
+        throw "Path must be absolute: $Path"
+    }
     if (-not (Test-Path -LiteralPath $Path -PathType $Kind)) {
         throw "Required $Kind does not exist: $Path"
     }
@@ -73,6 +78,11 @@ function Test-MappedDrivePath([string]$ConfiguredPath) {
 }
 
 Assert-Administrator
+
+if ([bool]$Credential -eq [bool]$UseLocalSystem) {
+    throw 'Choose exactly one service account option: -Credential or -UseLocalSystem. LocalSystem is never selected implicitly.'
+}
+
 $binary = Resolve-RequiredPath $BinaryPath Leaf
 $config = Resolve-RequiredPath $ConfigPath Leaf
 
@@ -85,10 +95,20 @@ if ([IO.Path]::GetFileName($binary) -ne 'BackupService.exe') {
     Write-Warning "The selected executable is not named BackupService.exe: $binary"
 }
 
+if (-not [IO.Path]::IsPathRooted($DataDir) -or
+    [IO.Path]::GetPathRoot($DataDir) -eq '\') {
+    throw "Path must be absolute: $DataDir"
+}
 $data = [IO.Path]::GetFullPath($DataDir)
 if (-not (Test-Path -LiteralPath $data)) {
     if ($PSCmdlet.ShouldProcess($data, 'Create data directory')) {
         New-Item -ItemType Directory -Path $data | Out-Null
+    }
+}
+$logsDir = Join-Path $data 'logs'
+if (-not (Test-Path -LiteralPath $logsDir)) {
+    if ($PSCmdlet.ShouldProcess($logsDir, 'Create logs directory')) {
+        New-Item -ItemType Directory -Path $logsDir | Out-Null
     }
 }
 
@@ -185,7 +205,7 @@ if ($PSCmdlet.ShouldProcess($ServiceName, 'Create Windows service')) {
         Start-Service -Name $ServiceName
         (Get-Service -Name $ServiceName).WaitForStatus(
             [ServiceProcess.ServiceControllerStatus]::Running,
-            [TimeSpan]::FromSeconds(60)
+            [TimeSpan]::FromSeconds(120)
         )
     }
 }

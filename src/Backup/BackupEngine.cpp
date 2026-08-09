@@ -1,6 +1,7 @@
 #include "BackupEngine.h"
 
 #include "Backup/BackupCache.h"
+#include "Backup/BackupPathFilter.h"
 #include "Backup/MirrorHistory.h"
 #include "Backup/SQLiteBackup.h"
 #include "MyUtils/Encoding.h"
@@ -340,7 +341,8 @@ CompareResult compareFiles(const fs::path& lhs,
 
 CompareResult collectTree(const fs::path& root,
                           std::map<fs::path, TreeEntryKind>& entries,
-                          std::string& error_message)
+                          std::string& error_message,
+                          const BackupPathFilter* filter = nullptr)
 {
     std::error_code error;
     for (fs::recursive_directory_iterator it(
@@ -379,8 +381,15 @@ CompareResult collectTree(const fs::path& root,
         }
 
         if (it->is_directory(type_error)) {
+            if (filter != nullptr && filter->isDirectoryExcluded(relative)) {
+                it.disable_recursion_pending();
+                continue;
+            }
             entries.emplace(relative, TreeEntryKind::Directory);
         } else if (it->is_regular_file(type_error)) {
+            if (filter != nullptr && filter->isFileExcluded(relative)) {
+                continue;
+            }
             entries.emplace(relative, TreeEntryKind::File);
         } else if (type_error) {
             error_message =
@@ -397,28 +406,33 @@ CompareResult collectTree(const fs::path& root,
     return CompareResult::Equal;
 }
 
-CompareResult compareDirectories(const fs::path& lhs,
-                                 const fs::path& rhs,
+CompareResult compareDirectories(const fs::path& source,
+                                 const fs::path& snapshot,
+                                 const BackupPathFilter& filter,
                                  std::string& error_message)
 {
-    std::map<fs::path, TreeEntryKind> lhs_entries;
-    std::map<fs::path, TreeEntryKind> rhs_entries;
+    std::map<fs::path, TreeEntryKind> source_entries;
+    std::map<fs::path, TreeEntryKind> snapshot_entries;
 
-    if (collectTree(lhs, lhs_entries, error_message) == CompareResult::Error ||
-        collectTree(rhs, rhs_entries, error_message) == CompareResult::Error)
+    // Source is filtered; an existing snapshot is enumerated fully so that
+    // newly excluded leftover files still force a fresh snapshot.
+    if (collectTree(source, source_entries, error_message, &filter) ==
+            CompareResult::Error ||
+        collectTree(snapshot, snapshot_entries, error_message, nullptr) ==
+            CompareResult::Error)
     {
         return CompareResult::Error;
     }
-    if (lhs_entries != rhs_entries) {
+    if (source_entries != snapshot_entries) {
         return CompareResult::Different;
     }
 
-    for (const auto& [relative, kind] : lhs_entries) {
+    for (const auto& [relative, kind] : source_entries) {
         if (kind != TreeEntryKind::File) {
             continue;
         }
         const CompareResult result =
-            compareFiles(lhs / relative, rhs / relative, error_message);
+            compareFiles(source / relative, snapshot / relative, error_message);
         if (result != CompareResult::Equal) {
             return result;
         }
@@ -431,7 +445,13 @@ CompareResult compareSourceToSnapshot(const BackupTarget& target,
                                       std::string& error_message)
 {
     if (target.is_directory) {
-        return compareDirectories(target.src, snapshot_data, error_message);
+        const BackupPathFilter filter(target.exclude);
+        return compareDirectories(
+            target.src,
+            snapshot_data,
+            filter,
+            error_message
+        );
     }
     return compareFiles(
         target.src,
@@ -485,7 +505,8 @@ bool isManagedSQLiteSidecar(const fs::path& path)
 
 CompareResult collectAutoTree(const fs::path& root,
                               std::map<fs::path, TreeEntryKind>& entries,
-                              std::string& error_message)
+                              std::string& error_message,
+                              const BackupPathFilter* filter = nullptr)
 {
     std::error_code error;
     for (fs::recursive_directory_iterator it(
@@ -528,8 +549,15 @@ CompareResult collectAutoTree(const fs::path& root,
         }
 
         if (it->is_directory(type_error)) {
+            if (filter != nullptr && filter->isDirectoryExcluded(relative)) {
+                it.disable_recursion_pending();
+                continue;
+            }
             entries.emplace(relative, TreeEntryKind::Directory);
         } else if (it->is_regular_file(type_error)) {
+            if (filter != nullptr && filter->isFileExcluded(relative)) {
+                continue;
+            }
             entries.emplace(relative, TreeEntryKind::File);
         } else if (type_error) {
             error_message =
@@ -609,8 +637,9 @@ bool copyAutoSource(const BackupTarget& target,
         );
     }
 
+    const BackupPathFilter filter(target.exclude);
     std::map<fs::path, TreeEntryKind> before;
-    if (collectAutoTree(target.src, before, error_message) ==
+    if (collectAutoTree(target.src, before, error_message, &filter) ==
         CompareResult::Error)
     {
         return false;
@@ -644,7 +673,7 @@ bool copyAutoSource(const BackupTarget& target,
     }
 
     std::map<fs::path, TreeEntryKind> after;
-    if (collectAutoTree(target.src, after, error_message) ==
+    if (collectAutoTree(target.src, after, error_message, &filter) ==
         CompareResult::Error)
     {
         return false;
@@ -720,9 +749,10 @@ CompareResult compareAutoSourceToSnapshot(
     std::map<fs::path, TreeEntryKind> snapshot_tree;
     std::vector<fs::path> relative_files;
     if (target.is_directory) {
-        if (collectAutoTree(target.src, source_tree, error_message) ==
+        const BackupPathFilter filter(target.exclude);
+        if (collectAutoTree(target.src, source_tree, error_message, &filter) ==
                 CompareResult::Error ||
-            collectTree(snapshot_data, snapshot_tree, error_message) ==
+            collectTree(snapshot_data, snapshot_tree, error_message, nullptr) ==
                 CompareResult::Error)
         {
             return CompareResult::Error;
@@ -789,11 +819,13 @@ CompareResult compareAutoSourceToSnapshot(
     }
 
     if (target.is_directory) {
+        const BackupPathFilter filter(target.exclude);
         std::map<fs::path, TreeEntryKind> source_tree_after;
         if (collectAutoTree(
                 target.src,
                 source_tree_after,
-                error_message
+                error_message,
+                &filter
             ) == CompareResult::Error)
         {
             return CompareResult::Error;
@@ -822,31 +854,73 @@ CompareResult compareAutoSourceToSnapshot(
 
 bool copySourceToSnapshot(const BackupTarget& target,
                           const fs::path& snapshot_data,
-                          std::error_code& error)
+                          std::string& error_message)
 {
+    std::error_code error;
     fs::create_directories(snapshot_data, error);
     if (error) {
+        error_message =
+            "cannot create snapshot data directory: " + error.message();
         return false;
     }
 
-    if (target.is_directory) {
-        fs::copy(
-            target.src,
-            snapshot_data,
-            fs::copy_options::recursive |
-                fs::copy_options::overwrite_existing |
-                fs::copy_options::skip_symlinks,
-            error
-        );
-    } else {
+    if (!target.is_directory) {
         fs::copy_file(
             target.src,
             snapshot_data / target.src.filename(),
             fs::copy_options::overwrite_existing,
             error
         );
+        if (error) {
+            error_message = "cannot copy source file: " + error.message();
+            return false;
+        }
+        return true;
     }
-    return !error;
+
+    const BackupPathFilter filter(target.exclude);
+    std::map<fs::path, TreeEntryKind> entries;
+    if (collectTree(target.src, entries, error_message, &filter) ==
+        CompareResult::Error)
+    {
+        return false;
+    }
+
+    for (const auto& [relative, kind] : entries) {
+        const fs::path source = target.src / relative;
+        const fs::path destination = snapshot_data / relative;
+        if (kind == TreeEntryKind::Directory) {
+            fs::create_directories(destination, error);
+            if (error) {
+                error_message =
+                    "cannot create snapshot directory \"" +
+                    pathToUtf8(relative) + "\": " + error.message();
+                return false;
+            }
+            continue;
+        }
+
+        fs::create_directories(destination.parent_path(), error);
+        if (error) {
+            error_message =
+                "cannot create snapshot directory for \"" +
+                pathToUtf8(relative) + "\": " + error.message();
+            return false;
+        }
+        fs::copy_file(
+            source,
+            destination,
+            fs::copy_options::overwrite_existing,
+            error
+        );
+        if (error) {
+            error_message =
+                "cannot copy \"" + pathToUtf8(relative) + "\": " +
+                error.message();
+            return false;
+        }
+    }
+    return true;
 }
 
 bool collectFilesystemRecords(
@@ -958,8 +1032,11 @@ bool writeManifest(const fs::path& staging_dir,
         << '\n'
         << "skip_unchanged="
         << (target.skip_unchanged ? "true" : "false")
-        << '\n'
-        << "files=" << records.size() << '\n';
+        << '\n';
+    for (const std::string& pattern : target.exclude) {
+        stream << "exclude=" << pattern << '\n';
+    }
+    stream << "files=" << records.size() << '\n';
     const bool has_sqlite = std::any_of(
         records.begin(),
         records.end(),
@@ -1418,10 +1495,11 @@ BackupTargetResult BackupEngine::createSnapshot(
             return failedResult(target.src, copy_error);
         }
     } else {
-        if (!copySourceToSnapshot(target, staging_data, error)) {
-            logError("copy snapshot", target.src, error);
+        std::string copy_error;
+        if (!copySourceToSnapshot(target, staging_data, copy_error)) {
+            logError("copy snapshot", target.src, copy_error);
             removeStaging(staging_dir);
-            return failedResult(target.src, error.message());
+            return failedResult(target.src, copy_error);
         }
 
         std::string compare_error;
