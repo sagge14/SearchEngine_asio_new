@@ -164,17 +164,8 @@ set "SERVICE_YEAR=%CFG_year%"
 set "SERVICE_THREADS=%CFG_threads%"
 set "FILE_TIMEOUT=%CFG_file_timeout_sec%"
 set "PRM_AUTODETECT=%CFG_prm_short_content_autodetect%"
-"%HELPER%" validate --settings "%CONFIG_TEMP%" --check-dirs >nul
-if not errorlevel 1 goto :DIRECTORIES_VALID
-echo.
-echo WARNING: one or more indexing or PRM/PRD directories do not exist.
-echo Edit data\Settings.json in the portable folder before installation,
-echo or explicitly continue if those disks will be connected later.
-echo   1 - Cancel and edit Settings.json ^(recommended^)
-echo   2 - Continue anyway
-choice.exe /C 12 /N /M "Select: "
-if errorlevel 2 goto :DIRECTORIES_VALID
-goto :CANCELLED
+"%HELPER%" validate --settings "%CONFIG_TEMP%" >nul
+if errorlevel 1 goto :HELPER_FAILED
 
 :DIRECTORIES_VALID
 echo.

@@ -209,6 +209,7 @@ if(BUILD_CONFIG_TOOL)
             SearchEngineConfig
             PRIVATE
             "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/src"
     )
     target_link_libraries(
             SearchEngineConfig
@@ -351,7 +352,7 @@ set(
         "Include directory for a prebuilt utf8proc library"
 )
 
-if(BUILD_SEARCHENGINE)
+if(BUILD_SEARCHENGINE OR BUILD_TESTS)
     if(
             SEARCHENGINE_UTF8PROC_SOURCE_DIR
             AND EXISTS "${SEARCHENGINE_UTF8PROC_SOURCE_DIR}/utf8proc.c"
@@ -875,6 +876,10 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/test/*.cpp"
             "${PROJECT_SOURCE_DIR}/tests/*.cpp"
     )
+    list(
+            FILTER test_sources
+            EXCLUDE REGEX "/tests/index/InvertedIndexSQLiteIntegrationTests\\.cpp$"
+    )
     if(NOT test_sources)
         message(
                 WARNING
@@ -898,6 +903,10 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Index/Batch/BatchIndexBuilder.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Index/DocPaths.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Index/OEMFastTokenizer.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Index/simd_tokenizer.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/AbstractScheduledTask.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/BackupTask.cpp"
             "${PROJECT_SOURCE_DIR}/tools/backup/BackupServiceApplication.cpp"
@@ -924,10 +933,61 @@ if(BUILD_TESTS)
             Boost::system
             Boost::filesystem
             Boost::serialization
+            SearchEngine::utf8proc
     )
     if(WIN32)
         target_link_libraries(SearchEngine_test PRIVATE ws2_32)
     endif()
     searchengine_configure_target(SearchEngine_test)
     add_test(NAME SearchEngine_test COMMAND SearchEngine_test)
+
+    add_executable(
+            InvertedIndexSQLiteIntegration_test
+            tests/index/InvertedIndexSQLiteIntegrationTests.cpp
+            src/Index/InvertedIndex.cpp
+            src/Index/BoostIndexSerializer.cpp
+            src/Index/SQLiteIndexSerializer.cpp
+            src/Index/Batch/BatchIndexBuilder.cpp
+            src/Index/DocPaths.cpp
+            src/Index/OEMFastTokenizer.cpp
+            src/Index/PostingList.cpp
+            src/Index/simd_tokenizer.cpp
+            src/Index/WordID.cpp
+            src/MyUtils/OEMCase.cpp
+            src/MyUtils/Encoding.cpp
+            src/MyUtils/LogFile.cpp
+            src/SQLite/sqlite3.c
+    )
+    target_include_directories(
+            InvertedIndexSQLiteIntegration_test
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/src/SQLite"
+    )
+    target_link_libraries(
+            InvertedIndexSQLiteIntegration_test
+            PRIVATE
+            GTest::gtest
+            GTest::gtest_main
+            Boost::headers
+            Boost::system
+            Boost::filesystem
+            Boost::serialization
+            SearchEngine::utf8proc
+    )
+    if(WIN32)
+        target_link_libraries(
+                InvertedIndexSQLiteIntegration_test
+                PRIVATE
+                ws2_32
+                psapi
+        )
+    endif()
+    searchengine_configure_target(InvertedIndexSQLiteIntegration_test)
+    add_test(
+            NAME InvertedIndexSQLiteIntegration_test
+            COMMAND InvertedIndexSQLiteIntegration_test
+    )
 endif()

@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <iostream>
 #include <atomic>
+#include <stdexcept>
 
 #ifdef _WIN32
 // Windows networking (REQUIRED before windows.h)
@@ -73,6 +74,11 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["sqlite_mirror_max_pending_ops"] = val.sqliteMirrorMaxPendingOps;
     jsonSettings["config"]["sqlite_load_threads"] = val.sqliteLoadThreads;
     jsonSettings["config"]["sqlite_precount_postings"] = val.sqlitePrecountPostings;
+    jsonSettings["config"]["full_index_strategy"] =
+        std::string(inverted_index::toString(val.fullIndexStrategy));
+    jsonSettings["config"]["batch_reader_threads"] = val.batchReaderThreads;
+    jsonSettings["config"]["batch_indexer_threads"] = val.batchIndexerThreads;
+    jsonSettings["config"]["batch_queue_memory_mb"] = val.batchQueueMemoryMb;
 
     std::ofstream jsonFileSettings(jsonPath);
     jsonFileSettings << std::setw(2) << jsonSettings;
@@ -342,6 +348,42 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("sqlite_precount_postings").get_to(s.sqlitePrecountPostings);
         } else {
             addedFields.push_back("config.sqlite_precount_postings");
+            needsResave = true;
+        }
+
+        // full_index_strategy — выбор первичной полной сборки.
+        if (config.contains("full_index_strategy")) {
+            const std::string value =
+                config.at("full_index_strategy").get<std::string>();
+            const auto strategy = inverted_index::parseFullIndexStrategy(value);
+            if (!strategy) {
+                throw std::invalid_argument(
+                    "config.full_index_strategy must be legacy or batch");
+            }
+            s.fullIndexStrategy = *strategy;
+        } else {
+            addedFields.push_back("config.full_index_strategy");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_reader_threads")) {
+            config.at("batch_reader_threads").get_to(s.batchReaderThreads);
+        } else {
+            addedFields.push_back("config.batch_reader_threads");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_indexer_threads")) {
+            config.at("batch_indexer_threads").get_to(s.batchIndexerThreads);
+        } else {
+            addedFields.push_back("config.batch_indexer_threads");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_queue_memory_mb")) {
+            config.at("batch_queue_memory_mb").get_to(s.batchQueueMemoryMb);
+        } else {
+            addedFields.push_back("config.batch_queue_memory_mb");
             needsResave = true;
         }
 

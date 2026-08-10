@@ -37,6 +37,8 @@
 
 #include "DocPaths.h"
 #include "IIndexSerializer.h"
+#include "Batch/FullIndexStrategy.h"
+#include "DeferredPathQueue.h"
 
 namespace search_server
 {
@@ -48,6 +50,10 @@ namespace inverted_index {
 
     class BoostIndexSerializer;
     class SQLiteIndexSerializer;
+    namespace batch {
+        class BatchIndexBuilder;
+        struct BatchIndexSnapshot;
+    }
 
 
     using namespace std;
@@ -93,6 +99,10 @@ namespace inverted_index {
         int sqliteMirrorMaxPendingOps = 500;
         int sqliteLoadThreads = 4;
         bool sqlitePrecountPostings = false;
+        FullIndexStrategy fullIndexStrategy = FullIndexStrategy::Batch;
+        std::size_t batchReaderThreads = 1;
+        std::size_t batchIndexerThreads = 0;
+        std::size_t batchQueueMemoryBytes = 256u * 1024u * 1024u;
     };
 
     class InvertedIndex {
@@ -199,7 +209,9 @@ namespace inverted_index {
 
         IndexStorageConfig storage_{};
         mutable std::unique_ptr<IIndexSerializer> serializer_;
+        std::unique_ptr<batch::BatchIndexBuilder> batchBuilder_;
         std::atomic<bool> stopping_{false};
+        DeferredPathQueue deferredPaths_;
         mutable std::mutex asyncMutex_;
         mutable std::condition_variable asyncCondition_;
         std::size_t activeAsyncOperations_{0};
@@ -238,6 +250,16 @@ namespace inverted_index {
         }
 
         void ensureSerializer() const;
+        [[nodiscard]] bool canUseBatchFullBuild() const;
+        std::future<void> updateDocumentBaseLegacy(
+            const std::vector<std::wstring>& vecPaths);
+        std::future<void> updateDocumentBaseBatch(
+            const std::vector<std::wstring>& vecPaths);
+        void installBatchSnapshot(batch::BatchIndexSnapshot&& snapshot);
+        void saveFullSnapshot();
+        void prepareLegacyMutableState();
+        bool deferPointPath(const std::wstring& path, const char* source);
+        void drainDeferredPointPaths();
 
         // Доступ сериализатора к внутреннему состоянию (для SQLite/Boost и т.п.)
         friend class BoostIndexSerializer;

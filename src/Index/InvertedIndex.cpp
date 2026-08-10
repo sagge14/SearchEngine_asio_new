@@ -27,6 +27,7 @@
 #include <psapi.h>
 #include "BoostIndexSerializer.h"
 #include "SQLiteIndexSerializer.h"
+#include "Batch/BatchIndexBuilder.h"
 
 static size_t process_memory()
 {
@@ -248,23 +249,28 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
 // Внутренний безопасный помощник: копирует posting-лист слова
 std::optional<PostingList> inverted_index::InvertedIndex::getPostingCopyByWord(const std::string& w) const
 {
+    std::lock_guard<std::mutex> stateLock(mapMutex);
+
     uint32_t wid;
     if (!wordIds.tryGet(w, wid))
         return std::nullopt;
+
+    if (!dictionary.empty()) {
+        if (wid >= dictionary.size() || dictionary[wid].empty())
+            return std::nullopt;
+        return dictionary[wid];
+    }
 
     const size_t chunkIndex = wid / CHUNK_SIZE;
     const size_t localIndex = wid % CHUNK_SIZE;
 
     const Chunk* chunkPtr = nullptr;
-    {
-        std::lock_guard<std::mutex> g(mapMutex);
-        if (chunkIndex >= dictionaryChunks.size())
-            return std::nullopt;
-        const auto& up = dictionaryChunks[chunkIndex];
-        if (!up)
-            return std::nullopt;
-        chunkPtr = up.get();
-    }
+    if (chunkIndex >= dictionaryChunks.size())
+        return std::nullopt;
+    const auto& up = dictionaryChunks[chunkIndex];
+    if (!up)
+        return std::nullopt;
+    chunkPtr = up.get();
 
     std::shared_lock<std::shared_mutex> lk(chunkPtr->mutex);
     const PostingList& pl = chunkPtr->bucket[localIndex];
@@ -373,14 +379,51 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
 std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         const std::vector<std::wstring>& vecPaths)
 {
-    // Защита от параллельных вызовов
-    std::lock_guard<std::mutex> updateLock(updateMutex);
-    
+    // The facade owns the complete maintenance boundary. Point operations
+    // accepted before this lock are drained before strategy selection; point
+    // operations arriving while it is held are coalesced for replay.
+    std::unique_lock<std::mutex> updateLock(updateMutex);
+    waitForIdle();
+
+    std::future<void> result;
+
+    try {
+        if (storage_.fullIndexStrategy == FullIndexStrategy::Batch)
+        {
+            if (canUseBatchFullBuild())
+                result = updateDocumentBaseBatch(vecPaths);
+            else {
+                addToLog(
+                    "FULL_INDEX_FACADE strategy=batch action=legacy_incremental "
+                    "reason=index_not_empty_after_drain");
+                prepareLegacyMutableState();
+                result = updateDocumentBaseLegacy(vecPaths);
+            }
+        }
+        else {
+            result = updateDocumentBaseLegacy(vecPaths);
+        }
+    }
+    catch (...) {
+        updateLock.unlock();
+        drainDeferredPointPaths();
+        throw;
+    }
+
+    updateLock.unlock();
+    drainDeferredPointPaths();
+    return result;
+}
+
+std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
+        const std::vector<std::wstring>& vecPaths)
+{
     const auto t0 = std::chrono::steady_clock::now();
     static std::atomic<uint64_t> s_sessionId{0};
     const uint64_t sessionId = ++s_sessionId;
 
     addToLog("INDEX_SESSION_BEGIN id=" + std::to_string(sessionId) +
+             " full_index_strategy=legacy" +
              " max_parallel_readers=" + std::to_string(maxParallelReaders_) +
              " file_indexing_timeout_sec=" + std::to_string(fileIndexingTimeoutSec_));
     addToLog("updateDocumentBase() -> start");
@@ -634,6 +677,187 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
     return future;
 }
 
+bool inverted_index::InvertedIndex::canUseBatchFullBuild() const
+{
+    std::lock_guard<std::mutex> lock(mapMutex);
+    return docPaths.size() == 0 && wordIds.size() == 0 &&
+           dictionaryChunks.empty() && dictionary.empty();
+}
+
+std::future<void> inverted_index::InvertedIndex::updateDocumentBaseBatch(
+        const std::vector<std::wstring>& vecPaths)
+{
+    auto finalPromise = std::make_shared<std::promise<void>>();
+    std::future<void> future = finalPromise->get_future();
+    const auto startedAt = std::chrono::steady_clock::now();
+    static std::atomic<uint64_t> s_batchSessionId{0};
+    const uint64_t sessionId = ++s_batchSessionId;
+
+    bool expected = false;
+    if (!work.compare_exchange_strong(expected, true)) {
+        addToLog("FULL_INDEX_FACADE strategy=batch action=skip reason=busy");
+        finalPromise->set_value();
+        return future;
+    }
+
+    struct WorkGuard {
+        std::atomic<bool>& value;
+        ~WorkGuard() { value.store(false, std::memory_order_release); }
+    } workGuard{work};
+
+    addToLog(
+        "INDEX_SESSION_BEGIN id=batch-" + std::to_string(sessionId) +
+        " full_index_strategy=batch reader_threads=" +
+        std::to_string(storage_.batchReaderThreads) +
+        " indexer_threads=" +
+        std::to_string(batch::BatchIndexBuilder::resolveIndexerThreads(
+            storage_.batchIndexerThreads)) +
+        " queue_memory_bytes=" +
+        std::to_string(storage_.batchQueueMemoryBytes));
+
+    try {
+        if (!batchBuilder_)
+            throw std::runtime_error("batch index builder is not configured");
+
+        batch::BatchIndexSnapshot snapshot = batchBuilder_->build(vecPaths);
+        const std::size_t indexedFiles = snapshot.indexedFiles;
+        const std::size_t failedFiles = snapshot.fileErrors.size();
+        const std::uint64_t bytesRead = snapshot.bytesRead;
+        const std::size_t uniqueWords = snapshot.idToWord.size();
+
+        for (const auto& error : snapshot.fileErrors)
+            logIndexError(error.path, error.message);
+
+        if (!snapshot.fileErrors.empty()) {
+            throw std::runtime_error(
+                "batch full build failed to read " +
+                std::to_string(snapshot.fileErrors.size()) +
+                " file(s); snapshot was not published");
+        }
+
+        installBatchSnapshot(std::move(snapshot));
+
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt).count();
+        addToLog(
+            "INDEX_SESSION_END id=batch-" + std::to_string(sessionId) +
+            " full_index_strategy=batch indexed_files=" +
+            std::to_string(indexedFiles) +
+            " failed_files=" + std::to_string(failedFiles) +
+            " unique_words=" + std::to_string(uniqueWords) +
+            " bytes_read=" + std::to_string(bytesRead) +
+            " elapsed_ms=" + std::to_string(elapsedMs));
+        finalPromise->set_value();
+    }
+    catch (...) {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt).count();
+        addToLog(
+            "INDEX_SESSION_END id=batch-" + std::to_string(sessionId) +
+            " full_index_strategy=batch status=exception elapsed_ms=" +
+            std::to_string(elapsedMs));
+        try { finalPromise->set_exception(std::current_exception()); }
+        catch (...) {}
+    }
+
+    return future;
+}
+
+void inverted_index::InvertedIndex::installBatchSnapshot(
+        batch::BatchIndexSnapshot&& snapshot)
+{
+    WordIdManager newWordIds;
+    newWordIds.rebuild(
+        std::move(snapshot.wordToId),
+        std::move(snapshot.idToWord));
+
+    std::vector<PostingList> newDictionary = std::move(snapshot.postings);
+
+    WordIdManager oldWordIds;
+    DocPaths oldDocPaths;
+    std::vector<std::unique_ptr<Chunk>> oldChunks;
+    decltype(wordRefs) oldWordRefs;
+    std::vector<PostingList> oldDictionary;
+
+    {
+        std::lock_guard<std::mutex> lock(mapMutex);
+        oldWordIds = std::move(wordIds);
+        oldDocPaths = std::move(docPaths);
+        oldChunks = std::move(dictionaryChunks);
+        oldWordRefs = std::move(wordRefs);
+        oldDictionary = std::move(dictionary);
+
+        wordIds = std::move(newWordIds);
+        docPaths = std::move(snapshot.documents);
+        dictionaryChunks.clear();
+        wordRefs = std::move(snapshot.wordRefs);
+        dictionary = std::move(newDictionary);
+    }
+
+    try {
+        saveFullSnapshot();
+    }
+    catch (...) {
+        std::lock_guard<std::mutex> lock(mapMutex);
+        wordIds = std::move(oldWordIds);
+        docPaths = std::move(oldDocPaths);
+        dictionaryChunks = std::move(oldChunks);
+        wordRefs = std::move(oldWordRefs);
+        dictionary = std::move(oldDictionary);
+        throw;
+    }
+}
+
+void inverted_index::InvertedIndex::saveFullSnapshot()
+{
+    ensureSerializer();
+    if (!serializer_)
+        throw std::runtime_error("index serializer is not configured");
+
+    if (serializer_->supportsLiveUpdates())
+        serializer_->flushPending();
+    else if (dictionary.empty()) {
+        std::lock_guard<std::mutex> lock(mapMutex);
+        rebuildDictionaryFromChunksLocked();
+    }
+
+    serializer_->save(*this);
+
+    if (serializer_->supportsLiveUpdates()) {
+        try { serializer_->checkpoint(); }
+        catch (const std::exception& exception) {
+            addToLog(
+                std::string("batch snapshot checkpoint failed: ") +
+                exception.what());
+        }
+        catch (...) {
+            addToLog("batch snapshot checkpoint failed: unknown exception");
+        }
+    }
+}
+
+void inverted_index::InvertedIndex::prepareLegacyMutableState()
+{
+    std::lock_guard<std::mutex> lock(mapMutex);
+    if (dictionary.empty())
+        return;
+
+    dictionaryChunks.clear();
+    const std::size_t chunkCount =
+        (dictionary.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    dictionaryChunks.reserve(chunkCount);
+    for (std::size_t index = 0; index < chunkCount; ++index)
+        dictionaryChunks.push_back(std::make_unique<Chunk>());
+
+    for (std::size_t wordId = 0; wordId < dictionary.size(); ++wordId) {
+        dictionaryChunks[wordId / CHUNK_SIZE]
+            ->bucket[wordId % CHUNK_SIZE] = std::move(dictionary[wordId]);
+    }
+    dictionary.clear();
+    dictionary.shrink_to_fit();
+    addToLog("FULL_INDEX_FACADE batch snapshot converted for legacy mutation");
+}
+
 
 void logIndexingDebug(const std::string& msg) {
     LogFile::getIndex().write(msg);
@@ -740,6 +964,7 @@ void inverted_index::InvertedIndex::dictonaryToLog() const {
 inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
 {
     DictionaryStats stats{};
+    std::lock_guard<std::mutex> stateLock(mapMutex);
     
     // Реальное количество уникальных слов
     stats.uniqueWords = wordIds.size();
@@ -749,17 +974,25 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
     size_t totalPostings = 0;
     size_t emptyPostings = 0;
     size_t memoryBytes = 0;
-    
-    std::vector<const Chunk*> chunks;
-    {
-        std::lock_guard<std::mutex> g(mapMutex);
-        chunks.reserve(dictionaryChunks.size());
-        for (const auto& up : dictionaryChunks)
-            chunks.push_back(up.get());
+
+    if (!dictionary.empty()) {
+        for (const auto& posting : dictionary) {
+            if (posting.empty()) {
+                ++emptyPostings;
+                continue;
+            }
+            totalPostings += posting.size();
+            memoryBytes += posting.size() * 6 + 24;
+        }
+        stats.totalPostings = totalPostings;
+        stats.emptyPostings = emptyPostings;
+        stats.memoryBytes = memoryBytes;
+        return stats;
     }
 
-    for (const Chunk* chunkPtr : chunks)
+    for (const auto& chunkOwner : dictionaryChunks)
     {
+        const Chunk* chunkPtr = chunkOwner.get();
         if (!chunkPtr) {
             // Пустой chunk = CHUNK_SIZE пустых постингов
             emptyPostings += CHUNK_SIZE;
@@ -1077,8 +1310,9 @@ void inverted_index::InvertedIndex::saveIndex() const {
 
         addToLog("saveIndex() -> saved successfully");
 
-        // Очищаем dictionary после сохранения
-        {
+        // Очищаем только временную flat-копию legacy chunks. Для batch это
+        // основное единое in-memory представление, его удалять нельзя.
+        if (rebuiltFromChunks) {
             std::lock_guard<std::mutex> lock(mapMutex);
             dictionary.clear();
             dictionary.shrink_to_fit();
@@ -1110,6 +1344,7 @@ void inverted_index::InvertedIndex::finishAsyncOperation() noexcept
 void inverted_index::InvertedIndex::requestStop() noexcept
 {
     stopping_.store(true, std::memory_order_release);
+    deferredPaths_.clear();
 }
 
 void inverted_index::InvertedIndex::waitForIdle()
@@ -1142,6 +1377,14 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
 
         fileIndexingTimeoutSec_ = std::max(1, fileIndexingTimeoutSec);
 
+        if (storage_.fullIndexStrategy == FullIndexStrategy::Batch) {
+            batchBuilder_ = std::make_unique<batch::BatchIndexBuilder>(
+                batch::BatchIndexOptions{
+                    storage_.batchReaderThreads,
+                    storage_.batchIndexerThreads,
+                    storage_.batchQueueMemoryBytes});
+        }
+
         addToLog("InvertedIndex: maxParallelReaders=" +
                  std::to_string(maxParallelReaders) +
                  ", fileIndexingTimeoutSec=" +
@@ -1153,7 +1396,15 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                  ", sqlite_load_threads=" +
                  std::to_string(storage_.sqliteLoadThreads) +
                  ", sqlite_precount_postings=" +
-                 std::to_string(storage_.sqlitePrecountPostings));
+                 std::to_string(storage_.sqlitePrecountPostings) +
+                 ", full_index_strategy=" +
+                 std::string(toString(storage_.fullIndexStrategy)) +
+                 ", batch_reader_threads=" +
+                 std::to_string(storage_.batchReaderThreads) +
+                 ", batch_indexer_threads=" +
+                 std::to_string(storage_.batchIndexerThreads) +
+                 ", batch_queue_memory_bytes=" +
+                 std::to_string(storage_.batchQueueMemoryBytes));
 
         ensureSerializer();
         try {
@@ -1378,6 +1629,16 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
     if (stopping_.load(std::memory_order_acquire))
         return false;
 
+    std::unique_lock<std::mutex> updateLock(
+        updateMutex, std::try_to_lock);
+    if (!updateLock.owns_lock() ||
+        work.load(std::memory_order_acquire))
+    {
+        return deferPointPath(path, "enqueueFileUpdate");
+    }
+
+    prepareLegacyMutableState();
+
     std::wcout << L"[enqueueFileUpdate] Request for path: " << path << std::endl;
 
     if (!fs::exists(path) || !fs::is_regular_file(path))
@@ -1465,6 +1726,15 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
 {
     if (stopping_.load(std::memory_order_acquire))
         return false;
+
+    std::unique_lock<std::mutex> updateLock(
+        updateMutex, std::try_to_lock);
+    if (!updateLock.owns_lock() ||
+        work.load(std::memory_order_acquire))
+    {
+        return deferPointPath(path, "enqueueFileDeletion");
+    }
+
     std::wcout << L"[enqueueFileDeletion] Request for path: " << path << std::endl;
 
     FileId id;
@@ -1501,4 +1771,49 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
     });
 
     return true;
+}
+
+bool inverted_index::InvertedIndex::deferPointPath(
+        const std::wstring& path, const char* source)
+{
+    if (stopping_.load(std::memory_order_acquire))
+        return false;
+
+    const bool inserted = deferredPaths_.defer(path);
+    if (stopping_.load(std::memory_order_acquire)) {
+        deferredPaths_.clear();
+        return false;
+    }
+
+    addToLog(
+        std::string(source) + " queued deferred path=" +
+        encoding::wstring_to_utf8(path) +
+        (inserted ? " action=inserted" : " action=coalesced"));
+    return true;
+}
+
+void inverted_index::InvertedIndex::drainDeferredPointPaths()
+{
+    if (stopping_.load(std::memory_order_acquire)) {
+        deferredPaths_.clear();
+        return;
+    }
+
+    namespace fs = std::filesystem;
+    const std::size_t replayed = deferredPaths_.drainOnce(
+        [this](const std::wstring& path) {
+        if (stopping_.load(std::memory_order_acquire))
+            return;
+
+        std::error_code error;
+        const bool regular = fs::is_regular_file(path, error);
+        if (!error && regular)
+            enqueueFileUpdate(path);
+        else
+            enqueueFileDeletion(path);
+    });
+
+    if (replayed != 0)
+        addToLog("deferred point replay complete paths=" +
+                 std::to_string(replayed));
 }

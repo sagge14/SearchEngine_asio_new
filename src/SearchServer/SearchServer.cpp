@@ -8,6 +8,32 @@
 #include "MyUtils/Encoding.h"
 #include "MyUtils/FileScanner.h"
 
+namespace {
+
+inverted_index::IndexStorageConfig makeIndexStorageConfig(
+    const search_server::Settings& settings)
+{
+    inverted_index::IndexStorageConfig config;
+    config.kind = inverted_index::IndexSerializationKind::SQLite;
+    config.path = "inverted_index.sqlite";
+    config.sqliteMirrorFlushIntervalSec =
+        settings.sqliteMirrorFlushIntervalSec;
+    config.sqliteMirrorMaxPendingOps = settings.sqliteMirrorMaxPendingOps;
+    config.sqliteLoadThreads = settings.sqliteLoadThreads;
+    config.sqlitePrecountPostings = settings.sqlitePrecountPostings;
+    config.fullIndexStrategy = settings.fullIndexStrategy;
+    config.batchReaderThreads =
+        static_cast<std::size_t>(settings.batchReaderThreads);
+    config.batchIndexerThreads =
+        static_cast<std::size_t>(settings.batchIndexerThreads);
+    config.batchQueueMemoryBytes =
+        static_cast<std::size_t>(settings.batchQueueMemoryMb) *
+        1024u * 1024u;
+    return config;
+}
+
+} // namespace
+
 FileEvent merge(FileEvent old, FileEvent neu)
 {
     if (neu == FileEvent::Removed || neu == FileEvent::RenamedOld)
@@ -250,13 +276,8 @@ index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
     settings = (_settings);
     trustSettings();
 
-    inverted_index::IndexStorageConfig cfg;
-    cfg.kind = inverted_index::IndexSerializationKind::SQLite;
-    cfg.path = "inverted_index.sqlite";
-    cfg.sqliteMirrorFlushIntervalSec = settings.sqliteMirrorFlushIntervalSec;
-    cfg.sqliteMirrorMaxPendingOps = settings.sqliteMirrorMaxPendingOps;
-    cfg.sqliteLoadThreads = settings.sqliteLoadThreads;
-    cfg.sqlitePrecountPostings = settings.sqlitePrecountPostings;
+    const inverted_index::IndexStorageConfig cfg =
+        makeIndexStorageConfig(settings);
 
     index = new inverted_index::InvertedIndex(cpu_pool, io_commit, settings.maxParallelReaders, settings.fileIndexingTimeoutSec, cfg);
 
@@ -470,6 +491,11 @@ void search_server::Settings::show() const
     std::cout << "Show request as text:\t\t" << std::boolalpha << requestText << std::endl;
     std::cout << "Use exact search:\t\t" << std::boolalpha << exactSearch << std::endl;
     std::cout << "Save dictionary to file:\t" << std::boolalpha << saveDictionaryToFile << std::endl << std::endl;
+    std::cout << "Full index strategy:\t\t"
+              << inverted_index::toString(fullIndexStrategy) << std::endl;
+    std::cout << "Batch reader threads:\t\t" << batchReaderThreads << std::endl;
+    std::cout << "Batch indexer threads:\t\t" << batchIndexerThreads << std::endl;
+    std::cout << "Batch queue memory:\t\t" << batchQueueMemoryMb << " MiB" << std::endl;
 }
 
 search_server::Settings::Settings() {
@@ -537,7 +563,14 @@ void search_server::SearchServer::updateStep()
 
     if (index == nullptr)
     {
-        index = new inverted_index::InvertedIndex(cpu_pool_, io_commit);
+        const inverted_index::IndexStorageConfig cfg =
+            makeIndexStorageConfig(settings);
+        index = new inverted_index::InvertedIndex(
+            cpu_pool_,
+            io_commit,
+            settings.maxParallelReaders,
+            settings.fileIndexingTimeoutSec,
+            cfg);
         addToLog("updateStep() → index created");
     }
 
@@ -556,19 +589,18 @@ void search_server::SearchServer::updateStep()
     /* ---------- ОЖИДАНИЕ ПОИСКА ---------- */
     addToLog("updateStep() → wait search stop");
 
-    {
-        std::unique_lock<std::shared_mutex> lock{searchM};
+    // Keep the exclusive search gate through publication and persistence of
+    // the new snapshot. Existing searches finish first; new ones wait.
+    std::unique_lock<std::shared_mutex> searchLock{searchM};
+    bool ok = cv_search_server.wait_for(
+            searchLock,
+            std::chrono::seconds(10),
+            [this] { return !work; }
+    );
 
-        bool ok = cv_search_server.wait_for(
-                lock,
-                std::chrono::seconds(10),
-                [this] { return !work; }
-        );
-
-        addToLog(std::string("updateStep() → wait done, result=") +
-                 (ok ? "OK" : "TIMEOUT") +
-                 " work=" + std::to_string(work));
-    }
+    addToLog(std::string("updateStep() → wait done, result=") +
+             (ok ? "OK" : "TIMEOUT") +
+             " work=" + std::to_string(work));
 
     /* ---------- СТАРТ ОБНОВЛЕНИЯ ---------- */
     update_is_running = true;
@@ -589,7 +621,25 @@ void search_server::SearchServer::updateStep()
     /* ---------- ОЖИДАНИЕ ИНДЕКСАЦИИ ---------- */
     addToLog("updateStep() → waiting updateDocumentBase");
 
-    fut.wait();
+    try {
+        fut.get();
+    }
+    catch (const std::exception& exception) {
+        update_is_running = false;
+        must_start_update = false;
+        cv_search_server.notify_all();
+        addToLog(
+            std::string("updateStep() → updateDocumentBase FAILED: ") +
+            exception.what());
+        throw;
+    }
+    catch (...) {
+        update_is_running = false;
+        must_start_update = false;
+        cv_search_server.notify_all();
+        addToLog("updateStep() → updateDocumentBase FAILED: unknown exception");
+        throw;
+    }
 
     addToLog("updateStep() → updateDocumentBase finished");
 

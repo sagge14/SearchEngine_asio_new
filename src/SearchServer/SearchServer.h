@@ -136,6 +136,15 @@ namespace search_server {
         int sqliteLoadThreads = 4;
         /// Делать COUNT(*) по словам и reserve перед загрузкой постингов.
         bool sqlitePrecountPostings = false;
+        /// Алгоритм первичной полной сборки: legacy или batch.
+        inverted_index::FullIndexStrategy fullIndexStrategy =
+            inverted_index::FullIndexStrategy::Batch;
+        /// Независимые потоки чтения batch-конвейера (для HDD обычно 1).
+        int batchReaderThreads = 1;
+        /// Потоки локальной индексации batch-конвейера (0 = все logical CPU).
+        int batchIndexerThreads = 0;
+        /// Лимит очереди прочитанных данных batch-конвейера, MiB.
+        int batchQueueMemoryMb = 256;
 
         static Settings* getSettings();
         static auto getExtensions() {return getSettings()->extensions;};

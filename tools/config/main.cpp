@@ -4,6 +4,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "Index/Batch/FullIndexStrategy.h"
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -724,6 +726,40 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         );
     }
 
+    if (config.contains("full_index_strategy")) {
+        if (!config["full_index_strategy"].is_string() ||
+            !inverted_index::parseFullIndexStrategy(
+                config["full_index_strategy"].get<std::string>()))
+        {
+            errors.emplace_back(
+                "config.full_index_strategy must be legacy or batch");
+        }
+    }
+
+    if (config.contains("batch_reader_threads")) {
+        const auto readers = jsonInteger(config["batch_reader_threads"]);
+        if (!readers || *readers < 1 || *readers > 64) {
+            errors.emplace_back(
+                "config.batch_reader_threads must be inside 1..64");
+        }
+    }
+
+    if (config.contains("batch_indexer_threads")) {
+        const auto indexers = jsonInteger(config["batch_indexer_threads"]);
+        if (!indexers || *indexers < 0 || *indexers > 256) {
+            errors.emplace_back(
+                "config.batch_indexer_threads must be 0 or inside 1..256");
+        }
+    }
+
+    if (config.contains("batch_queue_memory_mb")) {
+        const auto memory = jsonInteger(config["batch_queue_memory_mb"]);
+        if (!memory || *memory < 16 || *memory > 2048) {
+            errors.emplace_back(
+                "config.batch_queue_memory_mb must be inside 16..2048");
+        }
+    }
+
     if (!config.contains("enable_prm_short_content_autodetect") ||
         !config["enable_prm_short_content_autodetect"].is_boolean())
     {
@@ -811,6 +847,15 @@ int inspectCommand(const std::vector<std::wstring>& args)
               << config.value("file_indexing_timeout_sec", 0) << '\n'
               << "parallel_readers="
               << config.value("max_parallel_readers", 0) << '\n'
+              << "full_index_strategy="
+              << config.value(
+                    "full_index_strategy", std::string("batch")) << '\n'
+              << "batch_reader_threads="
+              << config.value("batch_reader_threads", 1) << '\n'
+              << "batch_indexer_threads="
+              << config.value("batch_indexer_threads", 0) << '\n'
+              << "batch_queue_memory_mb="
+              << config.value("batch_queue_memory_mb", 256) << '\n'
               << "sqlite_load_threads="
               << config.value("sqlite_load_threads", 0) << '\n'
               << "prm_short_content_autodetect="

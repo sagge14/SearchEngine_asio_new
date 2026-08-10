@@ -503,14 +503,11 @@ void SQLiteIndexSerializer::writerLoop()
                 flushNow_ = false;
 
             doCheckpoint = requestCheckpoint_;
+            writerActive_ = !batch.empty() || doCheckpoint;
         }
 
         if (!batch.empty())
         {
-            {
-                std::lock_guard<std::mutex> lock(queueMutex_);
-                writerActive_ = true;
-            }
             try {
                 writeBatch(batch);
             } catch (const std::exception& e) {
@@ -520,18 +517,16 @@ void SQLiteIndexSerializer::writerLoop()
             }
             {
                 std::lock_guard<std::mutex> lock(queueMutex_);
-                writerActive_ = false;
-                if (queue_.empty() && !requestCheckpoint_)
+                if (!doCheckpoint)
+                    writerActive_ = false;
+                if (queue_.empty() && !writerActive_ &&
+                    !requestCheckpoint_)
                     flushDoneCv_.notify_all();
             }
         }
 
         if (doCheckpoint)
         {
-            {
-                std::lock_guard<std::mutex> lock(queueMutex_);
-                writerActive_ = true;
-            }
             try {
                 runCheckpointOnLiveDb();
             } catch (...) {}
@@ -704,32 +699,61 @@ void SQLiteIndexSerializer::save(const InvertedIndex& idx)
         insPost = prepare(db_, "INSERT INTO postings(word_id, doc_id, cnt) VALUES(?, ?, ?);");
         {
             std::lock_guard<std::mutex> lock(nonConst->mapMutex);
-            const size_t chunkCount = nonConst->dictionaryChunks.size();
-            for (size_t chunkIndex = 0; chunkIndex < chunkCount; ++chunkIndex)
+            const auto writePostingList =
+                [&](uint32_t wordId, const PostingList& postingList)
             {
-                auto& up = nonConst->dictionaryChunks[chunkIndex];
-                if (!up) continue;
-
-                std::shared_lock<std::shared_mutex> lk(up->mutex);
-                for (size_t local = 0; local < up->bucket.size(); ++local)
+                for (const auto& posting : postingList)
                 {
-                    const PostingList& pl = up->bucket[local];
-                    if (pl.empty()) continue;
+                    sqlite3_reset(insPost);
+                    sqlite3_clear_bindings(insPost);
 
-                    const uint32_t wid =
-                        static_cast<uint32_t>(chunkIndex * InvertedIndex::CHUNK_SIZE + local);
+                    sqlite3_bind_int(
+                        insPost, 1, static_cast<int>(wordId));
+                    sqlite3_bind_int(
+                        insPost, 2, static_cast<int>(posting.fileId));
+                    sqlite3_bind_int(
+                        insPost, 3, static_cast<int>(posting.cnt));
+                    const int rc = sqlite3_step(insPost);
+                    if (rc != SQLITE_DONE)
+                        throwSqlite(db_, "insert posting", rc);
+                }
+            };
 
-                    for (const auto& p : pl)
+            if (!nonConst->dictionary.empty())
+            {
+                for (size_t wordId = 0;
+                     wordId < nonConst->dictionary.size();
+                     ++wordId)
+                {
+                    const PostingList& postingList =
+                        nonConst->dictionary[wordId];
+                    if (!postingList.empty()) {
+                        writePostingList(
+                            static_cast<uint32_t>(wordId), postingList);
+                    }
+                }
+            }
+            else
+            {
+                const size_t chunkCount = nonConst->dictionaryChunks.size();
+                for (size_t chunkIndex = 0;
+                     chunkIndex < chunkCount;
+                     ++chunkIndex)
+                {
+                    auto& up = nonConst->dictionaryChunks[chunkIndex];
+                    if (!up) continue;
+
+                    std::shared_lock<std::shared_mutex> lk(up->mutex);
+                    for (size_t local = 0;
+                         local < up->bucket.size();
+                         ++local)
                     {
-                        sqlite3_reset(insPost);
-                        sqlite3_clear_bindings(insPost);
+                        const PostingList& postingList = up->bucket[local];
+                        if (postingList.empty()) continue;
 
-                        sqlite3_bind_int(insPost, 1, static_cast<int>(wid));
-                        sqlite3_bind_int(insPost, 2, static_cast<int>(p.fileId));
-                        sqlite3_bind_int(insPost, 3, static_cast<int>(p.cnt));
-                        const int rc = sqlite3_step(insPost);
-                        if (rc != SQLITE_DONE)
-                            throwSqlite(db_, "insert posting", rc);
+                        const uint32_t wordId = static_cast<uint32_t>(
+                            chunkIndex * InvertedIndex::CHUNK_SIZE + local);
+                        writePostingList(wordId, postingList);
                     }
                 }
             }

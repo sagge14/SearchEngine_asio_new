@@ -89,6 +89,30 @@ void validateSettings(const search_server::Settings& settings)
             "config.file_indexing_timeout_sec is outside 10..600"
         );
     }
+    if (settings.batchReaderThreads < 1 ||
+        settings.batchReaderThreads > 64)
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.batch_reader_threads is outside 1..64"
+        );
+    }
+    if (settings.batchIndexerThreads < 0 ||
+        settings.batchIndexerThreads > 256)
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.batch_indexer_threads must be 0 or inside 1..256"
+        );
+    }
+    if (settings.batchQueueMemoryMb < 16 ||
+        settings.batchQueueMemoryMb > 2048)
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.batch_queue_memory_mb is outside 16..2048"
+        );
+    }
 }
 
 void initializeLocale()
