@@ -446,7 +446,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
     WorkGuard workGuard(work);
 
     // 1. diff
-    UpdatePack pack = docPaths.getUpdate({ vecPaths.begin(), vecPaths.end() });
+    UpdatePack pack = docPaths.getUpdate(vecPaths);
 
     // ВАЖНО (вечный след): для исчезнувших файлов (pack.removed) постинги
     // НЕ стираем — лишь помечаем deleted. Стирание из памяти нужно только
@@ -1026,23 +1026,26 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
 void inverted_index::InvertedIndex::rebuildDictionaryFromChunksLocked()
 {
     dictionary.clear();
-    dictionary.reserve(dictionaryChunks.size() * CHUNK_SIZE);
+    const size_t wordCount = wordIds.size();
+    dictionary.reserve(wordCount);
 
-    for (const auto & chunkPtr : dictionaryChunks)
+    for (size_t wid = 0; wid < wordCount; ++wid)
     {
+        const size_t chunkIndex = wid / CHUNK_SIZE;
+        const size_t localIndex = wid % CHUNK_SIZE;
+        if (chunkIndex >= dictionaryChunks.size()) {
+            dictionary.emplace_back();
+            continue;
+        }
+        const auto& chunkPtr = dictionaryChunks[chunkIndex];
         if (!chunkPtr) {
-            // Добавляем пустые posting-листы
-            for (size_t i=0; i<CHUNK_SIZE; ++i)
-                dictionary.emplace_back();
+            dictionary.emplace_back();
             continue;
         }
 
         Chunk& chunk = *chunkPtr;
         std::shared_lock<std::shared_mutex> lk(chunk.mutex);
-
-
-        for (size_t localIndex = 0; localIndex < CHUNK_SIZE; ++localIndex)
-            dictionary.push_back(chunk.bucket[localIndex]);
+        dictionary.push_back(chunk.bucket[localIndex]);
     }
 }
 
@@ -1068,8 +1071,12 @@ void inverted_index::InvertedIndex::rebuildChunksFromDictionary()
         if (!dictionaryChunks[chunkIndex])
             dictionaryChunks[chunkIndex] = std::make_unique<Chunk>();
 
-        dictionaryChunks[chunkIndex]->bucket[localIndex] = dictionary[wid];
+        dictionaryChunks[chunkIndex]->bucket[localIndex] =
+            std::move(dictionary[wid]);
     }
+
+    dictionary.clear();
+    dictionary.shrink_to_fit();
 }
 
 
@@ -1491,18 +1498,62 @@ void inverted_index::InvertedIndex::compact(double thresholdPercent)
             return;
         }
 
-        if (dictionary.empty()) {
-            rebuildDictionaryFromChunks();
+        size_t holes = 0;
+        size_t dict_size = 0;
+        size_t real_words = 0;
+        bool chunksAreActive = false;
+        {
+            std::lock_guard<std::mutex> lock(mapMutex);
+            real_words = wordIds.size();
+            dict_size = real_words;
+            chunksAreActive = dictionary.empty();
+
+            if (!chunksAreActive)
+            {
+                for (size_t wid = 0; wid < dict_size; ++wid)
+                {
+                    if (wid >= dictionary.size() || dictionary[wid].empty())
+                        ++holes;
+                }
+            }
+            else
+            {
+                for (size_t chunkIndex = 0;
+                     chunkIndex < dictionaryChunks.size();
+                     ++chunkIndex)
+                {
+                    const auto& chunk = dictionaryChunks[chunkIndex];
+                    const size_t wordBegin = chunkIndex * CHUNK_SIZE;
+                    if (wordBegin >= dict_size)
+                        break;
+                    const size_t wordsInChunk = std::min(
+                        CHUNK_SIZE,
+                        dict_size - wordBegin);
+
+                    if (!chunk)
+                    {
+                        holes += wordsInChunk;
+                        continue;
+                    }
+
+                    std::shared_lock<std::shared_mutex> chunkLock(
+                        chunk->mutex);
+                    for (size_t localIndex = 0;
+                         localIndex < wordsInChunk;
+                         ++localIndex)
+                    {
+                        if (chunk->bucket[localIndex].empty())
+                            ++holes;
+                    }
+                }
+
+                const size_t representedWords = std::min(
+                    dict_size,
+                    dictionaryChunks.size() * CHUNK_SIZE);
+                holes += dict_size - representedWords;
+            }
         }
 
-        size_t holes = 0;
-        for (const auto& post : dictionary)
-            if (post.empty())
-                ++holes;
-
-        // Используем wordIds.size() для реального размера словаря
-        size_t dict_size = dictionary.size();
-        size_t real_words = wordIds.size();
         double hole_percent = (dict_size > 0) ? (holes * 100.0 / dict_size) : 0.0;
 
         std::ostringstream oss;
@@ -1525,6 +1576,9 @@ void inverted_index::InvertedIndex::compact(double thresholdPercent)
 
         oss << " -> RUN";
         addToLog(oss.str());
+
+        if (chunksAreActive)
+            rebuildDictionaryFromChunks();
 
         // Блокируем доступ к dictionary во время compact
         std::lock_guard<std::mutex> lock(mapMutex);
@@ -1605,8 +1659,8 @@ void inverted_index::InvertedIndex::compact(double thresholdPercent)
         // === 4. Пересборка chunks из dictionary ===
         rebuildChunksFromDictionary();
 
-        addToLog("COMPACT: done, new dict size=" + std::to_string(dictionary.size()) +
-                ", new wordIds size=" + std::to_string(wordIds.size()));
+        addToLog("COMPACT: done, active_representation=chunks, words=" +
+                 std::to_string(wordIds.size()));
     });
 }
 

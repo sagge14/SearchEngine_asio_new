@@ -3,6 +3,7 @@
 // Created by user on 02.02.2023.
 //
 #include "SearchServer.h"
+#include <functional>
 #include <iostream>
 #include <string>
 #include "MyUtils/Encoding.h"
@@ -259,7 +260,7 @@ void search_server::SearchServer::updateDocumentBase(const std::vector<std::wstr
     /**
     Запускаем обновление базы индексов, записываем в @param time сколько времени уйдет на индексацию. */
 
-    time = inverted_index::perf_timer<chrono::milliseconds>::duration([this,_docPaths]() {
+    time = inverted_index::perf_timer<chrono::milliseconds>::duration([this, &_docPaths]() {
         std::future<void> fut = this->index->updateDocumentBase(_docPaths);
 
         // Ждём завершения индексации в InvertedIndex; compact/save — в SearchServer::updateStep
@@ -577,14 +578,14 @@ void search_server::SearchServer::updateStep()
     /* ---------- СКАНИРОВАНИЕ ---------- */
     addToLog("updateStep() → scan start");
 
-    docPaths = FileScanner::scanDirectories(
+    const std::vector<std::wstring> scannedPaths = FileScanner::scanDirectories(
             settings.dirs,
             settings.extensions,
             settings.excludeDirs
     );
 
     addToLog("updateStep() → scan done, files=" +
-             std::to_string(docPaths.size()));
+             std::to_string(scannedPaths.size()));
 
     /* ---------- ОЖИДАНИЕ ПОИСКА ---------- */
     addToLog("updateStep() → wait search stop");
@@ -613,7 +614,7 @@ void search_server::SearchServer::updateStep()
             std::launch::async,
             &search_server::SearchServer::updateDocumentBase,
             this,
-            docPaths
+            std::cref(scannedPaths)
     );
 
     addToLog("updateStep() → updateDocumentBase started");
@@ -645,6 +646,7 @@ void search_server::SearchServer::updateStep()
 
     /* ---------- ФИНАЛ ---------- */
     index->compact(settings.compactThresholdPercent);
+    index->waitForIdle();
     addToLog("updateStep() → compact done");
 
     if (settings.saveDictionaryToFile) {

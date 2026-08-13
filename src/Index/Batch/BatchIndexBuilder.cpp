@@ -30,11 +30,6 @@ using FrequencyMap = robin_hood::unordered_map<std::string, std::size_t>;
 
 constexpr std::size_t kReadBlockSize = 64u * 1024u;
 
-struct FileJob {
-    uint32_t fileId{};
-    std::wstring path;
-};
-
 enum class BlockKind {
     Start,
     Data,
@@ -176,13 +171,7 @@ BatchIndexSnapshot BatchIndexBuilder::build(
     BatchIndexSnapshot snapshot;
     const UpdatePack update = snapshot.documents.getUpdate(paths);
 
-    std::vector<FileJob> jobs;
-    jobs.reserve(update.added.size());
-    for (const uint32_t fileId : update.added) {
-        jobs.push_back(FileJob{
-            fileId,
-            snapshot.documents.pathById(fileId)});
-    }
+    const std::vector<uint32_t>& jobs = update.added;
 
     const std::size_t laneCapacity = std::max<std::size_t>(
         1,
@@ -224,10 +213,13 @@ BatchIndexSnapshot BatchIndexBuilder::build(
     };
 
     const auto addFileError =
-        [&fileErrors, &errorMutex](const FileJob& job, std::string message) {
+        [&fileErrors, &errorMutex](
+            uint32_t fileId,
+            const std::wstring& path,
+            std::string message) {
             std::lock_guard<std::mutex> lock(errorMutex);
             fileErrors.push_back(BatchIndexFileError{
-                job.fileId, job.path, std::move(message)});
+                fileId, path, std::move(message)});
         };
 
     const auto setFatal =
@@ -325,12 +317,14 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                         if (jobIndex >= jobs.size())
                             break;
 
-                        const FileJob& job = jobs[jobIndex];
+                        const uint32_t fileId = jobs[jobIndex];
+                        const std::wstring& path =
+                            snapshot.documents.pathById(fileId);
                         std::ifstream file(
-                            std::filesystem::path(job.path),
+                            std::filesystem::path(path),
                             std::ios::binary);
                         if (!file.is_open()) {
-                            addFileError(job, "file not found");
+                            addFileError(fileId, path, "file not found");
                             continue;
                         }
 
@@ -344,7 +338,7 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                             if (!lane.push(
                                     FileBlock{
                                         BlockKind::Start,
-                                        job.fileId,
+                                        fileId,
                                         false,
                                         {}},
                                     1))
@@ -384,7 +378,7 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                                         count - offset);
                                     FileBlock block;
                                     block.kind = BlockKind::Data;
-                                    block.fileId = job.fileId;
+                                    block.fileId = fileId;
                                     block.isLastChunk =
                                         isLastRead &&
                                         offset + partSize == count;
@@ -410,7 +404,7 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                             if (!lane.push(
                                     FileBlock{
                                         BlockKind::Complete,
-                                        job.fileId,
+                                        fileId,
                                         false,
                                         {}},
                                     1))
@@ -419,12 +413,12 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                             }
                         }
                         catch (const FileReadError& exception) {
-                            addFileError(job, exception.what());
+                            addFileError(fileId, path, exception.what());
                             if (started &&
                                 !lane.push(
                                     FileBlock{
                                         BlockKind::Abort,
-                                        job.fileId,
+                                        fileId,
                                         false,
                                         {}},
                                     1))
@@ -534,22 +528,26 @@ BatchIndexSnapshot BatchIndexBuilder::build(
         snapshot.wordToId.emplace(snapshot.idToWord.back(), wordId);
         snapshot.postings.emplace_back();
         PostingList& postingList = snapshot.postings.back();
-        postingList.reserve(mergedPostings.size());
 
-        for (std::size_t index = 0; index < mergedPostings.size();) {
-            const uint32_t fileId = mergedPostings[index].fileId;
+        std::size_t readIndex = 0;
+        std::size_t writeIndex = 0;
+        while (readIndex < mergedPostings.size()) {
+            const uint32_t fileId = mergedPostings[readIndex].fileId;
             uint32_t count = 0;
             do {
                 count = std::min<uint32_t>(
                     std::numeric_limits<uint16_t>::max(),
-                    count + mergedPostings[index].cnt);
-                ++index;
-            } while (index < mergedPostings.size() &&
-                     mergedPostings[index].fileId == fileId);
+                    count + mergedPostings[readIndex].cnt);
+                ++readIndex;
+            } while (readIndex < mergedPostings.size() &&
+                     mergedPostings[readIndex].fileId == fileId);
 
-            postingList.appendSorted(fileId, static_cast<uint16_t>(count));
+            mergedPostings[writeIndex++] =
+                Posting{fileId, static_cast<uint16_t>(count)};
             snapshot.wordRefs[fileId].push_back(wordId);
         }
+        mergedPostings.resize(writeIndex);
+        postingList.assignSortedUnique(std::move(mergedPostings));
 
         runBegin = runEnd;
     }

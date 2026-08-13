@@ -660,14 +660,15 @@ void SQLiteIndexSerializer::save(const InvertedIndex& idx)
         InvertedIndex* nonConst = const_cast<InvertedIndex*>(&idx);
 
         insWord = prepare(db_, "INSERT INTO words(word_id, word) VALUES(?, ?);");
-        auto id2word = idx.wordIds.exportId2Word();
-        for (uint32_t wid = 0; wid < static_cast<uint32_t>(id2word.size()); ++wid)
+        for (std::size_t wordId = 0; wordId < idx.wordIds.size(); ++wordId)
         {
+            const uint32_t wid = static_cast<uint32_t>(wordId);
+            const std::string& word = idx.wordIds.byId(wid);
             sqlite3_reset(insWord);
             sqlite3_clear_bindings(insWord);
 
             sqlite3_bind_int(insWord, 1, static_cast<int>(wid));
-            sqlite3_bind_text(insWord, 2, id2word[wid].c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(insWord, 2, word.c_str(), -1, SQLITE_TRANSIENT);
             const int rc = sqlite3_step(insWord);
             if (rc != SQLITE_DONE)
                 throwSqlite(db_, "insert word", rc);
@@ -676,23 +677,26 @@ void SQLiteIndexSerializer::save(const InvertedIndex& idx)
         insWord = nullptr;
 
         insDoc = prepare(db_, "INSERT INTO docs(doc_id, path, mtime_ticks, size_int64, deleted) VALUES(?, ?, ?, ?, ?);");
-        auto docRows = idx.docPaths.exportRows();
-        for (const auto& r : docRows)
-        {
+        idx.docPaths.forEachRow(
+            [&](uint32_t id,
+                const std::wstring& path,
+                int64_t mtimeTicks,
+                uint64_t fsize,
+                bool deleted) {
             sqlite3_reset(insDoc);
             sqlite3_clear_bindings(insDoc);
 
-            const std::string p8 = encoding::wstring_to_utf8(r.path);
+            const std::string p8 = encoding::wstring_to_utf8(path);
 
-            sqlite3_bind_int(insDoc, 1, static_cast<int>(r.id));
+            sqlite3_bind_int(insDoc, 1, static_cast<int>(id));
             sqlite3_bind_text(insDoc, 2, p8.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(insDoc, 3, static_cast<sqlite3_int64>(r.mtimeTicks));
-            sqlite3_bind_int64(insDoc, 4, static_cast<sqlite3_int64>(r.fsize));
-            sqlite3_bind_int(insDoc, 5, r.deleted ? 1 : 0);
+            sqlite3_bind_int64(insDoc, 3, static_cast<sqlite3_int64>(mtimeTicks));
+            sqlite3_bind_int64(insDoc, 4, static_cast<sqlite3_int64>(fsize));
+            sqlite3_bind_int(insDoc, 5, deleted ? 1 : 0);
             const int rc = sqlite3_step(insDoc);
             if (rc != SQLITE_DONE)
                 throwSqlite(db_, "insert doc", rc);
-        }
+        });
         finalize(insDoc);
         insDoc = nullptr;
 

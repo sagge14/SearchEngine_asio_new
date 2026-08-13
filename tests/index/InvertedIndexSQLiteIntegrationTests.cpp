@@ -12,6 +12,27 @@
 #include <thread>
 #include <vector>
 
+namespace inverted_index {
+
+struct InvertedIndexTestAccess {
+    static std::pair<size_t, size_t> representationSlots(
+        InvertedIndex& index)
+    {
+        std::lock_guard<std::mutex> lock(index.mapMutex);
+        return {
+            index.dictionary.size(),
+            index.dictionaryChunks.size() * InvertedIndex::CHUNK_SIZE};
+    }
+
+    static void compactAndWait(InvertedIndex& index, double thresholdPercent)
+    {
+        index.compact(thresholdPercent);
+        index.waitForIdle();
+    }
+};
+
+} // namespace inverted_index
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -126,6 +147,8 @@ TEST(InvertedIndexSQLiteIntegration, BatchReloadLegacyUpdateAndReload)
         index.updateDocumentBase(paths).get();
         index.waitForIdle();
         expectInitialIndex(index);
+        EXPECT_EQ(index.filePathById(0u), first.wstring());
+        EXPECT_EQ(index.filePathById(1u), second.wstring());
     }
     {
         AsyncIndexRuntime runtime;
@@ -144,6 +167,8 @@ TEST(InvertedIndexSQLiteIntegration, BatchReloadLegacyUpdateAndReload)
         expectPosting(index, "DELTA", {{0u, 2u}});
         expectPosting(index, "EPSILON", {{0u, 1u}});
         expectPosting(index, "CHANGED", {{0u, 1u}});
+        EXPECT_EQ(index.filePathById(0u), first.wstring());
+        EXPECT_EQ(index.filePathById(1u), second.wstring());
     }
     {
         AsyncIndexRuntime runtime;
@@ -154,6 +179,8 @@ TEST(InvertedIndexSQLiteIntegration, BatchReloadLegacyUpdateAndReload)
         expectPosting(index, "DELTA", {{0u, 2u}});
         expectPosting(index, "EPSILON", {{0u, 1u}});
         expectPosting(index, "CHANGED", {{0u, 1u}});
+        EXPECT_EQ(index.filePathById(0u), first.wstring());
+        EXPECT_EQ(index.filePathById(1u), second.wstring());
     }
 }
 
@@ -175,6 +202,36 @@ TEST(InvertedIndexCoordination, AcceptedPointUpdateForcesFallbackAfterDrain)
     expectPosting(index, "POINTONLY", {{0u, 1u}});
     expectPosting(index, "CORPUSONLY", {{1u, 1u}});
     EXPECT_TRUE(index.isFileDeleted(0u));
+}
+
+TEST(InvertedIndexCompaction, NoOpLegacyUpdateKeepsOnePostingRepresentation)
+{
+    OEMCase::init("__searchengine_test_missing_oem866_table__.ini");
+    TemporaryIndex temporary;
+    const fs::path first = temporary.write("one.txt", "alpha beta alpha");
+    const fs::path second = temporary.write("two.txt", "beta gamma");
+    const std::vector<std::wstring> paths{first.wstring(), second.wstring()};
+
+    AsyncIndexRuntime runtime;
+    inverted_index::InvertedIndex index(
+        runtime.cpu_, runtime.io_, 2, 10, sqliteBatchConfig(temporary.database()));
+
+    index.updateDocumentBase(paths).get();
+    index.waitForIdle();
+    const auto [batchFlatSlots, batchChunkSlots] =
+        inverted_index::InvertedIndexTestAccess::representationSlots(index);
+    ASSERT_GT(batchFlatSlots, 0u);
+    ASSERT_EQ(batchChunkSlots, 0u);
+
+    index.updateDocumentBase(paths).get();
+    index.waitForIdle();
+    inverted_index::InvertedIndexTestAccess::compactAndWait(index, 5.0);
+
+    const auto [legacyFlatSlots, legacyChunkSlots] =
+        inverted_index::InvertedIndexTestAccess::representationSlots(index);
+    EXPECT_EQ(legacyFlatSlots, 0u);
+    EXPECT_GT(legacyChunkSlots, 0u);
+    expectInitialIndex(index);
 }
 
 } // namespace

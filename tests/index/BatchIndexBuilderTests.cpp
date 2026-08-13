@@ -5,6 +5,7 @@
 #include "Index/Batch/FullIndexStrategy.h"
 #include "MyUtils/OEMCase.h"
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,13 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#endif
 
 namespace {
 
@@ -47,6 +55,36 @@ public:
 private:
     fs::path path_;
 };
+
+#ifdef _WIN32
+class ExclusiveFileLock final {
+public:
+    explicit ExclusiveFileLock(const fs::path& path)
+    {
+        error_ = _wsopen_s(
+            &descriptor_,
+            path.c_str(),
+            _O_RDONLY | _O_BINARY,
+            _SH_DENYRW,
+            _S_IREAD);
+    }
+
+    ~ExclusiveFileLock()
+    {
+        if (descriptor_ >= 0)
+            _close(descriptor_);
+    }
+
+    [[nodiscard]] bool acquired() const noexcept
+    {
+        return error_ == 0 && descriptor_ >= 0;
+    }
+
+private:
+    int descriptor_{-1};
+    errno_t error_{};
+};
+#endif
 
 void initializeAsciiCaseTable()
 {
@@ -141,6 +179,40 @@ TEST(BatchIndexBuilder, ProducesSameLogicalIndexWithOneOrManyWorkers)
     ASSERT_NE(thirdCount, nullptr);
     EXPECT_EQ(*firstCount, 2u);
     EXPECT_EQ(*thirdCount, 1u);
+}
+
+TEST(BatchIndexBuilder, KeepsFrequentWordPostingsSortedAndWordRefsUnique)
+{
+    initializeAsciiCaseTable();
+    TemporaryCorpus corpus;
+    std::vector<std::wstring> paths;
+    for (std::size_t index = 0; index < 12; ++index) {
+        paths.push_back(
+            corpus.write(
+                "common_" + std::to_string(index) + ".txt",
+                "common term" + std::to_string(index))
+                .wstring());
+    }
+
+    const auto snapshot =
+        inverted_index::batch::BatchIndexBuilder({2, 4, 64u * 1024u})
+            .build(paths);
+
+    ASSERT_TRUE(snapshot.fileErrors.empty());
+    const uint32_t commonId = snapshot.wordToId.at("COMMON");
+    const PostingList& postings = snapshot.postings[commonId];
+    ASSERT_EQ(postings.size(), paths.size());
+
+    uint32_t expectedFileId = 0;
+    for (const Posting& posting : postings) {
+        EXPECT_EQ(posting.fileId, expectedFileId++);
+        EXPECT_EQ(posting.cnt, 1u);
+    }
+
+    for (uint32_t fileId = 0; fileId < paths.size(); ++fileId) {
+        const auto& refs = snapshot.wordRefs.at(fileId);
+        EXPECT_EQ(std::count(refs.begin(), refs.end(), commonId), 1);
+    }
 }
 
 TEST(BatchIndexBuilder, MatchesReferenceTokensAndIndexMetrics)
@@ -242,6 +314,82 @@ TEST(BatchIndexBuilder, SaturatesAStoredTermFrequency)
     const uint16_t* count = snapshot.postings.front().find(0);
     ASSERT_NE(count, nullptr);
     EXPECT_EQ(*count, std::numeric_limits<uint16_t>::max());
+}
+
+TEST(BatchIndexBuilder, FileErrorOwnsTheOriginalPathAndMessage)
+{
+#ifdef _WIN32
+    initializeAsciiCaseTable();
+    TemporaryCorpus corpus;
+    const fs::path path = corpus.write("locked.txt", "alpha");
+    const ExclusiveFileLock lock(path);
+    ASSERT_TRUE(lock.acquired());
+
+    const auto snapshot =
+        inverted_index::batch::BatchIndexBuilder({1, 1, 64u * 1024u})
+            .build({path.wstring()});
+
+    ASSERT_EQ(snapshot.fileErrors.size(), 1u);
+    EXPECT_EQ(snapshot.fileErrors.front().fileId, 0u);
+    EXPECT_EQ(snapshot.fileErrors.front().path, path.wstring());
+    EXPECT_EQ(snapshot.fileErrors.front().message, "file not found");
+    EXPECT_EQ(snapshot.indexedFiles, 0u);
+#else
+    GTEST_SKIP() << "The deterministic sharing-violation check is Windows-only";
+#endif
+}
+
+TEST(DocPaths, KeepsPathPointersValidAfterCopyMoveAndRebuildFromRows)
+{
+    TemporaryCorpus corpus;
+    const fs::path first = corpus.write("one.txt", "one");
+    const fs::path second = corpus.write("two.txt", "two");
+    const std::vector<std::wstring> paths{first.wstring(), second.wstring()};
+
+    DocPaths original;
+    const UpdatePack update = original.getUpdate(paths);
+    ASSERT_EQ(update.added, (std::vector<uint32_t>{0u, 1u}));
+    original.markRemoved(1u);
+
+    const auto expectState = [&](const DocPaths& documents) {
+        ASSERT_EQ(documents.size(), 2u);
+        EXPECT_EQ(documents.pathById(0u), first.wstring());
+        EXPECT_EQ(documents.pathById(1u), second.wstring());
+        EXPECT_FALSE(documents.isDeleted(0u));
+        EXPECT_TRUE(documents.isDeleted(1u));
+    };
+
+    DocPaths copyConstructed(original);
+    expectState(copyConstructed);
+
+    DocPaths copyAssigned;
+    copyAssigned = original;
+    expectState(copyAssigned);
+
+    DocPaths moveConstructed(std::move(copyConstructed));
+    expectState(moveConstructed);
+
+    DocPaths moveAssigned;
+    moveAssigned = std::move(copyAssigned);
+    expectState(moveAssigned);
+
+    std::vector<DocPaths::RawRow> rows = moveAssigned.exportRows();
+    DocPaths rebuilt;
+    rebuilt.rebuildFromRows(std::move(rows));
+    expectState(rebuilt);
+
+    std::size_t visited = 0;
+    rebuilt.forEachRow(
+        [&](uint32_t id,
+            const std::wstring& path,
+            int64_t,
+            uint64_t,
+            bool) {
+            ASSERT_LT(id, 2u);
+            EXPECT_EQ(&path, &rebuilt.pathById(id));
+            ++visited;
+        });
+    EXPECT_EQ(visited, 2u);
 }
 
 TEST(BoundedByteQueue, RejectsAnItemLargerThanItsCapacity)

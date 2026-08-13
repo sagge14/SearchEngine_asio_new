@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <vector>
 #include <unordered_set>
+#include <string_view>
 #include <cstdint>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/split_member.hpp>
@@ -58,6 +59,19 @@ public:
 
     /// Экспорт состояния для внешнего хранилища (SQLite/и т.д.).
     [[nodiscard]] std::vector<RawRow> exportRows() const;
+
+    /// Синхронно передать строки внешнему хранилищу без копий путей.
+    template<class Visitor>
+    void forEachRow(Visitor&& visitor) const {
+        for (const auto& [path, info] : path2info) {
+            visitor(
+                info.id,
+                path,
+                info.mtime.time_since_epoch().count(),
+                info.fsize,
+                info.deleted);
+        }
+    }
 
     /// Восстановить состояние из внешнего хранилища.
     /// Полностью перезаписывает текущее содержимое.

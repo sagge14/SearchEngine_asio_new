@@ -50,6 +50,7 @@ namespace inverted_index {
 
     class BoostIndexSerializer;
     class SQLiteIndexSerializer;
+    struct InvertedIndexTestAccess;
     namespace batch {
         class BatchIndexBuilder;
         struct BatchIndexSnapshot;
@@ -264,6 +265,7 @@ namespace inverted_index {
         // Доступ сериализатора к внутреннему состоянию (для SQLite/Boost и т.п.)
         friend class BoostIndexSerializer;
         friend class SQLiteIndexSerializer;
+        friend struct InvertedIndexTestAccess;
 
 
         void safeEraseFileInternal(FileId fileId);

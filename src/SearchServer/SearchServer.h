@@ -174,7 +174,6 @@ namespace search_server {
         mutable atomic<bool> work{};
         hash<string> hashRequest;
         inverted_index::InvertedIndex *index{};
-        std::vector<wstring> docPaths{};
         Settings settings{};
         size_t time{};
 

@@ -110,12 +110,13 @@ void DocPaths::rebuildFromRows(std::vector<RawRow>&& rows)
 UpdatePack DocPaths::getUpdate(const std::vector<std::wstring>& paths)
 {
     UpdatePack pack;
-    std::unordered_set<std::wstring> seen;
+    std::unordered_set<std::wstring_view> seen;
+    seen.reserve(paths.size());
 
     /* ── 1. проход по сканированным файлам ───────────────────────── */
     for (const auto& p : paths)
     {
-        seen.insert(p);
+        seen.emplace(p);
 
         auto mtime = std::filesystem::last_write_time(p);
         auto fsize = std::filesystem::file_size(p);
@@ -152,7 +153,7 @@ UpdatePack DocPaths::getUpdate(const std::vector<std::wstring>& paths)
     /* Вечный след: не удаляем запись, а только помечаем deleted.       */
     for (auto& [path, info] : path2info)
     {
-        if (!info.deleted && !seen.contains(path))
+        if (!info.deleted && !seen.contains(std::wstring_view(path)))
         {
             info.deleted = true;
             pack.removed.push_back(info.id);
