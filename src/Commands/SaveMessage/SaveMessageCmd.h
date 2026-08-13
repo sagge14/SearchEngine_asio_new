@@ -6,6 +6,7 @@
 #define SEARCHENGINE_SAVEMESSAGECMD_H
 #include "Commands/Command.h"
 
+// LEGACY: обработчик специального составного SAVE_MESSAGE_TO wire-кода.
 class SaveMessageCmd : public Command {
     uint32_t  user_id_;
 public:

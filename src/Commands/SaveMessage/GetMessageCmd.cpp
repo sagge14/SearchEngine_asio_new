@@ -5,6 +5,7 @@
 #include "GetMessageCmd.h"
 #include "MessageQueue.h"
 std::vector<uint8_t> GetMessageCmd::execute(const std::vector<uint8_t> &_data) {
+    // LEGACY: исторически команда всегда читает очередь пользователя 1.
     uint32_t  user_id = 1;
     return MessageQueue::getInstance().getMessage(user_id);
 }

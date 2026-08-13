@@ -2,18 +2,24 @@
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
-#include <boost/asio/experimental/channel.hpp>
+#include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio.hpp>
 #include <cstdint>
 #include <fstream>
 #include <filesystem>
 #include <variant>
 #include <map>
+#include <memory>
+#include <optional>
 #include <queue>
+#include <string>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <string_view>
+#include <type_traits>
 #include <unordered_set>
+#include <vector>
 #include "Commands/Command.h"
 
 
@@ -28,6 +34,8 @@ namespace asio_server
     using namespace std;
 /** ------------------------COMMAND-------------------------- **/
 // Список только имён
+// LEGACY: GET_MESSAGE и SAVE_MESSAGE_TO сохранены только ради совместимости
+// старого wire-протокола. Для новой функциональности их не использовать.
 #define COMMAND_LIST \
     X(SOMEERROR) \
     X(SOLOREQUEST) \
@@ -64,6 +72,7 @@ namespace asio_server
         #define X(name) name,
                 COMMAND_LIST
         #undef X
+        // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
 
@@ -88,6 +97,32 @@ namespace asio_server
         uint_fast64_t size{};
         COMMAND command{};
     };
+
+    [[nodiscard]] inline constexpr COMMAND legacyErrorCommand(
+        command_execution::ErrorCode error) noexcept
+    {
+        return error == command_execution::ErrorCode::ServerBusy
+            ? COMMAND::SERVER_BUSY_ERROR
+            : COMMAND::SOMEERROR;
+    }
+
+    [[nodiscard]] inline constexpr Header makeLegacyErrorHeader(
+        command_execution::ErrorCode error) noexcept
+    {
+        return Header{0, legacyErrorCommand(error)};
+    }
+
+    static_assert(sizeof(uint_fast64_t) == 8);
+    static_assert(sizeof(Header) == 16);
+    static_assert(std::is_trivially_copyable_v<Header>);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::SOMEERROR) == 0);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::SOLOREQUEST) == 1);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GETBINFILE) == 11);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::PING) == 18);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT) == 26);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::SERVER_BUSY_ERROR) == 27);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::END_COMMAND) == 28);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
 /** ------------------------session_START------------------------ **/
     class Interface;
 
@@ -113,45 +148,62 @@ namespace asio_server
 
         enum { max_length = 64 * 1024 };
 
-        using WriteItem = std::variant<asio_server::Header, std::shared_ptr<std::vector<BYTE>>,
-        std::filesystem::path>;
+        struct ResponseWrite
+        {
+            asio_server::Header header;
+            std::shared_ptr<std::vector<BYTE>> payload;
+        };
+
+        struct FileTransfer
+        {
+            asio_server::Header header;
+            std::shared_ptr<std::ifstream> stream;
+        };
+
+        struct ErrorWrite
+        {
+            asio_server::Header header;
+            bool closeAfterWrite{};
+        };
+
+        using WriteItem = std::variant<ResponseWrite, FileTransfer, ErrorWrite>;
 
         tcp::socket socket_;
+        boost::asio::strand<boost::asio::any_io_executor> strand_;
         boost::asio::thread_pool& cpu_pool_;
-        Header header_{};
-
-        std::vector<BYTE> v_data_{};
-        std::string request_;
-        uint_fast32_t userId_{};
         std::string userName_ = "default_user";
+        std::string remoteIP_;
+        mutable std::mutex user_name_mutex_;
         std::atomic_bool stopped_{false};
-        std::atomic<bool> command_running_{false};
         std::atomic<bool> session_finished_{false};
+        std::atomic<bool> terminal_error_queued_{false};
         std::shared_ptr<ServerActivity> activity_;
 
 
-        std::unique_ptr<std::ifstream> file_stream;
+        boost::asio::experimental::concurrent_channel<
+            void(boost::system::error_code, WriteItem)> write_channel_;
 
-        boost::asio::experimental::channel<void(boost::system::error_code, WriteItem)> write_channel_;
-
-        boost::asio::awaitable<void> commandExec();
-        bool trustCommand();
+        boost::asio::awaitable<void> commandExec(
+            Header requestHeader,
+            std::vector<BYTE> requestData,
+            std::optional<uint_fast32_t> saveMessageUserId);
+        bool trustCommand(
+            Header& requestHeader,
+            std::optional<uint_fast32_t>& saveMessageUserId);
+        boost::asio::awaitable<bool> queueLegacyError(
+            command_execution::ErrorCode error,
+            std::string diagnostic = {},
+            bool closeAfterWrite = false,
+            COMMAND requestCommand = COMMAND::SOMEERROR);
         std::string getRemoteIP() const;
         void stopOnExecutor(const std::string& why);
         void finishSession() noexcept;
 
-        template<typename T>
-        bool safe_send_to_channel(T&& item);
-
-        template<typename... Args>
-        bool safe_send_to_channel(Args&&... args) {
-            return (... && safe_send_to_channel(std::forward<Args>(args)));
-        }
-
         boost::asio::awaitable<void> readLoop();
         boost::asio::awaitable<void> writeLoop();
-        boost::asio::awaitable<void> sendNextFileChunk();
-        boost::asio::awaitable<bool> openFileStream(const std::filesystem::path& file_path);
+        boost::asio::awaitable<bool> sendFile(
+            const std::shared_ptr<std::ifstream>& stream,
+            uint_fast64_t expectedSize);
 
     public:
 
@@ -161,9 +213,10 @@ namespace asio_server
                          boost::asio::thread_pool& cpu_pool,
                          std::shared_ptr<ServerActivity> activity)
             :socket_(std::move(socket))
+            ,strand_(boost::asio::make_strand(socket_.get_executor()))
             ,cpu_pool_(cpu_pool)
             ,activity_(std::move(activity))
-            ,write_channel_(socket_.get_executor(), kWriteChannelCapacity){};
+            ,write_channel_(strand_, kWriteChannelCapacity){};
        ~session();
 
     };
@@ -207,8 +260,9 @@ namespace asio_server
         static std::string getYear();
         static void setSearchServer(search_server::SearchServer* _server);
         static void shutdown();
-        static void setCommand(COMMAND command, std::unique_ptr<Command> myCmd);
-        static std::vector<uint8_t> execCommand(COMMAND _command, std::vector<uint8_t>& _request);
+        [[nodiscard]] static command_execution::CommandResult execCommand(
+            COMMAND _command,
+            std::vector<uint8_t>& _request);
     };
 
 }

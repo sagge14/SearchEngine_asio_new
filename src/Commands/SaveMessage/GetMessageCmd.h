@@ -6,6 +6,7 @@
 #define SEARCHENGINE_GETMESSAGECMD_H
 #include "Commands/Command.h"
 
+// LEGACY: старый message-queue endpoint; не использовать в новом API.
 class GetMessageCmd : public Command {
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
