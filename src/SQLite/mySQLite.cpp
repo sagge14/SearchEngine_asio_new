@@ -75,18 +75,44 @@ size_t mySQLite::size() const {
 void mySQLite::execSql(const std::string& sql)
 {
     std::lock_guard<std::mutex> lock(dbMutex);
-    list.clear();
+    {
+        std::lock_guard<std::mutex> listLock(listMutex);
+        list.clear();
+    }
 
     int rc = sqlite3_exec(db, sql.c_str(), callback, this, &zErrMsg);
     if (rc != SQLITE_OK) {
-        std::string errMsg = zErrMsg;
+        const std::string errMsg = zErrMsg ? zErrMsg : "unknown SQLite error";
         sqlite3_free(zErrMsg);
+        zErrMsg = nullptr;
         throw std::runtime_error("SQL execution failed: " + errMsg);
     }
 
     /* курсор ставим на начало свежего результата */
     std::lock_guard<std::mutex> l(listMutex);
     cur_ = list.begin();
+}
+
+mySQLite::RowList mySQLite::queryRows(const std::string& sql)
+{
+    std::lock_guard<std::mutex> lock(dbMutex);
+    {
+        std::lock_guard<std::mutex> listLock(listMutex);
+        list.clear();
+        cur_ = list.end();
+    }
+
+    const int rc = sqlite3_exec(db, sql.c_str(), callback, this, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        const std::string errMsg = zErrMsg ? zErrMsg : "unknown SQLite error";
+        sqlite3_free(zErrMsg);
+        zErrMsg = nullptr;
+        throw std::runtime_error("SQL execution failed: " + errMsg);
+    }
+
+    std::lock_guard<std::mutex> listLock(listMutex);
+    cur_ = list.begin();
+    return list;
 }
 
 void mySQLite::first()

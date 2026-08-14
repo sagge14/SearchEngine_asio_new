@@ -3,104 +3,212 @@
 //
 
 #include "GetTelegaSingleAttachmentCmd.h"
-#include "Commands/GetJsonTelega/Telega.h"
 
-#include "nlohmann/json.hpp"
+#include "Commands/GetJsonTelega/Telega.h"
+#include "MyUtils/Encoding.h"
 #include "SQLite/SQLiteConnectionManager.h"
+#include "nlohmann/json.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <sstream>
 #include <string>
 
-#include "MyUtils/Encoding.h"
-#include <fstream>
+std::vector<uint8_t> GetTelegaSingleAttachmentCmd::execute(
+    const std::vector<uint8_t>& data)
+{
+    auto result = executeResult(data);
+    return result.succeeded()
+        ? std::move(result.payload)
+        : std::vector<uint8_t>{};
+}
 
-std::vector<uint8_t> GetTelegaSingleAttachmentCmd::execute(const std::vector<uint8_t> &_data) {
-    // Преобразуем вектор байт в строку, чтобы использовать его как имя файла
-
-    namespace nh = nlohmann;
+command_execution::CommandResult GetTelegaSingleAttachmentCmd::executeResult(
+    const std::vector<uint8_t>& data)
+{
     namespace fs = std::filesystem;
+    namespace nh = nlohmann;
 
-    std::string str_request(_data.begin(), _data.end());
     nh::json jsonRequest;
     try {
-        jsonRequest = nh::json::parse(str_request);
-    } catch (...) {
-        return {};
+        jsonRequest = nh::json::parse(std::string(data.begin(), data.end()));
+    }
+    catch (const nh::json::parse_error& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidJson,
+            error.what());
     }
 
-
-    int tlg_id = jsonRequest.value("id", -1);
-    if (tlg_id < 0) return {};
-
-    int int_type = jsonRequest.value("type", -1);
-    std::string file_name = jsonRequest.value("file_name", "");
-
-    auto tlg_type = static_cast<Telega::TYPE>(int_type);
-
-    const decltype(Telega::getBases(Telega::TYPE{})) *base;
-    switch (tlg_type) {
-        case Telega::TYPE::VHOD:  base = &Telega::b_prm; break; //int_type == 0
-        case Telega::TYPE::ISHOD: base = &Telega::b_prd; break; //int_type == 1
-        default: return {};
+    if (!jsonRequest.is_object() ||
+        !jsonRequest.contains("id") ||
+        !jsonRequest["id"].is_number_integer() ||
+        !jsonRequest.contains("type") ||
+        !jsonRequest["type"].is_number_integer() ||
+        !jsonRequest.contains("file_name") ||
+        !jsonRequest["file_name"].is_string()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "single attachment request requires integer id/type and file_name");
     }
 
-    std::string sql_qry =
-            "SELECT PrilName, DirectTo FROM archive WHERE `index` = '" + std::to_string(tlg_id) + "'";
+    std::int64_t wireId{};
+    std::int64_t wireType{};
+    std::string fileName;
+    try {
+        wireId = jsonRequest["id"].get<std::int64_t>();
+        wireType = jsonRequest["type"].get<std::int64_t>();
+        fileName = jsonRequest["file_name"].get<std::string>();
+    }
+    catch (const nh::json::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            error.what());
+    }
+    if (wireId < 0 || wireId > (std::numeric_limits<int>::max)() ||
+        (wireType != static_cast<int>(Telega::TYPE::VHOD) &&
+         wireType != static_cast<int>(Telega::TYPE::ISHOD)) ||
+        fileName.empty()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "single attachment id, type, or file_name is invalid");
+    }
 
-    std::string attachments_names;
-    std::string attachments_dir;
+    const fs::path requestedPath(fileName);
+    if (requestedPath.is_absolute() ||
+        requestedPath.has_root_path() ||
+        requestedPath.has_parent_path() ||
+        requestedPath.filename() != requestedPath) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "file_name must contain only an attachment basename");
+    }
 
-    for (const auto& base_name : *base) {
-        auto db = SQLiteConnectionManager::instance().getConnection(base_name);
-        db->execSql(sql_qry);
+    const int telegramId = static_cast<int>(wireId);
+    const auto telegramType = static_cast<Telega::TYPE>(wireType);
+    const auto* bases = telegramType == Telega::TYPE::VHOD
+        ? &Telega::b_prm
+        : &Telega::b_prd;
 
-        if (!db->empty()) {
-            const auto& row = *db->begin();   // первый результат
+    const std::string sql =
+        "SELECT PrilName, DirectTo FROM archive WHERE `index` = " +
+        std::to_string(telegramId);
 
-            attachments_names = row.at("PrilName");
-            attachments_dir   = row.at("DirectTo");
-            break;
+    std::string attachmentNames;
+    std::string attachmentDirectory;
+    for (const auto& baseName : *bases) {
+        std::shared_ptr<mySQLite> database;
+        try {
+            database = SQLiteConnectionManager::instance().getConnection(baseName);
         }
+        catch (const std::exception& error) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DatabaseOpenFailed,
+                error.what());
+        }
+
+        mySQLite::RowList rows;
+        try {
+            rows = database->queryRows(sql);
+        }
+        catch (const std::exception& error) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DatabaseQueryFailed,
+                error.what());
+        }
+
+        if (rows.empty())
+            continue;
+
+        const auto& row = rows.front();
+        const auto names = row.find("PrilName");
+        const auto directory = row.find("DirectTo");
+        if (names == row.end() || directory == row.end()) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DatabaseSchemaFailed,
+                "archive row has no PrilName or DirectTo column");
+        }
+        attachmentNames = names->second;
+        attachmentDirectory = directory->second;
+        break;
     }
 
-
-    nh::json jres;
-
-    if(attachments_names.empty())
-    {
-        jres = std::vector<uint8_t>{};
-        std::string out = jres.dump();
-        return {out.begin(), out.end()};
+    if (attachmentNames.empty()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::AttachmentNotFound,
+            "telegram has no attachments");
     }
 
-    fs::path full_file_name = fs::path(attachments_dir) / file_name;
-    full_file_name = fs::path{encoding::utf8_to_wstring(full_file_name.string())};
-
-
-
-/*
-    if(tlg_type == Telega::TYPE::VHOD)
-    {
-        // разделяем имена по ";"
-        std::stringstream ss(attachments_names);
+    bool advertised = false;
+    if (telegramType == Telega::TYPE::VHOD) {
+        std::stringstream names(attachmentNames);
         std::string name;
-        while (std::getline(ss, name, ';')) {
-            if (name.empty()) continue;
-
-            jres.push_back(getItem(name));
+        while (std::getline(names, name, ';')) {
+            if (name == fileName) {
+                advertised = true;
+                break;
+            }
         }
     }
     else {
-        auto name = std::to_string(tlg_id) + ".zip";
-
-    }
-*/
-    // Открываем файл в бинарном режиме
-    std::fstream file(full_file_name, std::ios::in | std::ios::binary);
-    if (file.is_open()) {
-        // Читаем содержимое файла в вектор байт
-        std::vector<uint8_t> file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        return file_content;
+        advertised = fileName == std::to_string(telegramId) + ".zip";
     }
 
-    // Возвращаем пустой вектор, если файл не удалось открыть
-    return {};
+    if (!advertised) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::AttachmentNotFound,
+            "requested file is not advertised by the telegram");
+    }
+
+    fs::path fullPath;
+    try {
+        const fs::path utf8Path = fs::path(attachmentDirectory) / fileName;
+        fullPath = fs::path{encoding::utf8_to_wstring(utf8Path.string())};
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::DatabaseSchemaFailed,
+            error.what());
+    }
+
+    std::error_code metadataError;
+    const auto status = fs::status(fullPath, metadataError);
+    if (metadataError) {
+        if (metadataError == std::errc::no_such_file_or_directory) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::AttachmentNotFound,
+                fileName);
+        }
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileMetadataFailed,
+            metadataError.message());
+    }
+    if (!fs::exists(status)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::AttachmentNotFound,
+            fileName);
+    }
+    if (!fs::is_regular_file(status)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileOpenFailed,
+            "attachment path is not a regular file");
+    }
+
+    std::ifstream file(fullPath, std::ios::binary);
+    if (!file.is_open()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileOpenFailed,
+            fileName);
+    }
+
+    std::vector<uint8_t> fileContent(
+        std::istreambuf_iterator<char>{file},
+        std::istreambuf_iterator<char>{});
+    if (file.bad()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileReadFailed,
+            fileName);
+    }
+
+    return command_execution::CommandResult::success(std::move(fileContent));
 }

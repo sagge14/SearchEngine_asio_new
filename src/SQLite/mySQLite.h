@@ -33,6 +33,8 @@ public:
     using RowList          = std::list<Row>;
     using const_iterator   = RowList::const_iterator;
 
+    [[nodiscard]] RowList queryRows(const std::string& sql);
+
     /* --- «квери-подобные» новинки --- */
     void first();                 // курсор → первый ряд
     void next();                  // курсор++
