@@ -1,11 +1,13 @@
 #pragma once
 
 #include "IIndexSerializer.h"
+#include "DocumentCatalogStorage.h"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,6 +23,8 @@ struct LiveMirrorConfig {
     int maxPendingOps = 500;
     int loadThreads = 4;
     bool precountPostings = false;
+    DocumentCatalogStorage documentCatalogStorage =
+        DocumentCatalogStorage::Memory;
 };
 
 struct LiveMirrorOp {
@@ -32,6 +36,7 @@ struct LiveMirrorOp {
     uint64_t size = 0;
     std::vector<std::pair<uint32_t, uint16_t>> widCounts;
     std::vector<std::pair<uint32_t, std::string>> newWords;
+    bool markDeletedAfterWrite = false;
 };
 
 class SQLiteIndexSerializer final : public IIndexSerializer {
@@ -91,11 +96,15 @@ private:
     void closeLiveDb() noexcept;
     void prepareLiveStatements();
     void finalizeLiveStatements() noexcept;
-    void writeBatch(const std::deque<LiveMirrorOp>& rawBatch);
+    void writeBatch(
+        const std::deque<LiveMirrorOp>& rawBatch,
+        uint32_t& activeFileId,
+        bool& hasActiveFileId);
     void runCheckpointOnLiveDb();
     void logMirrorFlush(size_t rawOps, size_t coalescedOps, int64_t elapsedMs);
 
     void enqueueOp(LiveMirrorOp op);
+    void rethrowWriterErrorLocked() const;
 
     sqlite3* db_live_{nullptr};
 
@@ -116,8 +125,9 @@ private:
     bool requestCheckpoint_{false};
     bool writerActive_{false};
     bool writerStarted_{false};
+    std::exception_ptr writerError_;
 
-    static constexpr int kSchemaVersion = 3;
+    static constexpr int kSchemaVersion = 4;
 };
 
 } // namespace inverted_index

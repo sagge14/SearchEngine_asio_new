@@ -159,11 +159,13 @@ if not defined CFG_year goto :HELPER_FAILED
 if not defined CFG_threads goto :HELPER_FAILED
 if not defined CFG_file_timeout_sec goto :HELPER_FAILED
 if not defined CFG_prm_short_content_autodetect goto :HELPER_FAILED
+if not defined CFG_document_catalog_storage goto :HELPER_FAILED
 set "SERVICE_PORT=%CFG_port%"
 set "SERVICE_YEAR=%CFG_year%"
 set "SERVICE_THREADS=%CFG_threads%"
 set "FILE_TIMEOUT=%CFG_file_timeout_sec%"
 set "PRM_AUTODETECT=%CFG_prm_short_content_autodetect%"
+set "DOCUMENT_CATALOG_STORAGE=%CFG_document_catalog_storage%"
 "%HELPER%" validate --settings "%CONFIG_TEMP%" >nul
 if errorlevel 1 goto :HELPER_FAILED
 
@@ -176,6 +178,7 @@ echo   Executor threads:     %SERVICE_THREADS%
 echo   One-file timeout:     %FILE_TIMEOUT% sec
 if "%PRM_AUTODETECT%"=="1" echo   PRM short content:    enabled
 if "%PRM_AUTODETECT%"=="0" echo   PRM short content:    disabled
+echo   Document catalog:     %DOCUMENT_CATALOG_STORAGE%
 echo.
 
 echo [1/8] Installing Microsoft Visual C++ Runtime...

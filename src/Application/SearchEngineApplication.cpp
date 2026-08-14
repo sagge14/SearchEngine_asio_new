@@ -54,6 +54,16 @@ public:
 
 void validateSettings(const search_server::Settings& settings)
 {
+    switch (settings.documentCatalogStorage) {
+    case inverted_index::DocumentCatalogStorage::Memory:
+    case inverted_index::DocumentCatalogStorage::SQLite:
+        break;
+    default:
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.document_catalog_storage must be memory or sqlite"
+        );
+    }
     if (settings.name.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.Name is empty");
     }

@@ -76,6 +76,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["sqlite_precount_postings"] = val.sqlitePrecountPostings;
     jsonSettings["config"]["full_index_strategy"] =
         std::string(inverted_index::toString(val.fullIndexStrategy));
+    jsonSettings["config"]["document_catalog_storage"] =
+        std::string(inverted_index::toString(val.documentCatalogStorage));
     jsonSettings["config"]["batch_reader_threads"] = val.batchReaderThreads;
     jsonSettings["config"]["batch_indexer_threads"] = val.batchIndexerThreads;
     jsonSettings["config"]["batch_queue_memory_mb"] = val.batchQueueMemoryMb;
@@ -363,6 +365,26 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             s.fullIndexStrategy = *strategy;
         } else {
             addedFields.push_back("config.full_index_strategy");
+            needsResave = true;
+        }
+
+        // document_catalog_storage — хранение путей в RAM или в SQLite.
+        if (config.contains("document_catalog_storage")) {
+            if (!config.at("document_catalog_storage").is_string()) {
+                throw std::invalid_argument(
+                    "config.document_catalog_storage must be memory or sqlite");
+            }
+            const auto storage = inverted_index::parseDocumentCatalogStorage(
+                config.at("document_catalog_storage").get<std::string>());
+            if (!storage) {
+                throw std::invalid_argument(
+                    "config.document_catalog_storage must be memory or sqlite");
+            }
+            s.documentCatalogStorage = *storage;
+        } else {
+            s.documentCatalogStorage =
+                inverted_index::DocumentCatalogStorage::Memory;
+            addedFields.push_back("config.document_catalog_storage");
             needsResave = true;
         }
 

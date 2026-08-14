@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Index/DocPaths.h"
+#include "Index/DocumentCatalog.h"
 #include "Index/PostingList.h"
 
 #include <cstddef>
@@ -24,7 +24,7 @@ struct BatchIndexFileError {
 };
 
 struct BatchIndexSnapshot {
-    DocPaths documents;
+    std::vector<DocumentMetadata> documentMetadata;
     std::unordered_map<std::string, uint32_t> wordToId;
     std::vector<std::string> idToWord;
     std::vector<PostingList> postings;

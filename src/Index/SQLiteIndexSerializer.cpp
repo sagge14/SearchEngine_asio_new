@@ -133,10 +133,52 @@ void SQLiteIndexSerializer::initSchema(sqlite3* db)
     if (!tableHasColumn(db, "docs", "deleted"))
         exec(db, "ALTER TABLE docs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;");
 
+    {
+        sqlite3_stmt* duplicate = prepare(
+            db,
+            "SELECT path, COUNT(*) FROM docs "
+            "GROUP BY path HAVING COUNT(*) > 1 LIMIT 1;");
+        const int rc = sqlite3_step(duplicate);
+        if (rc == SQLITE_ROW) {
+            const unsigned char* path = sqlite3_column_text(duplicate, 0);
+            const std::string duplicatePath =
+                path ? reinterpret_cast<const char*>(path) : "";
+            finalize(duplicate);
+            throw std::runtime_error(
+                "SQLite schema migration cannot create unique docs(path) "
+                "index because duplicate path exists: " + duplicatePath);
+        }
+        finalize(duplicate);
+        if (rc != SQLITE_DONE)
+            throwSqlite(db, "check duplicate docs paths", rc);
+    }
+
     migratePostingsToWithoutRowid(db);
 
     exec(db, "CREATE INDEX IF NOT EXISTS idx_postings_doc ON postings(doc_id);");
     exec(db, "CREATE INDEX IF NOT EXISTS idx_docs_deleted ON docs(deleted);");
+    exec(db,
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_docs_path_unique "
+         "ON docs(path);");
+
+    {
+        sqlite3_stmt* orphan = prepare(
+            db,
+            "SELECT p.doc_id FROM postings p "
+            "LEFT JOIN docs d ON d.doc_id=p.doc_id "
+            "WHERE d.doc_id IS NULL LIMIT 1;");
+        const int rc = sqlite3_step(orphan);
+        if (rc == SQLITE_ROW) {
+            const sqlite3_int64 docId = sqlite3_column_int64(orphan, 0);
+            finalize(orphan);
+            throw std::runtime_error(
+                "SQLite index is inconsistent: postings reference missing "
+                "docs row for doc_id=" + std::to_string(docId));
+        }
+        finalize(orphan);
+        if (rc != SQLITE_DONE)
+            throwSqlite(db, "validate postings docs references", rc);
+    }
 
     {
         sqlite3_stmt* st = prepare(db,
@@ -374,7 +416,10 @@ void SQLiteIndexSerializer::stopWriter()
     stop_ = false;
 }
 
-void SQLiteIndexSerializer::writeBatch(const std::deque<LiveMirrorOp>& rawBatch)
+void SQLiteIndexSerializer::writeBatch(
+    const std::deque<LiveMirrorOp>& rawBatch,
+    uint32_t& activeFileId,
+    bool& hasActiveFileId)
 {
     if (rawBatch.empty() || !db_live_)
         return;
@@ -384,7 +429,21 @@ void SQLiteIndexSerializer::writeBatch(const std::deque<LiveMirrorOp>& rawBatch)
     std::unordered_map<uint32_t, LiveMirrorOp> coalesced;
     coalesced.reserve(rawBatch.size());
     for (const auto& op : rawBatch)
-        coalesced[op.fileId] = op;
+    {
+        auto found = coalesced.find(op.fileId);
+        if (op.kind == LiveMirrorOp::Kind::Write || found == coalesced.end()) {
+            coalesced[op.fileId] = op;
+            continue;
+        }
+
+        // A new Write followed by MarkDeleted in the same queue flush must
+        // still create the durable docs row and postings before soft-delete.
+        // Replacing the Write with MarkDeleted would lose the eternal trace.
+        if (found->second.kind == LiveMirrorOp::Kind::Write)
+            found->second.markDeletedAfterWrite = true;
+        else
+            found->second = op;
+    }
 
     std::unordered_map<uint32_t, std::string> allNewWords;
     for (const auto& [fid, op] : coalesced)
@@ -411,6 +470,8 @@ void SQLiteIndexSerializer::writeBatch(const std::deque<LiveMirrorOp>& rawBatch)
 
         for (const auto& [fileId, op] : coalesced)
         {
+            activeFileId = fileId;
+            hasActiveFileId = true;
             if (op.kind == LiveMirrorOp::Kind::MarkDeleted)
             {
                 sqlite3_reset(stMarkDeleted_);
@@ -419,6 +480,18 @@ void SQLiteIndexSerializer::writeBatch(const std::deque<LiveMirrorOp>& rawBatch)
                 const int rc = sqlite3_step(stMarkDeleted_);
                 if (rc != SQLITE_DONE) throwSqlite(db_live_, "live mark deleted", rc);
                 continue;
+            }
+
+            const std::string p8 = encoding::wstring_to_utf8(op.path);
+            sqlite3_reset(stUpsertDoc_);
+            sqlite3_clear_bindings(stUpsertDoc_);
+            sqlite3_bind_int(stUpsertDoc_, 1, static_cast<int>(fileId));
+            sqlite3_bind_text(stUpsertDoc_, 2, p8.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(stUpsertDoc_, 3, static_cast<sqlite3_int64>(op.mtimeTicks));
+            sqlite3_bind_int64(stUpsertDoc_, 4, static_cast<sqlite3_int64>(op.size));
+            {
+                const int rc = sqlite3_step(stUpsertDoc_);
+                if (rc != SQLITE_DONE) throwSqlite(db_live_, "live upsert doc", rc);
             }
 
             sqlite3_reset(stDelPostings_);
@@ -440,21 +513,22 @@ void SQLiteIndexSerializer::writeBatch(const std::deque<LiveMirrorOp>& rawBatch)
                 if (rc != SQLITE_DONE) throwSqlite(db_live_, "live insert posting", rc);
             }
 
-            const std::string p8 = encoding::wstring_to_utf8(op.path);
-            sqlite3_reset(stUpsertDoc_);
-            sqlite3_clear_bindings(stUpsertDoc_);
-            sqlite3_bind_int(stUpsertDoc_, 1, static_cast<int>(fileId));
-            sqlite3_bind_text(stUpsertDoc_, 2, p8.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(stUpsertDoc_, 3, static_cast<sqlite3_int64>(op.mtimeTicks));
-            sqlite3_bind_int64(stUpsertDoc_, 4, static_cast<sqlite3_int64>(op.size));
+            if (op.markDeletedAfterWrite)
             {
-                const int rc = sqlite3_step(stUpsertDoc_);
-                if (rc != SQLITE_DONE) throwSqlite(db_live_, "live upsert doc", rc);
+                sqlite3_reset(stMarkDeleted_);
+                sqlite3_clear_bindings(stMarkDeleted_);
+                sqlite3_bind_int(
+                    stMarkDeleted_, 1, static_cast<int>(fileId));
+                const int rc = sqlite3_step(stMarkDeleted_);
+                if (rc != SQLITE_DONE)
+                    throwSqlite(db_live_, "live mark newly written doc deleted", rc);
             }
+
         }
 
         commit(db_live_);
         ok = true;
+        hasActiveFileId = false;
     }
     catch (...)
     {
@@ -471,8 +545,17 @@ void SQLiteIndexSerializer::runCheckpointOnLiveDb()
 {
     if (!db_live_) return;
     char* err = nullptr;
-    sqlite3_exec(db_live_, "PRAGMA wal_checkpoint(TRUNCATE);", nullptr, nullptr, &err);
-    if (err) sqlite3_free(err);
+    const int rc = sqlite3_exec(
+        db_live_, "PRAGMA wal_checkpoint(TRUNCATE);", nullptr, nullptr, &err);
+    if (rc != SQLITE_OK) {
+        const std::string message = err ? err : sqlite3_errmsg(db_live_);
+        if (err)
+            sqlite3_free(err);
+        throw std::runtime_error(
+            "SQLite live checkpoint failed: " + message);
+    }
+    if (err)
+        sqlite3_free(err);
 }
 
 void SQLiteIndexSerializer::writerLoop()
@@ -508,12 +591,48 @@ void SQLiteIndexSerializer::writerLoop()
 
         if (!batch.empty())
         {
+            uint32_t activeFileId = 0;
+            bool hasActiveFileId = false;
             try {
-                writeBatch(batch);
+                writeBatch(batch, activeFileId, hasActiveFileId);
             } catch (const std::exception& e) {
-                LogFile::getIndex().write(std::string("SQLITE_MIRROR_WRITER: writeBatch EXCEPTION: ") + e.what());
+                LogFile::getIndex().write(
+                    "SQLITE_MIRROR_WRITER storage=" +
+                    std::string(toString(config_.documentCatalogStorage)) +
+                    " stage=write_batch doc_id=" +
+                    (hasActiveFileId
+                        ? std::to_string(activeFileId)
+                        : std::string("n/a")) +
+                    " error=" + e.what());
+                {
+                    std::lock_guard<std::mutex> lock(queueMutex_);
+                    writerError_ = std::current_exception();
+                    queue_.clear();
+                    writerActive_ = false;
+                    requestCheckpoint_ = false;
+                    stop_ = true;
+                    flushDoneCv_.notify_all();
+                }
+                break;
             } catch (...) {
-                LogFile::getIndex().write("SQLITE_MIRROR_WRITER: writeBatch unknown exception");
+                LogFile::getIndex().write(
+                    "SQLITE_MIRROR_WRITER storage=" +
+                    std::string(toString(config_.documentCatalogStorage)) +
+                    " stage=write_batch doc_id=" +
+                    (hasActiveFileId
+                        ? std::to_string(activeFileId)
+                        : std::string("n/a")) +
+                    " error=unknown");
+                {
+                    std::lock_guard<std::mutex> lock(queueMutex_);
+                    writerError_ = std::current_exception();
+                    queue_.clear();
+                    writerActive_ = false;
+                    requestCheckpoint_ = false;
+                    stop_ = true;
+                    flushDoneCv_.notify_all();
+                }
+                break;
             }
             {
                 std::lock_guard<std::mutex> lock(queueMutex_);
@@ -529,7 +648,31 @@ void SQLiteIndexSerializer::writerLoop()
         {
             try {
                 runCheckpointOnLiveDb();
-            } catch (...) {}
+            } catch (const std::exception& exception) {
+                LogFile::getIndex().write(
+                    "SQLITE_MIRROR_WRITER storage=" +
+                    std::string(toString(config_.documentCatalogStorage)) +
+                    " stage=checkpoint doc_id=n/a error=" + exception.what());
+                std::lock_guard<std::mutex> lock(queueMutex_);
+                writerError_ = std::current_exception();
+                writerActive_ = false;
+                requestCheckpoint_ = false;
+                stop_ = true;
+                flushDoneCv_.notify_all();
+                break;
+            } catch (...) {
+                LogFile::getIndex().write(
+                    "SQLITE_MIRROR_WRITER storage=" +
+                    std::string(toString(config_.documentCatalogStorage)) +
+                    " stage=checkpoint doc_id=n/a error=unknown");
+                std::lock_guard<std::mutex> lock(queueMutex_);
+                writerError_ = std::current_exception();
+                writerActive_ = false;
+                requestCheckpoint_ = false;
+                stop_ = true;
+                flushDoneCv_.notify_all();
+                break;
+            }
             {
                 std::lock_guard<std::mutex> lock(queueMutex_);
                 writerActive_ = false;
@@ -561,6 +704,7 @@ void SQLiteIndexSerializer::enqueueOp(LiveMirrorOp op)
         startWriter();
 
     std::lock_guard<std::mutex> lock(queueMutex_);
+    rethrowWriterErrorLocked();
     queue_.push_back(std::move(op));
     if (config_.maxPendingOps > 0 &&
         queue_.size() >= static_cast<size_t>(config_.maxPendingOps))
@@ -612,11 +756,13 @@ void SQLiteIndexSerializer::flushPending()
     {
         {
             std::unique_lock<std::mutex> lock(queueMutex_);
+            rethrowWriterErrorLocked();
             flushNow_ = true;
             queueCv_.notify_all();
             flushDoneCv_.wait(lock, [this] {
-                return queue_.empty() && !writerActive_;
+                return writerError_ || (queue_.empty() && !writerActive_);
             });
+            rethrowWriterErrorLocked();
             if (queue_.empty() && !writerActive_)
                 break;
         }
@@ -632,12 +778,21 @@ void SQLiteIndexSerializer::checkpoint()
 
     {
         std::unique_lock<std::mutex> lock(queueMutex_);
+        rethrowWriterErrorLocked();
         requestCheckpoint_ = true;
         queueCv_.notify_all();
         flushDoneCv_.wait(lock, [this] {
-            return !requestCheckpoint_ && !writerActive_;
+            return writerError_ ||
+                (!requestCheckpoint_ && !writerActive_);
         });
+        rethrowWriterErrorLocked();
     }
+}
+
+void SQLiteIndexSerializer::rethrowWriterErrorLocked() const
+{
+    if (writerError_)
+        std::rethrow_exception(writerError_);
 }
 
 void SQLiteIndexSerializer::save(const InvertedIndex& idx)
@@ -677,22 +832,22 @@ void SQLiteIndexSerializer::save(const InvertedIndex& idx)
         insWord = nullptr;
 
         insDoc = prepare(db_, "INSERT INTO docs(doc_id, path, mtime_ticks, size_int64, deleted) VALUES(?, ?, ?, ?, ?);");
-        idx.docPaths.forEachRow(
-            [&](uint32_t id,
-                const std::wstring& path,
-                int64_t mtimeTicks,
-                uint64_t fsize,
-                bool deleted) {
+        idx.documentCatalog_->visitRows(
+            [&](const DocumentRecord& document) {
             sqlite3_reset(insDoc);
             sqlite3_clear_bindings(insDoc);
 
-            const std::string p8 = encoding::wstring_to_utf8(path);
+            const std::string p8 = encoding::wstring_to_utf8(document.path);
 
-            sqlite3_bind_int(insDoc, 1, static_cast<int>(id));
+            sqlite3_bind_int(insDoc, 1, static_cast<int>(document.id));
             sqlite3_bind_text(insDoc, 2, p8.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(insDoc, 3, static_cast<sqlite3_int64>(mtimeTicks));
-            sqlite3_bind_int64(insDoc, 4, static_cast<sqlite3_int64>(fsize));
-            sqlite3_bind_int(insDoc, 5, deleted ? 1 : 0);
+            sqlite3_bind_int64(
+                insDoc, 3,
+                static_cast<sqlite3_int64>(document.metadata.mtimeTicks));
+            sqlite3_bind_int64(
+                insDoc, 4,
+                static_cast<sqlite3_int64>(document.metadata.size));
+            sqlite3_bind_int(insDoc, 5, document.deleted ? 1 : 0);
             const int rc = sqlite3_step(insDoc);
             if (rc != SQLITE_DONE)
                 throwSqlite(db_, "insert doc", rc);
@@ -861,8 +1016,11 @@ void SQLiteIndexSerializer::load(InvertedIndex& idx)
         }
         logStage("build_word_lookup", word2id.size());
 
+        const bool loadDocumentPaths =
+            idx.documentCatalog_->pathsLoadedInMemory();
         std::vector<DocPaths::RawRow> docs;
-        {
+        size_t documentRows = 0;
+        if (loadDocumentPaths) {
             sqlite3_stmt* st = prepare(
                 db_,
                 "SELECT doc_id, path, mtime_ticks, size_int64, deleted "
@@ -902,8 +1060,28 @@ void SQLiteIndexSerializer::load(InvertedIndex& idx)
                 docs.push_back(std::move(r));
             }
             finalize(st);
+            documentRows = docs.size();
+        } else {
+            sqlite3_stmt* st = prepare(db_, "SELECT COUNT(*) FROM docs;");
+            const int rc = sqlite3_step(st);
+            if (rc != SQLITE_ROW) {
+                finalize(st);
+                throwSqlite(db_, "count docs", rc);
+            }
+            const sqlite3_int64 count = sqlite3_column_int64(st, 0);
+            finalize(st);
+            if (count < 0 || static_cast<uint64_t>(count) >
+                std::numeric_limits<size_t>::max())
+            {
+                throw std::runtime_error("SQLite load: invalid docs count");
+            }
+            documentRows = static_cast<size_t>(count);
         }
-        logStage("read_docs", docs.size());
+        LogFile::getIndex().write(
+            "SQLITE_LOAD_DOCUMENT_CATALOG paths_loaded_in_ram=" +
+            std::string(loadDocumentPaths ? "true" : "false") +
+            " rows=" + std::to_string(documentRows));
+        logStage("read_docs", documentRows);
 
         std::vector<size_t> postingCounts;
         size_t countedWords = 0;
@@ -978,7 +1156,7 @@ void SQLiteIndexSerializer::load(InvertedIndex& idx)
         logStage("count_and_reserve_postings", countedWords);
 
         decltype(idx.wordRefs) newWordRefs;
-        newWordRefs.reserve(docs.size());
+        newWordRefs.reserve(documentRows);
 
         const size_t requestedThreads =
             static_cast<size_t>(config_.loadThreads);
@@ -1181,7 +1359,8 @@ void SQLiteIndexSerializer::load(InvertedIndex& idx)
         {
             std::lock_guard<std::mutex> lock(idx.mapMutex);
             idx.wordIds.rebuild(std::move(word2id), std::move(id2word));
-            idx.docPaths.rebuildFromRows(std::move(docs));
+            if (loadDocumentPaths)
+                idx.documentCatalog_->loadRows(std::move(docs));
             idx.dictionary.clear();
             idx.dictionary.shrink_to_fit();
             idx.dictionaryChunks = std::move(newChunks);

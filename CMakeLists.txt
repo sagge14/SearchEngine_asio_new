@@ -960,6 +960,7 @@ if(BUILD_TESTS)
             src/Index/BoostIndexSerializer.cpp
             src/Index/SQLiteIndexSerializer.cpp
             src/Index/Batch/BatchIndexBuilder.cpp
+            src/Index/DocumentCatalog.cpp
             src/Index/DocPaths.cpp
             src/Index/OEMFastTokenizer.cpp
             src/Index/PostingList.cpp
@@ -1002,4 +1003,16 @@ if(BUILD_TESTS)
             NAME InvertedIndexSQLiteIntegration_test
             COMMAND InvertedIndexSQLiteIntegration_test
     )
+    if(TARGET SearchEngineConfig)
+        add_test(
+                NAME SearchEngineConfigDocumentCatalog_test
+                COMMAND
+                "${CMAKE_COMMAND}"
+                "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+                "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+                "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-document-catalog-test"
+                -P
+                "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigDocumentCatalog.cmake"
+        )
+    endif()
 endif()

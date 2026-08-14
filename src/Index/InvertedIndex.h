@@ -35,7 +35,7 @@
 #include "robin_hood.h"
 #include "MyUtils/OEMCase.h"
 
-#include "DocPaths.h"
+#include "DocumentCatalog.h"
 #include "IIndexSerializer.h"
 #include "Batch/FullIndexStrategy.h"
 #include "DeferredPathQueue.h"
@@ -101,6 +101,8 @@ namespace inverted_index {
         int sqliteLoadThreads = 4;
         bool sqlitePrecountPostings = false;
         FullIndexStrategy fullIndexStrategy = FullIndexStrategy::Batch;
+        DocumentCatalogStorage documentCatalogStorage =
+            DocumentCatalogStorage::Memory;
         std::size_t batchReaderThreads = 1;
         std::size_t batchIndexerThreads = 0;
         std::size_t batchQueueMemoryBytes = 256u * 1024u * 1024u;
@@ -110,6 +112,9 @@ namespace inverted_index {
 
         struct PostingBatch {
             FileId fileId;
+            std::wstring path;
+            DocumentMetadata metadata;
+            bool requireCatalogCommitBeforePublish{};
             std::vector<std::pair<std::string, uint32_t>> list;
             std::shared_ptr<std::promise<void>> promise;
         };
@@ -181,6 +186,7 @@ namespace inverted_index {
 
         atomic<bool> work{};
         DocPaths docPaths;
+        std::unique_ptr<DocumentCatalog> documentCatalog_;
 
         mutable mutex mapMutex;
         mutable mutex resizeDicMutex;
@@ -216,6 +222,11 @@ namespace inverted_index {
         mutable std::mutex asyncMutex_;
         mutable std::condition_variable asyncCondition_;
         std::size_t activeAsyncOperations_{0};
+        mutable std::mutex storageFailureMutex_;
+        std::exception_ptr storageFailure_;
+
+        void recordStorageFailure(std::exception_ptr error) noexcept;
+        void rethrowStorageFailure() const;
 
         void beginAsyncOperation();
         void finishAsyncOperation() noexcept;
@@ -256,7 +267,9 @@ namespace inverted_index {
             const std::vector<std::wstring>& vecPaths);
         std::future<void> updateDocumentBaseBatch(
             const std::vector<std::wstring>& vecPaths);
-        void installBatchSnapshot(batch::BatchIndexSnapshot&& snapshot);
+        void installBatchSnapshot(
+            batch::BatchIndexSnapshot&& snapshot,
+            const std::vector<std::wstring>& paths);
         void saveFullSnapshot();
         void prepareLegacyMutableState();
         bool deferPointPath(const std::wstring& path, const char* source);
@@ -273,7 +286,12 @@ namespace inverted_index {
         friend class search_server::RelativeIndex;
 
 
-        void fileIndexing(FileId fileId, std::shared_ptr<std::promise<void>> promise);
+        void fileIndexing(
+            FileId fileId,
+            std::wstring path,
+            DocumentMetadata metadata,
+            bool requireCatalogCommitBeforePublish,
+            std::shared_ptr<std::promise<void>> promise);
         void safeEraseFile(FileId hash);
 
 
@@ -335,10 +353,15 @@ namespace inverted_index {
 
         /// Файл с данным id помечен удалённым (исчез с диска), но его след
         /// сохранён в индексе и продолжает находиться поиском.
-        [[nodiscard]] bool isFileDeleted(uint32_t fileId) const { return docPaths.isDeleted(fileId); }
+        [[nodiscard]] bool isFileDeleted(uint32_t fileId) const;
 
         /// Путь файла по id (валиден и для удалённых файлов — вечный след).
-        [[nodiscard]] const std::wstring& filePathById(uint32_t fileId) const { return docPaths.pathById(fileId); }
+        [[nodiscard]] std::wstring filePathById(uint32_t fileId) const;
+        [[nodiscard]] std::vector<std::optional<DocumentRecord>> documentsByIds(
+            const std::vector<uint32_t>& fileIds) const;
+        [[nodiscard]] std::size_t documentCount() const;
+        [[nodiscard]] bool documentPathsLoadedInMemory() const;
+        [[nodiscard]] std::size_t documentCatalogCacheCapacity() const;
         explicit InvertedIndex(boost::asio::thread_pool& cpu_pool,
                                boost::asio::io_context& io_commit,
                                int maxParallelReaders = 0,

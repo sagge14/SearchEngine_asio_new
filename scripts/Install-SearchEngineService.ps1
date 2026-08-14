@@ -171,6 +171,14 @@ $port = if ($config.port) { [int]$config.port } else { [int]$config.asio_port }
 if ($port -lt 1 -or $port -gt 65535) {
     throw "Settings.json contains an invalid ASIO port: $port"
 }
+$documentCatalogStorage = if ($config.document_catalog_storage) {
+    [string]$config.document_catalog_storage
+} else {
+    'memory'
+}
+if ($documentCatalogStorage -notin @('memory', 'sqlite')) {
+    throw "Settings.json contains an invalid document_catalog_storage: $documentCatalogStorage"
+}
 if (-not (Test-TcpPortAvailable $port)) {
     throw "ASIO port $port is already in use. Every service instance needs a unique port."
 }

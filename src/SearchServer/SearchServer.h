@@ -64,9 +64,8 @@ namespace search_server {
             Оператор "<" перегружен для сортировки по убыванию.*/
 
         inline static size_t max{0};
+        uint32_t fileId{};
         size_t sum{0};
-        string filePath;
-        bool deleted{false};   // файл удалён с диска (след сохранён)
 
         [[nodiscard]] float getRelativeIndex() const { return (float) sum / (float) max; }
 
@@ -139,6 +138,9 @@ namespace search_server {
         /// Алгоритм первичной полной сборки: legacy или batch.
         inverted_index::FullIndexStrategy fullIndexStrategy =
             inverted_index::FullIndexStrategy::Batch;
+        /// Хранилище путей и метаданных документов: memory или sqlite.
+        inverted_index::DocumentCatalogStorage documentCatalogStorage =
+            inverted_index::DocumentCatalogStorage::Memory;
         /// Независимые потоки чтения batch-конвейера (для HDD обычно 1).
         int batchReaderThreads = 1;
         /// Потоки локальной индексации batch-конвейера (0 = все logical CPU).

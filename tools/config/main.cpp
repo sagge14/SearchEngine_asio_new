@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Index/Batch/FullIndexStrategy.h"
+#include "Index/DocumentCatalogStorage.h"
 
 #include <algorithm>
 #include <cctype>
@@ -736,6 +737,16 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
 
+    if (config.contains("document_catalog_storage")) {
+        if (!config["document_catalog_storage"].is_string() ||
+            !inverted_index::parseDocumentCatalogStorage(
+                config["document_catalog_storage"].get<std::string>()))
+        {
+            errors.emplace_back(
+                "config.document_catalog_storage must be memory or sqlite");
+        }
+    }
+
     if (config.contains("batch_reader_threads")) {
         const auto readers = jsonInteger(config["batch_reader_threads"]);
         if (!readers || *readers < 1 || *readers > 64) {
@@ -850,6 +861,9 @@ int inspectCommand(const std::vector<std::wstring>& args)
               << "full_index_strategy="
               << config.value(
                     "full_index_strategy", std::string("batch")) << '\n'
+              << "document_catalog_storage="
+              << config.value(
+                    "document_catalog_storage", std::string("memory")) << '\n'
               << "batch_reader_threads="
               << config.value("batch_reader_threads", 1) << '\n'
               << "batch_indexer_threads="
@@ -926,6 +940,15 @@ int configureCommand(const std::vector<std::wstring>& args)
         result["config"] = json::object();
     }
     json& config = result["config"];
+    std::string documentCatalogStorage = config.value(
+        "document_catalog_storage", std::string("memory"));
+    if (const auto value = option(args, L"--document-catalog-storage")) {
+        documentCatalogStorage = utf8(*value);
+    }
+    if (!inverted_index::parseDocumentCatalogStorage(documentCatalogStorage)) {
+        throw std::runtime_error(
+            "document catalog storage must be memory or sqlite");
+    }
     config.erase("port");
     config["asio_port"] = port;
     config["year"] = std::to_string(year);
@@ -934,6 +957,7 @@ int configureCommand(const std::vector<std::wstring>& args)
     config["sqlite_load_threads"] = sqliteThreads;
     config["file_indexing_timeout_sec"] = timeout;
     config["enable_prm_short_content_autodetect"] = prmAutodetect;
+    config["document_catalog_storage"] = documentCatalogStorage;
 
     const auto errors = validateJson(result, false);
     if (!errors.empty()) {
@@ -951,6 +975,8 @@ int configureCommand(const std::vector<std::wstring>& args)
                   << "file_timeout_sec=" << timeout << '\n'
                   << "parallel_readers=" << readers << '\n'
                   << "sqlite_load_threads=" << sqliteThreads << '\n'
+                  << "document_catalog_storage="
+                  << documentCatalogStorage << '\n'
                   << "prm_short_content_autodetect="
                   << (prmAutodetect ? 1 : 0) << '\n';
     }
@@ -981,6 +1007,35 @@ bool choosePrmAutodetect(UiLanguage language)
     }
 }
 
+std::string chooseDocumentCatalogStorage(
+    UiLanguage language,
+    std::string current)
+{
+    if (!inverted_index::parseDocumentCatalogStorage(current))
+        current = "memory";
+    const std::wstring defaultChoice = current == "sqlite" ? L"2" : L"1";
+    for (;;) {
+        writeInteractive(language == UiLanguage::Russian
+            ? L"\nГде хранить каталог документов (пути и метаданные)?\n"
+              L"  1 - В оперативной памяти — быстрее (по умолчанию)\n"
+              L"  2 - В SQLite — меньше расход RAM, возможна небольшая задержка\n"
+              L"Ваш выбор [" + defaultChoice + L"]: "
+            : L"\nWhere should the document catalog (paths and metadata) be stored?\n"
+              L"  1 - In memory — faster (default)\n"
+              L"  2 - In SQLite — lower RAM use, with possible small latency\n"
+              L"Select [" + defaultChoice + L"]: ");
+        const std::wstring answer = trim(readInteractiveLine());
+        if (answer.empty())
+            return current;
+        if (answer == L"1")
+            return "memory";
+        if (answer == L"2")
+            return "sqlite";
+        writeInteractive(language == UiLanguage::Russian
+            ? L"Введите 1 или 2.\n" : L"Enter 1 or 2.\n");
+    }
+}
+
 int configureInteractiveCommand(const std::vector<std::wstring>& args)
 {
     const fs::path templatePath = requiredOption(args, L"--template");
@@ -991,6 +1046,7 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     }
 
     int defaultPort = 15001;
+    std::string defaultDocumentCatalogStorage = "memory";
     if (defaults.contains("config") && defaults["config"].is_object()) {
         const json& config = defaults["config"];
         const char* portName = config.contains("asio_port") ? "asio_port" : "port";
@@ -1000,6 +1056,14 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
             {
                 defaultPort = static_cast<int>(*value);
             }
+        }
+        if (config.contains("document_catalog_storage") &&
+            config["document_catalog_storage"].is_string())
+        {
+            const std::string candidate =
+                config["document_catalog_storage"].get<std::string>();
+            if (inverted_index::parseDocumentCatalogStorage(candidate))
+                defaultDocumentCatalogStorage = candidate;
         }
     }
 
@@ -1023,6 +1087,9 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         kRecommendedFileTimeout, kMinFileTimeout, kMaxFileTimeout
     );
     const bool prmAutodetect = choosePrmAutodetect(language);
+    const std::string documentCatalogStorage =
+        chooseDocumentCatalogStorage(
+            language, defaultDocumentCatalogStorage);
 
     std::vector<std::wstring> configureArgs{
         L"--template", templatePath.wstring(),
@@ -1032,6 +1099,8 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         L"--threads", std::to_wstring(threads),
         L"--file-timeout", std::to_wstring(timeout),
         L"--prm-autodetect", prmAutodetect ? L"1" : L"0",
+        L"--document-catalog-storage",
+        documentCatalogStorage == "sqlite" ? L"sqlite" : L"memory",
         L"--quiet"
     };
     if (const auto importPath = option(args, L"--import-settings")) {
@@ -1057,9 +1126,15 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         std::to_wstring(timeout) +
         (language == UiLanguage::Russian ? L" сек.\n" : L" sec.\n") +
         (language == UiLanguage::Russian ? L"  AutoPad PRM: " : L"  AutoPad PRM: ") +
-        (prmAutodetect
+         (prmAutodetect
             ? (language == UiLanguage::Russian ? L"включено\n" : L"enabled\n")
-            : (language == UiLanguage::Russian ? L"отключено\n" : L"disabled\n"))
+            : (language == UiLanguage::Russian ? L"отключено\n" : L"disabled\n")) +
+        (language == UiLanguage::Russian
+            ? L"  Каталог документов: "
+            : L"  Document catalog: ") +
+        (documentCatalogStorage == "sqlite" ? L"SQLite\n" :
+            (language == UiLanguage::Russian
+                ? L"оперативная память\n" : L"memory\n"))
     );
     return 0;
 }
@@ -1390,6 +1465,7 @@ void printUsage()
         << "            --threads N --file-timeout N --prm-autodetect 0|1\n"
         << "            [--import-settings FILE] [--parallel-readers N]\n"
         << "            [--sqlite-load-threads N]\n"
+        << "            [--document-catalog-storage memory|sqlite]\n"
         << "  configure-interactive --template FILE --output FILE\n"
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
         << "  choose-instance --default ID --output FILE\n"

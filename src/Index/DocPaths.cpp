@@ -87,6 +87,9 @@ void DocPaths::rebuildFromRows(std::vector<RawRow>&& rows)
     path2info.clear();
     id2path.clear();
 
+    if (rows.empty())
+        return;
+
     uint32_t maxId = 0;
     for (const auto& r : rows)
         if (r.id > maxId) maxId = r.id;

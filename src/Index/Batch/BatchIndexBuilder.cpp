@@ -169,9 +169,12 @@ BatchIndexSnapshot BatchIndexBuilder::build(
     const std::vector<std::wstring>& paths) const
 {
     BatchIndexSnapshot snapshot;
-    const UpdatePack update = snapshot.documents.getUpdate(paths);
-
-    const std::vector<uint32_t>& jobs = update.added;
+    if (paths.size() >
+        static_cast<std::size_t>(std::numeric_limits<uint32_t>::max()))
+    {
+        throw std::runtime_error("batch index has too many documents");
+    }
+    snapshot.documentMetadata.resize(paths.size());
 
     const std::size_t laneCapacity = std::max<std::size_t>(
         1,
@@ -314,12 +317,24 @@ BatchIndexSnapshot BatchIndexBuilder::build(
                     while (true) {
                         const std::size_t jobIndex =
                             nextJob.fetch_add(1, std::memory_order_relaxed);
-                        if (jobIndex >= jobs.size())
+                        if (jobIndex >= paths.size())
                             break;
 
-                        const uint32_t fileId = jobs[jobIndex];
-                        const std::wstring& path =
-                            snapshot.documents.pathById(fileId);
+                        const uint32_t fileId =
+                            static_cast<uint32_t>(jobIndex);
+                        const std::wstring& path = paths[jobIndex];
+                        try {
+                            const auto mtime =
+                                std::filesystem::last_write_time(path);
+                            snapshot.documentMetadata[fileId] = {
+                                static_cast<int64_t>(
+                                    mtime.time_since_epoch().count()),
+                                std::filesystem::file_size(path)};
+                        }
+                        catch (const std::exception& exception) {
+                            addFileError(fileId, path, exception.what());
+                            continue;
+                        }
                         std::ifstream file(
                             std::filesystem::path(path),
                             std::ios::binary);
@@ -483,7 +498,7 @@ BatchIndexSnapshot BatchIndexBuilder::build(
     snapshot.idToWord.reserve(uniqueTerms);
     snapshot.postings.reserve(uniqueTerms);
     snapshot.wordToId.reserve(uniqueTerms);
-    snapshot.wordRefs.reserve(snapshot.documents.size());
+    snapshot.wordRefs.reserve(paths.size());
 
     std::size_t runBegin = 0;
     while (runBegin < termRuns.size()) {

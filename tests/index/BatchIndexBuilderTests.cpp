@@ -3,6 +3,7 @@
 #include "Index/Batch/BatchIndexBuilder.h"
 #include "Index/Batch/BoundedByteQueue.h"
 #include "Index/Batch/FullIndexStrategy.h"
+#include "Index/DocumentCatalogStorage.h"
 #include "MyUtils/OEMCase.h"
 
 #include <algorithm>
@@ -128,6 +129,25 @@ std::size_t postingRows(
 
 } // namespace
 
+TEST(DocumentCatalogStorage, ParsesSupportedValuesAndRejectsOthers)
+{
+    EXPECT_EQ(
+        inverted_index::parseDocumentCatalogStorage("memory"),
+        inverted_index::DocumentCatalogStorage::Memory);
+    EXPECT_EQ(
+        inverted_index::parseDocumentCatalogStorage("sqlite"),
+        inverted_index::DocumentCatalogStorage::SQLite);
+    EXPECT_FALSE(inverted_index::parseDocumentCatalogStorage("invalid"));
+    EXPECT_EQ(
+        inverted_index::toString(
+            inverted_index::DocumentCatalogStorage::Memory),
+        "memory");
+    EXPECT_EQ(
+        inverted_index::toString(
+            inverted_index::DocumentCatalogStorage::SQLite),
+        "sqlite");
+}
+
 TEST(FullIndexStrategy, ParsesOnlySupportedStableNames)
 {
     EXPECT_EQ(
@@ -238,18 +258,18 @@ TEST(BatchIndexBuilder, MatchesReferenceTokensAndIndexMetrics)
             .build(paths);
 
     ASSERT_TRUE(snapshot.fileErrors.empty());
-    EXPECT_EQ(snapshot.documents.size(), paths.size());
+    EXPECT_EQ(snapshot.documentMetadata.size(), paths.size());
     EXPECT_EQ(snapshot.indexedFiles, paths.size());
     EXPECT_EQ(snapshot.idToWord.size(), 6u);
     EXPECT_EQ(postingRows(snapshot), 6u);
 
     const LogicalIndex expected{
-        {"123", {{0u, 1u}}},
-        {"ALPHA", {{0u, 2u}}},
-        {"BETA", {{0u, 1u}}},
-        {"BOUNDARY", {{2u, 1u}}},
-        {"WORD", {{2u, 1u}}},
-        {oem866Word, {{1u, 2u}}}};
+        {"123", {{0u, static_cast<uint16_t>(1u)}}},
+        {"ALPHA", {{0u, static_cast<uint16_t>(2u)}}},
+        {"BETA", {{0u, static_cast<uint16_t>(1u)}}},
+        {"BOUNDARY", {{2u, static_cast<uint16_t>(1u)}}},
+        {"WORD", {{2u, static_cast<uint16_t>(1u)}}},
+        {oem866Word, {{1u, static_cast<uint16_t>(2u)}}}};
     EXPECT_EQ(logicalIndex(snapshot), expected);
 }
 
@@ -390,6 +410,22 @@ TEST(DocPaths, KeepsPathPointersValidAfterCopyMoveAndRebuildFromRows)
             ++visited;
         });
     EXPECT_EQ(visited, 2u);
+}
+
+TEST(DocPaths, EmptyReloadKeepsFirstDocumentIdAtZero)
+{
+    TemporaryCorpus corpus;
+    const fs::path document = corpus.write("first.txt", "first");
+    DocPaths paths;
+    std::vector<DocPaths::RawRow> emptyRows;
+    paths.rebuildFromRows(std::move(emptyRows));
+
+    const auto [id, changed] = paths.upsert(
+        document.wstring(),
+        fs::last_write_time(document),
+        fs::file_size(document));
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(id, 0u);
 }
 
 TEST(BoundedByteQueue, RejectsAnItemLargerThanItsCapacity)

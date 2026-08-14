@@ -192,6 +192,11 @@ if ($configToolMachine -ne $expectedMachine) {
         -f $expectedMachine, $configToolMachine)
 }
 
+& $configToolPath validate --settings $SettingsPath
+if ($LASTEXITCODE -ne 0) {
+    throw "SearchEngineConfig rejected portable Settings.json: $SettingsPath"
+}
+
 $cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
     throw "CMake cache was not found for the selected build: $cachePath"

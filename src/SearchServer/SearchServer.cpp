@@ -23,6 +23,7 @@ inverted_index::IndexStorageConfig makeIndexStorageConfig(
     config.sqliteLoadThreads = settings.sqliteLoadThreads;
     config.sqlitePrecountPostings = settings.sqlitePrecountPostings;
     config.fullIndexStrategy = settings.fullIndexStrategy;
+    config.documentCatalogStorage = settings.documentCatalogStorage;
     config.batchReaderThreads =
         static_cast<std::size_t>(settings.batchReaderThreads);
     config.batchIndexerThreads =
@@ -163,6 +164,17 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
         return {};
 
     work = true;
+    struct SearchWorkReset final {
+        std::atomic<bool>& value;
+        const std::atomic<bool>& pendingUpdate;
+        std::condition_variable_any& condition;
+        ~SearchWorkReset()
+        {
+            value.store(false, std::memory_order_release);
+            if (pendingUpdate.load(std::memory_order_acquire))
+                condition.notify_one();
+        }
+    } searchWorkReset{work, must_start_update, cv_search_server};
 
     if(index->work)
         std::cout << "Update base is running, pls wait!!!" << endl;
@@ -185,33 +197,39 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
 
     Results.sort();
 
-    int i = 0;
-    for(const auto& r:Results)
-    {
-        if(!settings.dir.empty())
-        //    out.emplace_back(to_string(r.fileInd),r.getRelativeIndex());
-       // else
-            out.push_back(AnswerItem{ r.filePath, r.getRelativeIndex(), r.deleted });
+    std::vector<const RelativeIndex*> selected;
+    std::vector<uint32_t> selectedIds;
+    const std::size_t responseLimit = settings.maxResponse > 0
+        ? static_cast<std::size_t>(settings.maxResponse)
+        : 0;
+    selected.reserve(std::min(responseLimit, Results.size()));
+    selectedIds.reserve(std::min(responseLimit, Results.size()));
+    for (const auto& result : Results) {
+        if (selected.size() >= responseLimit)
+            break;
+        selected.push_back(&result);
+        selectedIds.push_back(result.fileId);
+    }
 
-        i++;
-        if(i == settings.maxResponse)
-        {
-
-            work = false;
-            std::cout << "Request finish!!!" << endl;
-            return out;
+    // Пути запрашиваются только для уже отсортированного top-N. SQLite
+    // backend сам делит IN-запросы по SQLITE_LIMIT_VARIABLE_NUMBER.
+    const auto documents = index->documentsByIds(selectedIds);
+    for (std::size_t item = 0; item < selected.size(); ++item) {
+        if (!documents[item]) {
+            throw std::runtime_error(
+                "document catalog has no row for search result doc_id=" +
+                std::to_string(selectedIds[item]));
         }
-
+        if (!settings.dir.empty()) {
+            out.push_back(AnswerItem{
+                encoding::wstring_to_utf8(documents[item]->path),
+                selected[item]->getRelativeIndex(),
+                documents[item]->deleted});
+        }
     }
 
  //   updateM.unlock();
     std::cout << "Request finish!!!" << endl;
-    work = false;
-
-    if(must_start_update)
-        cv_search_server.notify_one();
-
-
     return out;
 }
 
@@ -353,7 +371,17 @@ search_server::SearchServer::~SearchServer() {
     /**
     Деструктор класса*/
 
-    stop();
+    try {
+        stop();
+    }
+    catch (const std::exception& exception) {
+        addToLog(
+            std::string("SearchServer destructor stop failed: ") +
+            exception.what());
+    }
+    catch (...) {
+        addToLog("SearchServer destructor stop failed: unknown exception");
+    }
     delete index;
     index = nullptr;
 
@@ -427,9 +455,7 @@ search_server::RelativeIndex::RelativeIndex(size_t _fileInd, const set<string>& 
      вычисления относительной релевантности.
      */
 
-    const std::wstring& wpath = _index->docPaths.pathById(_fileInd);
-    filePath = encoding::wstring_to_utf8(wpath);
-    deleted  = _index->isFileDeleted(_fileInd);
+    fileId = static_cast<uint32_t>(_fileInd);
 
     auto checkWordAndFileInd = [_index, _fileInd](const std::string& w)
     {
@@ -494,6 +520,8 @@ void search_server::Settings::show() const
     std::cout << "Save dictionary to file:\t" << std::boolalpha << saveDictionaryToFile << std::endl << std::endl;
     std::cout << "Full index strategy:\t\t"
               << inverted_index::toString(fullIndexStrategy) << std::endl;
+    std::cout << "Document catalog storage:\t"
+              << inverted_index::toString(documentCatalogStorage) << std::endl;
     std::cout << "Batch reader threads:\t\t" << batchReaderThreads << std::endl;
     std::cout << "Batch indexer threads:\t\t" << batchIndexerThreads << std::endl;
     std::cout << "Batch queue memory:\t\t" << batchQueueMemoryMb << " MiB" << std::endl;

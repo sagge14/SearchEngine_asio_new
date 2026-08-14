@@ -187,7 +187,34 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
             chunkMap[chunkIndex].push_back({ batch.fileId, wid, count });
         }
 
-        // 3. Один commit-task в io_commit
+        // 3. SQLite получает документ и postings одной транзакцией. Для
+        // точечного обновления ждём durable catalog row до публикации RAM.
+        ensureSerializer();
+        if (serializer_ && serializer_->supportsLiveUpdates())
+        {
+            std::vector<std::pair<uint32_t, uint16_t>> widCounts;
+            widCounts.reserve(widMap.size());
+            for (auto& [wid, count] : widMap)
+                widCounts.emplace_back(
+                    wid,
+                    static_cast<uint16_t>(count > 0xFFFFu ? 0xFFFFu : count));
+
+            serializer_->writeFile(
+                batch.fileId,
+                batch.path,
+                batch.metadata.mtimeTicks,
+                batch.metadata.size,
+                widCounts,
+                newWords,
+                /*wasUpdate*/ true);
+            if (batch.requireCatalogCommitBeforePublish) {
+                serializer_->flushPending();
+                documentCatalog_->notePersisted(batch.path, batch.fileId);
+            }
+        }
+
+        // 4. Публикуем RAM postings только после успешной постановки записи
+        // каталога. В point-update SQLite также уже подтверждён flush.
         postTracked(cpu_pool_, [this,
                 chunkMap = std::move(chunkMap),
                 promise = batch.promise]()
@@ -209,37 +236,24 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
             }
         });
 
-        // 4. Live-зеркало: ставим файл в очередь SQLite (не блокируем strand_).
-        ensureSerializer();
-        if (serializer_ && serializer_->supportsLiveUpdates())
-        {
-            std::vector<std::pair<uint32_t, uint16_t>> widCounts;
-            widCounts.reserve(widMap.size());
-            for (auto& [wid, count] : widMap)
-                widCounts.emplace_back(
-                    wid,
-                    static_cast<uint16_t>(count > 0xFFFFu ? 0xFFFFu : count));
-
-            int64_t mtimeTicks = 0;
-            uint64_t fsize = 0;
-            docPaths.getInfo(batch.fileId, mtimeTicks, fsize);
-            std::wstring path = docPaths.pathById(batch.fileId);
-
-            try {
-                serializer_->writeFile(batch.fileId, path, mtimeTicks, fsize,
-                                       widCounts, newWords, /*wasUpdate*/ true);
-            }
-            catch (const std::exception& e) {
-                addToLog(std::string("processBatch: live enqueue EXCEPTION: ") + e.what());
-            }
-            catch (...) {
-                addToLog("processBatch: live enqueue unknown exception");
-            }
+    }
+    catch (const std::exception& exception)
+    {
+        if (batch.requireCatalogCommitBeforePublish) {
+            recordStorageFailure(std::current_exception());
+            addToLog(
+                "DOCUMENT_CATALOG_FATAL storage=" +
+                std::string(toString(storage_.documentCatalogStorage)) +
+                " stage=point_update doc_id=" +
+                std::to_string(batch.fileId) + " error=" + exception.what());
         }
-
+        if (batch.promise)
+            batch.promise->set_exception(std::current_exception());
     }
     catch (...)
     {
+        if (batch.requireCatalogCommitBeforePublish)
+            recordStorageFailure(std::current_exception());
         if (batch.promise)
             batch.promise->set_exception(std::current_exception());
     }
@@ -249,6 +263,7 @@ void inverted_index::InvertedIndex::processBatch(const PostingBatch& batch)
 // Внутренний безопасный помощник: копирует posting-лист слова
 std::optional<PostingList> inverted_index::InvertedIndex::getPostingCopyByWord(const std::string& w) const
 {
+    rethrowStorageFailure();
     std::lock_guard<std::mutex> stateLock(mapMutex);
 
     uint32_t wid;
@@ -379,6 +394,7 @@ void inverted_index::InvertedIndex::safeEraseFileInternal(FileId fileId)
 std::future<void> inverted_index::InvertedIndex::updateDocumentBase(
         const std::vector<std::wstring>& vecPaths)
 {
+    rethrowStorageFailure();
     // The facade owns the complete maintenance boundary. Point operations
     // accepted before this lock are drained before strategy selection; point
     // operations arriving while it is held are coalesced for replay.
@@ -446,15 +462,18 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
     WorkGuard workGuard(work);
 
     // 1. diff
-    UpdatePack pack = docPaths.getUpdate(vecPaths);
+    CatalogDiff pack = documentCatalog_->scan(vecPaths);
 
     // ВАЖНО (вечный след): для исчезнувших файлов (pack.removed) постинги
     // НЕ стираем — лишь помечаем deleted. Стирание из памяти нужно только
     // для изменённых файлов (pack.updated), чтобы заменить старое содержимое.
-    std::vector<FileId> toErase = pack.updated;
+    std::vector<FileId> toErase;
+    toErase.reserve(pack.updated.size());
+    for (const CatalogScanItem& item : pack.updated)
+        toErase.push_back(item.id);
     std::vector<FileId> toMarkDeleted = pack.removed;
 
-    std::vector<FileId> toIndex = pack.added;
+    std::vector<CatalogScanItem> toIndex = pack.added;
     toIndex.insert(toIndex.end(), pack.updated.begin(), pack.updated.end());
 
     std::ostringstream diffLog;
@@ -500,13 +519,8 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
                     {
                         for (FileId fileId : toMarkDeleted)
                         {
-                            try { serializer_->markFileDeleted(fileId); }
-                            catch (const std::exception& e) {
-                                addToLog(std::string("updateDocumentBase: markFileDeleted EXCEPTION: ") + e.what());
-                            }
-                            catch (...) {
-                                addToLog("updateDocumentBase: markFileDeleted unknown exception");
-                            }
+                            documentCatalog_->markRemoved(fileId);
+                            serializer_->markFileDeleted(fileId);
                         }
                     }
 
@@ -532,21 +546,35 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
         const size_t totalFiles = toIndex.size();
         const size_t progressInterval = std::max<size_t>(100, totalFiles / 20); // логировать каждые 5% или 100 файлов
 
-        for (FileId fileId : toIndex)
+        for (const CatalogScanItem& item : toIndex)
         {
+            const FileId fileId = item.id;
+            const std::wstring& path = vecPaths.at(item.pathIndex);
             auto p = std::make_shared<std::promise<void>>();
 
             fileFutures.push_back({
                                           fileId,
-                                          docPaths.pathById(fileId),
+                                          path,
                                           p->get_future()
                                   });
 
             postTracked(cpu_pool_,
-                              [this, fileId, p, &processedFiles, totalFiles, progressInterval]()
+                              [this,
+                               fileId,
+                               path,
+                               metadata = item.metadata,
+                               p,
+                               &processedFiles,
+                               totalFiles,
+                               progressInterval]()
                               {
                                   try {
-                                      fileIndexing(fileId, p);
+                                      fileIndexing(
+                                          fileId,
+                                          path,
+                                          metadata,
+                                          false,
+                                          p);
                                       
                                       // Lock-free обновление счетчика
                                       size_t processed = processedFiles.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -640,16 +668,8 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
         ensureSerializer();
         if (serializer_ && serializer_->supportsLiveUpdates())
         {
-            try {
-                serializer_->flushPending();
-                addToLog("updateDocumentBase: sqlite mirror flushPending done");
-            }
-            catch (const std::exception& e) {
-                addToLog(std::string("updateDocumentBase: flushPending EXCEPTION: ") + e.what());
-            }
-            catch (...) {
-                addToLog("updateDocumentBase: flushPending unknown exception");
-            }
+            serializer_->flushPending();
+            addToLog("updateDocumentBase: sqlite mirror flushPending done");
         }
 
         const auto t1 = std::chrono::steady_clock::now();
@@ -666,6 +686,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
     }
     catch (...)
     {
+        recordStorageFailure(std::current_exception());
         try { finalPromise->set_exception(std::current_exception()); } catch (...) {}
         const auto t1 = std::chrono::steady_clock::now();
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
@@ -680,7 +701,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseLegacy(
 bool inverted_index::InvertedIndex::canUseBatchFullBuild() const
 {
     std::lock_guard<std::mutex> lock(mapMutex);
-    return docPaths.size() == 0 && wordIds.size() == 0 &&
+    return documentCatalog_->empty() && wordIds.size() == 0 &&
            dictionaryChunks.empty() && dictionary.empty();
 }
 
@@ -735,7 +756,7 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseBatch(
                 " file(s); snapshot was not published");
         }
 
-        installBatchSnapshot(std::move(snapshot));
+        installBatchSnapshot(std::move(snapshot), vecPaths);
 
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startedAt).count();
@@ -764,8 +785,11 @@ std::future<void> inverted_index::InvertedIndex::updateDocumentBaseBatch(
 }
 
 void inverted_index::InvertedIndex::installBatchSnapshot(
-        batch::BatchIndexSnapshot&& snapshot)
+        batch::BatchIndexSnapshot&& snapshot,
+        const std::vector<std::wstring>& paths)
 {
+    documentCatalog_->stageBatchSnapshot(paths, snapshot.documentMetadata);
+
     WordIdManager newWordIds;
     newWordIds.rebuild(
         std::move(snapshot.wordToId),
@@ -774,7 +798,6 @@ void inverted_index::InvertedIndex::installBatchSnapshot(
     std::vector<PostingList> newDictionary = std::move(snapshot.postings);
 
     WordIdManager oldWordIds;
-    DocPaths oldDocPaths;
     std::vector<std::unique_ptr<Chunk>> oldChunks;
     decltype(wordRefs) oldWordRefs;
     std::vector<PostingList> oldDictionary;
@@ -782,28 +805,34 @@ void inverted_index::InvertedIndex::installBatchSnapshot(
     {
         std::lock_guard<std::mutex> lock(mapMutex);
         oldWordIds = std::move(wordIds);
-        oldDocPaths = std::move(docPaths);
         oldChunks = std::move(dictionaryChunks);
         oldWordRefs = std::move(wordRefs);
         oldDictionary = std::move(dictionary);
 
         wordIds = std::move(newWordIds);
-        docPaths = std::move(snapshot.documents);
         dictionaryChunks.clear();
         wordRefs = std::move(snapshot.wordRefs);
         dictionary = std::move(newDictionary);
     }
 
+    bool snapshotCommitted = false;
     try {
         saveFullSnapshot();
+        documentCatalog_->commitStagedBatch();
+        snapshotCommitted = true;
+        if (serializer_->supportsLiveUpdates())
+            serializer_->checkpoint();
     }
     catch (...) {
-        std::lock_guard<std::mutex> lock(mapMutex);
-        wordIds = std::move(oldWordIds);
-        docPaths = std::move(oldDocPaths);
-        dictionaryChunks = std::move(oldChunks);
-        wordRefs = std::move(oldWordRefs);
-        dictionary = std::move(oldDictionary);
+        recordStorageFailure(std::current_exception());
+        if (!snapshotCommitted) {
+            std::lock_guard<std::mutex> lock(mapMutex);
+            wordIds = std::move(oldWordIds);
+            dictionaryChunks = std::move(oldChunks);
+            wordRefs = std::move(oldWordRefs);
+            dictionary = std::move(oldDictionary);
+            documentCatalog_->rollbackStagedBatch();
+        }
         throw;
     }
 }
@@ -823,17 +852,6 @@ void inverted_index::InvertedIndex::saveFullSnapshot()
 
     serializer_->save(*this);
 
-    if (serializer_->supportsLiveUpdates()) {
-        try { serializer_->checkpoint(); }
-        catch (const std::exception& exception) {
-            addToLog(
-                std::string("batch snapshot checkpoint failed: ") +
-                exception.what());
-        }
-        catch (...) {
-            addToLog("batch snapshot checkpoint failed: unknown exception");
-        }
-    }
 }
 
 void inverted_index::InvertedIndex::prepareLegacyMutableState()
@@ -865,12 +883,13 @@ void logIndexingDebug(const std::string& msg) {
 
 void inverted_index::InvertedIndex::fileIndexing(
         FileId fileId,
+        std::wstring fullPath,
+        DocumentMetadata metadata,
+        bool requireCatalogCommitBeforePublish,
         std::shared_ptr<std::promise<void>> promise)
 {
     try
     {
-        std::wstring fullPath = docPaths.pathById(fileId); // КОПИЯ!
-
         // --- словарь частот ---
         robin_hood::unordered_map<std::string, size_t> freqWordFile;
 
@@ -928,11 +947,19 @@ void inverted_index::InvertedIndex::fileIndexing(
         // создаём batch
         PostingBatch batch;
         batch.fileId = fileId;
+        batch.path = std::move(fullPath);
+        batch.metadata = metadata;
+        batch.requireCatalogCommitBeforePublish =
+            requireCatalogCommitBeforePublish;
         batch.promise = promise;
 
         batch.list.reserve(freqWordFile.size());
         for (auto &[word, count] : freqWordFile)
-            batch.list.emplace_back(word, count);
+            batch.list.emplace_back(
+                word,
+                static_cast<uint32_t>(std::min<std::size_t>(
+                    count,
+                    std::numeric_limits<uint32_t>::max())));
 
         applyBatchInStrand(std::move(batch));
     }
@@ -968,7 +995,7 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
     
     // Реальное количество уникальных слов
     stats.uniqueWords = wordIds.size();
-    stats.totalFiles = docPaths.size();
+    stats.totalFiles = documentCatalog_->size();
     
     // Подсчет постингов из chunks (без длительных блокировок)
     size_t totalPostings = 0;
@@ -1021,6 +1048,45 @@ inverted_index::DictionaryStats inverted_index::InvertedIndex::getStats() const
     stats.memoryBytes = memoryBytes;
     
     return stats;
+}
+
+bool inverted_index::InvertedIndex::isFileDeleted(uint32_t fileId) const
+{
+    rethrowStorageFailure();
+    const auto rows = documentCatalog_->findByIds({fileId});
+    return !rows.empty() && rows.front().has_value() && rows.front()->deleted;
+}
+
+std::wstring inverted_index::InvertedIndex::filePathById(uint32_t fileId) const
+{
+    rethrowStorageFailure();
+    const auto rows = documentCatalog_->findByIds({fileId});
+    if (rows.empty() || !rows.front())
+        return {};
+    return rows.front()->path;
+}
+
+std::vector<std::optional<inverted_index::DocumentRecord>>
+inverted_index::InvertedIndex::documentsByIds(
+    const std::vector<uint32_t>& fileIds) const
+{
+    rethrowStorageFailure();
+    return documentCatalog_->findByIds(fileIds);
+}
+
+std::size_t inverted_index::InvertedIndex::documentCount() const
+{
+    return documentCatalog_->size();
+}
+
+bool inverted_index::InvertedIndex::documentPathsLoadedInMemory() const
+{
+    return documentCatalog_->pathsLoadedInMemory();
+}
+
+std::size_t inverted_index::InvertedIndex::documentCatalogCacheCapacity() const
+{
+    return documentCatalog_->cacheCapacity();
 }
 
 void inverted_index::InvertedIndex::rebuildDictionaryFromChunksLocked()
@@ -1113,16 +1179,15 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
 
     addToLog("===> Dictionary holes auto-fix started (fixDictionaryHoles)");
 
-    for (FileId fileId = 0; fileId < docPaths.size(); ++fileId)
+    documentCatalog_->visitRows([&](const DocumentRecord& document)
     {
-        const std::wstring& wpath = docPaths.pathById(fileId);
-
-
-        if (wpath.empty()) continue;
+        const FileId fileId = document.id;
+        const std::wstring& wpath = document.path;
+        if (wpath.empty()) return;
 
         // Прочитать файл как при индексации (упрощённый вариант)
         std::ifstream file(wpath, std::ios::binary);
-        if (!file.is_open()) continue;
+        if (!file.is_open()) return;
 
         std::vector<char> data;
         file.unsetf(std::ios::skipws);
@@ -1135,7 +1200,7 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
             data.insert(data.begin(),
                         std::istream_iterator<char>(file),
                         std::istream_iterator<char>());
-        } catch (...) { continue; }
+        } catch (...) { return; }
 
         std::stringstream ss;
         std::copy(data.begin(), data.end(), std::ostream_iterator<char>(ss));
@@ -1166,7 +1231,7 @@ void inverted_index::InvertedIndex::fixDictionaryHoles()
                 addToLog("AUTOFIX: restored word '" + word + "' for file " + std::to_string(fileId));
             }
         }
-    }
+    });
 
     addToLog("===> Dictionary holes auto-fix completed (fixDictionaryHoles)");
 }
@@ -1223,13 +1288,13 @@ void inverted_index::InvertedIndex::compactMemory()
             }
 
             // 3) Структуры, изменяемые строго в strand_:
-            //    wordRefs, wordIds, docPaths.
+            //    wordRefs, wordIds, document catalog.
             for (auto& [fileId, vec] : wordRefs)
                 vec.shrink_to_fit();
             wordRefs.rehash(0);
 
             wordIds.shrinkToFit();
-            docPaths.shrinkToFit();
+            documentCatalog_->shrinkToFit();
 
             addToLog("compactMemory: shrunk " +
                      std::to_string(shrunkPostings) + " postings");
@@ -1326,10 +1391,16 @@ void inverted_index::InvertedIndex::saveIndex() const {
         }
     }
     catch (const std::exception& e) {
+        const_cast<InvertedIndex*>(this)->recordStorageFailure(
+            std::current_exception());
         addToLog("saveIndex() -> EXCEPTION: " + std::string(e.what()));
+        throw;
     }
     catch (...) {
+        const_cast<InvertedIndex*>(this)->recordStorageFailure(
+            std::current_exception());
         addToLog("saveIndex() -> EXCEPTION: unknown error");
+        throw;
     }
 }
 
@@ -1384,6 +1455,16 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
 
         fileIndexingTimeoutSec_ = std::max(1, fileIndexingTimeoutSec);
 
+        if (storage_.documentCatalogStorage ==
+                DocumentCatalogStorage::SQLite &&
+            storage_.kind != IndexSerializationKind::SQLite)
+        {
+            throw std::invalid_argument(
+                "SQLite document catalog requires SQLite index storage");
+        }
+        documentCatalog_ = makeDocumentCatalog(
+            storage_.documentCatalogStorage, docPaths, storage_.path);
+
         if (storage_.fullIndexStrategy == FullIndexStrategy::Batch) {
             batchBuilder_ = std::make_unique<batch::BatchIndexBuilder>(
                 batch::BatchIndexOptions{
@@ -1406,6 +1487,8 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                  std::to_string(storage_.sqlitePrecountPostings) +
                  ", full_index_strategy=" +
                  std::string(toString(storage_.fullIndexStrategy)) +
+                 ", document_catalog_storage=" +
+                 std::string(toString(storage_.documentCatalogStorage)) +
                  ", batch_reader_threads=" +
                  std::to_string(storage_.batchReaderThreads) +
                  ", batch_indexer_threads=" +
@@ -1443,6 +1526,36 @@ inverted_index::InvertedIndex::InvertedIndex(boost::asio::thread_pool& cpu_pool,
                 throw;
             }
         }
+
+        addToLog(
+            "DOCUMENT_CATALOG storage=" +
+            std::string(toString(storage_.documentCatalogStorage)) +
+            " documents=" + std::to_string(documentCatalog_->size()) +
+            " paths_loaded_in_ram=" +
+            std::string(documentCatalog_->pathsLoadedInMemory() ? "true" : "false") +
+            " cache_capacity=" +
+            std::to_string(documentCatalog_->cacheCapacity()));
+}
+
+void inverted_index::InvertedIndex::recordStorageFailure(
+    std::exception_ptr error) noexcept
+{
+    if (!error)
+        return;
+    std::lock_guard<std::mutex> lock(storageFailureMutex_);
+    if (!storageFailure_)
+        storageFailure_ = std::move(error);
+}
+
+void inverted_index::InvertedIndex::rethrowStorageFailure() const
+{
+    std::exception_ptr error;
+    {
+        std::lock_guard<std::mutex> lock(storageFailureMutex_);
+        error = storageFailure_;
+    }
+    if (error)
+        std::rethrow_exception(error);
 }
 
 void inverted_index::InvertedIndex::ensureSerializer() const
@@ -1462,7 +1575,8 @@ void inverted_index::InvertedIndex::ensureSerializer() const
                 storage_.sqliteMirrorFlushIntervalSec,
                 storage_.sqliteMirrorMaxPendingOps,
                 storage_.sqliteLoadThreads,
-                storage_.sqlitePrecountPostings});
+                storage_.sqlitePrecountPostings,
+                storage_.documentCatalogStorage});
         break;
     default:
         serializer_ = std::make_unique<BoostIndexSerializer>(storage_.path);
@@ -1682,6 +1796,7 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
 
     if (stopping_.load(std::memory_order_acquire))
         return false;
+    rethrowStorageFailure();
 
     std::unique_lock<std::mutex> updateLock(
         updateMutex, std::try_to_lock);
@@ -1706,16 +1821,18 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
     uint64_t sz = fs::file_size(path);
 
     //
-    // Работа с docPaths и удаление — строго в strand
+    // Работа с каталогом и удаление — строго в strand
     //
     postTracked(strand_,
                       [this, path, ts, sz]()
                       {
-                          std::wcout << L"[strand/docPaths] Upserting: " << path << std::endl;
+                          std::wcout << L"[strand/documentCatalog] Upserting: " << path << std::endl;
 
-                          auto [fileId, changed] = docPaths.upsert(path, ts, sz);
+                          CatalogUpsertResult upserted =
+                              documentCatalog_->upsert(path, ts, sz);
+                          const FileId fileId = upserted.record.id;
 
-                          if (!changed)
+                          if (!upserted.changed)
                           {
                               std::wcout << L"[strand/docPaths] File unchanged — stopping update.\n";
                               return;
@@ -1748,14 +1865,23 @@ bool inverted_index::InvertedIndex::enqueueFileUpdate(const std::wstring& path)
                           //
                           std::wcout << L"[strand/index] Scheduling fileIndexing job for id=" << fileId << std::endl;
 
-                          postTracked(cpu_pool_, [this, fileId, promise]()
+                          postTracked(cpu_pool_, [this,
+                                                  fileId,
+                                                  path = upserted.record.path,
+                                                  metadata = upserted.record.metadata,
+                                                  promise]() mutable
                           {
                               try
                               {
                                   std::wcout << L"[fileIndexing] Started for id=" << fileId << std::endl;
 
                                   // 🔥 ВАЖНО: fileIndexing теперь принимает promise
-                                  fileIndexing(fileId, promise);
+                                  fileIndexing(
+                                      fileId,
+                                      std::move(path),
+                                      metadata,
+                                      true,
+                                      promise);
 
                                   std::wcout << L"[fileIndexing] Dispatched batch for id=" << fileId << std::endl;
                               }
@@ -1780,6 +1906,7 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
 {
     if (stopping_.load(std::memory_order_acquire))
         return false;
+    rethrowStorageFailure();
 
     std::unique_lock<std::mutex> updateLock(
         updateMutex, std::try_to_lock);
@@ -1794,12 +1921,13 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
     FileId id;
 
     {
-        std::lock_guard<std::mutex> lock(mapMutex); // только для tryGetId, если оно требует
-        if (!docPaths.tryGetId(path, id))
+        const auto document = documentCatalog_->findByPath(path);
+        if (!document)
         {
             std::wcout << L"[enqueueFileDeletion] Skip — unknown file: " << path << std::endl;
             return false;
         }
+        id = document->id;
     }
 
     // Вечный след: помечаем файл как удалённый, но НЕ стираем постинги
@@ -1809,18 +1937,21 @@ bool inverted_index::InvertedIndex::enqueueFileDeletion(const std::wstring& path
 
         std::wcout << L"[strand/docPaths] markRemoved (soft, eternal trace): "
                    << path << L" (id=" << id << L")" << std::endl;
-        docPaths.markRemoved(id);
-
         ensureSerializer();
-        if (serializer_ && serializer_->supportsLiveUpdates())
-        {
-            try { serializer_->markFileDeleted(id); }
-            catch (const std::exception& e) {
-                addToLog(std::string("enqueueFileDeletion: markFileDeleted EXCEPTION: ") + e.what());
+        try {
+            if (serializer_ && serializer_->supportsLiveUpdates())
+            {
+                serializer_->markFileDeleted(id);
+                serializer_->flushPending();
             }
-            catch (...) {
-                addToLog("enqueueFileDeletion: markFileDeleted unknown exception");
-            }
+            documentCatalog_->markRemoved(id);
+        } catch (...) {
+            recordStorageFailure(std::current_exception());
+            addToLog(
+                "DOCUMENT_CATALOG_FATAL storage=" +
+                std::string(toString(storage_.documentCatalogStorage)) +
+                " stage=point_delete doc_id=" + std::to_string(id));
+            throw;
         }
     });
 
