@@ -95,10 +95,6 @@ std::filesystem::path createTimestampedPath(const std::filesystem::path& basePat
         std::filesystem::path timeStampedPath = basePath / relativePath;
         timeStampedPath += L"_" + timeStream.str();
 
-        if (!std::filesystem::exists(timeStampedPath)) {
-            std::filesystem::create_directories(timeStampedPath);
-        }
-
         return timeStampedPath / filePath.filename();
     }
 
@@ -106,40 +102,148 @@ std::filesystem::path createTimestampedPath(const std::filesystem::path& basePat
 }
 
 std::vector<uint8_t> SaveFileCmd::execute(const std::vector<uint8_t>& data) {
-    std::wstring filename;
-    std::vector<uint8_t> fileContent;
+    auto result = executeResult(data);
+    return result.succeeded()
+        ? std::move(result.payload)
+        : std::vector<uint8_t>{0};
+}
+
+command_execution::CommandResult SaveFileCmd::executeResult(
+    const std::vector<uint8_t>& data) {
+    FileData fileData;
 
     try {
-        FileData fd = deserializeFromBytes(data);
-
-        filename = encoding::utf8_to_wstring(fd.getFilename());
-        fileContent = fd.getData();
-    } catch (...) {
-        return {0};
+        fileData = deserializeFromBytes(data);
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidBinaryPayload,
+            error.what());
+    }
+    catch (...) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidBinaryPayload,
+            "unknown FileData deserialization error");
     }
 
-    std::filesystem::path basePath = getBasePath();
-    if (!std::filesystem::exists(basePath)) {
-        std::filesystem::create_directories(basePath);
+    std::wstring filename;
+    try {
+        filename = encoding::utf8_to_wstring(fileData.getFilename());
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            error.what());
+    }
+    if (filename.empty()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "FileData filename is empty");
     }
 
-    std::filesystem::path fullPath = createTimestampedPath(basePath, filename);
+    std::filesystem::path basePath;
+    try {
+        basePath = getBasePath();
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::ConfigurationError,
+            error.what());
+    }
+    if (basePath.empty()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::ConfigurationError,
+            "save directory is empty");
+    }
 
-    std::wstring uniqueFilename = getUniqueFilename(fullPath.parent_path(), fullPath.filename().wstring(), fileContent);
-    fullPath = fullPath.parent_path() / uniqueFilename;
+    std::error_code filesystemError;
+    const bool basePathExists = std::filesystem::exists(basePath, filesystemError);
+    if (filesystemError) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileMetadataFailed,
+            filesystemError.message());
+    }
+    if (basePathExists) {
+        const bool isDirectory =
+            std::filesystem::is_directory(basePath, filesystemError);
+        if (filesystemError) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::FileMetadataFailed,
+                filesystemError.message());
+        }
+        if (!isDirectory) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::ConfigurationError,
+                "save directory points to a non-directory entry");
+        }
+    }
+    else {
+        std::filesystem::create_directories(basePath, filesystemError);
+        if (filesystemError) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DirectoryCreateFailed,
+                filesystemError.message());
+        }
+    }
+
+    std::filesystem::path fullPath;
+    try {
+        fullPath = createTimestampedPath(basePath, filename);
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            error.what());
+    }
+
+    const auto destinationDirectory = fullPath.parent_path();
+    std::filesystem::create_directories(destinationDirectory, filesystemError);
+    if (filesystemError) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::DirectoryCreateFailed,
+            filesystemError.message());
+    }
+
+    try {
+        const std::wstring uniqueFilename = getUniqueFilename(
+            destinationDirectory,
+            fullPath.filename().wstring(),
+            fileData.getData());
+        fullPath = destinationDirectory / uniqueFilename;
+    }
+    catch (const std::filesystem::filesystem_error& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileMetadataFailed,
+            error.what());
+    }
 
     std::ofstream file(fullPath, std::ios::binary | std::ios::out | std::ios::trunc);
 
     if (!file.is_open()) {
-        return {0};
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileOpenFailed,
+            "failed to open destination file");
     }
 
-    file.write(reinterpret_cast<const char*>(fileContent.data()), fileContent.size());
+    const auto& fileContent = fileData.getData();
+    if (!fileContent.empty()) {
+        file.write(
+            reinterpret_cast<const char*>(fileContent.data()),
+            static_cast<std::streamsize>(fileContent.size()));
+    }
 
     if (!file.good()) {
-        return {0};
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileWriteFailed,
+            "failed to write destination file");
     }
 
     file.close();
-    return {1};
+    if (file.fail()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileWriteFailed,
+            "failed to close destination file");
+    }
+
+    return command_execution::CommandResult::success({1});
 }
