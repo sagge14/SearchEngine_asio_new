@@ -1,0 +1,285 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
+#include "Commands/GetAttachments/GetAttachmentsCmd.h"
+
+#include "nlohmann/json.hpp"
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace
+{
+    namespace fs = std::filesystem;
+
+    class TemporaryDirectory final
+    {
+    public:
+        TemporaryDirectory()
+        {
+            static std::atomic_uint64_t sequence{0};
+            const auto uniqueValue =
+                std::chrono::steady_clock::now().time_since_epoch().count() +
+                static_cast<std::int64_t>(
+                    sequence.fetch_add(1, std::memory_order_relaxed));
+            path_ = fs::temp_directory_path() /
+                ("searchengine-get-attachments-" +
+                 std::to_string(uniqueValue));
+            fs::create_directories(path_);
+        }
+
+        ~TemporaryDirectory()
+        {
+            std::error_code ignored;
+            fs::remove_all(path_, ignored);
+        }
+
+        [[nodiscard]] const fs::path& path() const noexcept
+        {
+            return path_;
+        }
+
+    private:
+        fs::path path_;
+    };
+
+    void writeText(const fs::path& path, const std::string& text)
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file.write(text.data(), static_cast<std::streamsize>(text.size()));
+        ASSERT_TRUE(file.good());
+    }
+
+    void writeBytes(
+        const fs::path& path,
+        const std::vector<std::uint8_t>& bytes)
+    {
+        fs::create_directories(path.parent_path());
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file.write(
+            reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+        ASSERT_TRUE(file.good());
+    }
+
+    void writeConfiguration(
+        const fs::path& configPath,
+        const fs::path& root,
+        const std::map<std::string, std::string>& operators)
+    {
+        nlohmann::json config;
+        config["prefix"] = root.generic_string() + "/";
+        config["map"] = operators;
+        writeText(configPath, config.dump());
+    }
+
+    std::vector<std::uint8_t> requestFor(const std::string& operatorName)
+    {
+        return {operatorName.begin(), operatorName.end()};
+    }
+
+#ifdef _WIN32
+    class ScopedHandle final
+    {
+    public:
+        explicit ScopedHandle(HANDLE handle) noexcept
+            : handle_(handle)
+        {
+        }
+
+        ~ScopedHandle()
+        {
+            if (handle_ != INVALID_HANDLE_VALUE)
+                CloseHandle(handle_);
+        }
+
+        [[nodiscard]] HANDLE get() const noexcept
+        {
+            return handle_;
+        }
+
+    private:
+        HANDLE handle_;
+    };
+#endif
+}
+
+TEST(GetAttachmentsCommandResult, RejectsEmptyAndNullContainingOperatorNames)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    writeConfiguration(configPath, temporaryDirectory.path(), {});
+    GetAttachmentsCmd command(configPath);
+
+    const auto empty = command.executeResult({});
+    const auto withNull = command.executeResult({'o', 'p', 0, 'x'});
+
+    ASSERT_TRUE(empty.failed());
+    EXPECT_EQ(empty.error, command_execution::ErrorCode::InvalidRequest);
+    ASSERT_TRUE(withNull.failed());
+    EXPECT_EQ(withNull.error, command_execution::ErrorCode::InvalidRequest);
+}
+
+TEST(GetAttachmentsCommandResult, ReportsMissingAndMalformedConfiguration)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path missingPath = temporaryDirectory.path() / "missing.json";
+    const fs::path malformedPath = temporaryDirectory.path() / "malformed.json";
+    writeText(malformedPath, "{not-json");
+
+    GetAttachmentsCmd missingCommand(missingPath);
+    GetAttachmentsCmd malformedCommand(malformedPath);
+
+    const auto missing = missingCommand.executeResult(requestFor("operator"));
+    const auto malformed = malformedCommand.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(missing.failed());
+    EXPECT_EQ(missing.error, command_execution::ErrorCode::ConfigurationError);
+    ASSERT_TRUE(malformed.failed());
+    EXPECT_EQ(malformed.error, command_execution::ErrorCode::ConfigurationError);
+}
+
+TEST(GetAttachmentsCommandResult, ReportsUnregisteredOperator)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"registered", "buffer"}});
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("unknown"));
+
+    ASSERT_TRUE(result.failed());
+    EXPECT_EQ(
+        result.error,
+        command_execution::ErrorCode::OperatorNotRegistered);
+}
+
+TEST(GetAttachmentsCommandResult, ReportsMissingAttachmentBuffer)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"operator", "missing-buffer"}});
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(result.failed());
+    EXPECT_EQ(result.error, command_execution::ErrorCode::AttachmentNotFound);
+}
+
+TEST(GetAttachmentsCommandResult, RejectsConfiguredPathThatIsNotDirectory)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    const fs::path configuredPath =
+        temporaryDirectory.path() / "not-a-directory";
+    writeBytes(configuredPath, {0x01});
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"operator", "not-a-directory"}});
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(result.failed());
+    EXPECT_EQ(result.error, command_execution::ErrorCode::ConfigurationError);
+    EXPECT_TRUE(fs::exists(configuredPath));
+}
+
+TEST(GetAttachmentsCommandResult, SerializesFilesAndDeletesLegacyBuffer)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    const fs::path bufferPath = temporaryDirectory.path() / "buffer";
+    const std::vector<std::uint8_t> rootBytes{0x00, 0x7f, 0xff};
+    const std::vector<std::uint8_t> nestedBytes{'n', 'e', 's', 't', 'e', 'd'};
+    writeBytes(bufferPath / "root.bin", rootBytes);
+    writeBytes(bufferPath / "nested" / "payload.bin", nestedBytes);
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"operator", "buffer"}});
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    EXPECT_FALSE(fs::exists(bufferPath));
+    const Message message = Message::deserializeFromBytes(result.payload);
+    ASSERT_EQ(message.getAttachCount(), 2U);
+    EXPECT_EQ(message.attachments.at(fs::path("root.bin")), rootBytes);
+    EXPECT_EQ(
+        message.attachments.at(fs::path("nested") / "payload.bin"),
+        nestedBytes);
+}
+
+TEST(GetAttachmentsCommandResult, EmptyExistingBufferIsSuccessfulAndDeleted)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    const fs::path bufferPath = temporaryDirectory.path() / "empty-buffer";
+    fs::create_directories(bufferPath);
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"operator", "empty-buffer"}});
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    EXPECT_FALSE(fs::exists(bufferPath));
+    const Message message = Message::deserializeFromBytes(result.payload);
+    EXPECT_EQ(message.getAttachCount(), 0U);
+}
+
+#ifdef _WIN32
+TEST(GetAttachmentsCommandResult, ReportsFileOpenFailureWithoutDeletingBuffer)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path configPath = temporaryDirectory.path() / "prefix_map.json";
+    const fs::path bufferPath = temporaryDirectory.path() / "locked-buffer";
+    const fs::path lockedPath = bufferPath / "locked.bin";
+    writeBytes(lockedPath, {0x01, 0x02});
+    writeConfiguration(
+        configPath,
+        temporaryDirectory.path(),
+        {{"operator", "locked-buffer"}});
+
+    const ScopedHandle lock(CreateFileW(
+        lockedPath.c_str(),
+        GENERIC_READ,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr));
+    ASSERT_NE(lock.get(), INVALID_HANDLE_VALUE);
+    GetAttachmentsCmd command(configPath);
+
+    const auto result = command.executeResult(requestFor("operator"));
+
+    ASSERT_TRUE(result.failed());
+    EXPECT_EQ(result.error, command_execution::ErrorCode::FileOpenFailed);
+    EXPECT_TRUE(fs::exists(bufferPath));
+}
+#endif
