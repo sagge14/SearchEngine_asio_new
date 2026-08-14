@@ -86,12 +86,45 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT), 26u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::SERVER_BUSY_ERROR), 27u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::END_COMMAND), 28u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::ERROR_RESPONSE), 29u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1), 30u);
     EXPECT_EQ(
         static_cast<std::uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO),
         2781032419ULL);
 
     EXPECT_EQ(sizeof(asio_server::Header), 16u);
     EXPECT_TRUE(std::is_trivially_copyable_v<asio_server::Header>);
+    EXPECT_EQ(sizeof(asio_server::search_protocol::ErrorResponseV1), 8u);
+    EXPECT_EQ(sizeof(asio_server::search_protocol::ProtocolCapabilitiesV1), 8u);
+}
+
+TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
+{
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::SOLOREQUEST));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GETBINFILE));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::USER_REGISTRY));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::NEGOTIATE_PROTOCOL_V1));
+
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SOMEERROR));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::JSONREGUEST));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::ADDRESOLUTION));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GETDOC));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SERVER_BUSY_ERROR));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::END_COMMAND));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::ERROR_RESPONSE));
+}
+
+TEST(ProtocolNegotiation, CapabilitiesAdvertiseTypedErrorsV1)
+{
+    constexpr asio_server::search_protocol::ProtocolCapabilitiesV1 capabilities{};
+
+    EXPECT_EQ(
+        capabilities.version,
+        asio_server::search_protocol::PROTOCOL_CAPABILITIES_VERSION);
+    EXPECT_NE(
+        capabilities.capabilities &
+            asio_server::search_protocol::CAPABILITY_TYPED_ERRORS_V1,
+        0u);
 }
 
 TEST(ErrorCode, InternalValuesAreExplicitAndContiguous)
@@ -198,4 +231,19 @@ TEST(LegacyMapping, UnknownErrorFallsBackToSomeError)
     const auto header = asio_server::makeLegacyErrorHeader(unknown);
     EXPECT_EQ(header.size, 0u);
     EXPECT_EQ(header.command, COMMAND::SOMEERROR);
+}
+
+TEST(TypedMapping, ErrorResponsePreservesSpecificCode)
+{
+    for (const auto error : allErrorCodes)
+    {
+        const auto response = asio_server::makeTypedErrorResponse(error);
+
+        EXPECT_EQ(
+            response.version,
+            asio_server::search_protocol::ERROR_RESPONSE_VERSION);
+        EXPECT_EQ(
+            response.errorCode,
+            static_cast<std::uint32_t>(error));
+    }
 }

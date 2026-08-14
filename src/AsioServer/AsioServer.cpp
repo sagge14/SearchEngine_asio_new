@@ -22,6 +22,7 @@
 #include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include <mutex>
 #include <algorithm>
+#include <cstring>
 #include <boost/concept_check.hpp>
 
 using boost::asio::ip::tcp;
@@ -134,7 +135,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
             // 1) лимит размера
             constexpr std::size_t MAX_PAYLOAD = 1000 * 1024 * 1024; // 1GB
             if (requestHeader.size > MAX_PAYLOAD) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::PayloadTooLarge,
                     "payload_size=" + std::to_string(requestHeader.size),
                     true,
@@ -145,7 +146,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
             // 2) валидация команды
             std::optional<uint_fast32_t> saveMessageUserId;
             if (!trustCommand(requestHeader, saveMessageUserId)) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::InvalidCommand,
                     "wire_command=" + std::to_string(
                         static_cast<uint_fast64_t>(requestHeader.command)),
@@ -168,7 +169,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
             }
 
             if (!activity_ || !activity_->tryStartCommand()) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::ServerStopping,
                     {},
                     true,
@@ -293,6 +294,12 @@ boost::asio::awaitable<void> asio_server::session::writeLoop()
                     socket_,
                     boost::asio::buffer(&error->header, sizeof(error->header)),
                     boost::asio::use_awaitable);
+                if (error->payload && !error->payload->empty()) {
+                    co_await boost::asio::async_write(
+                        socket_,
+                        boost::asio::buffer(*error->payload),
+                        boost::asio::use_awaitable);
+                }
                 if (error->closeAfterWrite) {
                     stop("terminal error sent");
                     co_return;
@@ -370,7 +377,7 @@ boost::asio::awaitable<bool> asio_server::session::sendFile(
     co_return true;
 }
 
-boost::asio::awaitable<bool> asio_server::session::queueLegacyError(
+boost::asio::awaitable<bool> asio_server::session::queueError(
     command_execution::ErrorCode error,
     std::string diagnostic,
     bool closeAfterWrite,
@@ -386,24 +393,40 @@ boost::asio::awaitable<bool> asio_server::session::queueLegacyError(
             character = ' ';
     }
 
+    const bool typedResponse =
+        typed_errors_enabled_.load(std::memory_order_acquire);
+
     std::string logMessage =
         "Command error: code=" + std::string(command_execution::toString(error)) +
         ", command=" + getTextCommand(requestCommand) +
-        ", remote=" + getRemoteIP();
+        ", remote=" + getRemoteIP() +
+        ", wire=" + (typedResponse ? "typed-v1" : "legacy");
     if (!diagnostic.empty())
         logMessage += ", diagnostic=" + diagnostic;
     search_server::addToLog(logMessage);
 
     boost::system::error_code sendError;
-    const Header errorHeader = makeLegacyErrorHeader(error);
+    Header errorHeader{};
+    auto errorPayload = std::make_shared<std::vector<BYTE>>();
+    if (typedResponse) {
+        const auto wireError = makeTypedErrorResponse(error);
+        errorHeader = Header{
+            sizeof(wireError),
+            COMMAND::ERROR_RESPONSE};
+        errorPayload->resize(sizeof(wireError));
+        std::memcpy(errorPayload->data(), &wireError, sizeof(wireError));
+    } else {
+        errorHeader = makeLegacyErrorHeader(error);
+    }
+
     co_await write_channel_.async_send(
         boost::system::error_code{},
-        WriteItem{ErrorWrite{errorHeader, closeAfterWrite}},
+        WriteItem{ErrorWrite{errorHeader, std::move(errorPayload), closeAfterWrite}},
         boost::asio::redirect_error(boost::asio::use_awaitable, sendError));
 
     if (sendError) {
         search_server::addToLog(
-            "Failed to queue legacy error " +
+            "Failed to queue command error " +
             std::string(command_execution::toString(error)) +
             ": " + sendError.message());
         co_return false;
@@ -426,6 +449,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
     try {
         // Обработка команды
         std::vector<BYTE> answer;
+        bool enableTypedErrorsAfterResponse = false;
         PersonalRequest personalRequest{};
         personalRequest.request_type = getTextCommand(requestHeader.command);
         boost::system::error_code ec;
@@ -441,7 +465,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
 
         if (requestHeader.command == COMMAND::SOMEERROR)
         {
-            co_await queueLegacyError(
+            co_await queueError(
                 command_execution::ErrorCode::InvalidCommand,
                 {},
                 false,
@@ -459,7 +483,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             std::error_code fileError;
             const bool fileExists = std::filesystem::exists(file_path, fileError);
             if (fileError) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::FileMetadataFailed,
                     fileError.message(),
                     false,
@@ -467,7 +491,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 co_return;
             }
             if (!fileExists) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::FileNotFound,
                     file_path.string(),
                     false,
@@ -479,7 +503,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 file_path,
                 std::ios::binary);
             if (!fileStream->is_open()) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::FileOpenFailed,
                     file_path.string(),
                     false,
@@ -492,7 +516,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             const auto endOffset = static_cast<std::streamoff>(endPosition);
             fileStream->seekg(0, std::ios::beg);
             if (endOffset < 0 || !*fileStream) {
-                co_await queueLegacyError(
+                co_await queueError(
                     command_execution::ErrorCode::FileMetadataFailed,
                     file_path.string(),
                     false,
@@ -511,7 +535,14 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
         else
         {
 
-            if (requestHeader.command == COMMAND::USER_REGISTRY)
+            if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
+            {
+                const search_protocol::ProtocolCapabilitiesV1 capabilities{};
+                answer.resize(sizeof(capabilities));
+                std::memcpy(answer.data(), &capabilities, sizeof(capabilities));
+                enableTypedErrorsAfterResponse = true;
+            }
+            else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
                 std::lock_guard<std::mutex> lock(user_name_mutex_);
                 userName_ = std::string(requestData.begin(), requestData.end());
@@ -525,7 +556,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 SaveMessageCmd command(*saveMessageUserId);
                 auto result = command.executeResult(requestData);
                 if (result.failed()) {
-                    co_await queueLegacyError(
+                    co_await queueError(
                         *result.error,
                         std::move(result.diagnostic),
                         false,
@@ -540,7 +571,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                     requestHeader.command,
                     requestData);
                 if (result.failed()) {
-                    co_await queueLegacyError(
+                    co_await queueError(
                         *result.error,
                         std::move(result.diagnostic),
                         false,
@@ -566,6 +597,8 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                     std::make_shared<std::vector<BYTE>>(std::move(answer))}},
                 boost::asio::use_awaitable);
             responseQueued = true;
+            if (enableTypedErrorsAfterResponse)
+                typed_errors_enabled_.store(true, std::memory_order_release);
         }
 
         {
@@ -594,7 +627,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
     }
 
     if (unexpectedFailure && unexpectedFailure->error) {
-        co_await queueLegacyError(
+        co_await queueError(
             *unexpectedFailure->error,
             std::move(unexpectedFailure->diagnostic),
             false,
@@ -620,8 +653,10 @@ bool asio_server::session::trustCommand(
     std::optional<uint_fast32_t>& saveMessageUserId)
 {
     try {
-        if (requestHeader.command > COMMAND::SOMEERROR &&
-            requestHeader.command < COMMAND::END_COMMAND)
+        if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
+            return requestHeader.size == 0;
+
+        if (isRequestCommand(requestHeader.command))
             return true;
 
         if (static_cast<COMMAND>(

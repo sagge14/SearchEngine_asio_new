@@ -72,6 +72,10 @@ namespace asio_server
         #define X(name) name,
                 COMMAND_LIST
         #undef X
+        // Explicit extension values: never insert them into COMMAND_LIST,
+        // otherwise the established values 0..28 would move.
+        ERROR_RESPONSE = 29,
+        NEGOTIATE_PROTOCOL_V1 = 30,
         // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
@@ -82,6 +86,8 @@ namespace asio_server
         #define X(name) case COMMAND::name: return #name;
                     COMMAND_LIST
         #undef X
+                    case COMMAND::ERROR_RESPONSE: return "ERROR_RESPONSE";
+                    case COMMAND::NEGOTIATE_PROTOCOL_V1: return "NEGOTIATE_PROTOCOL_V1";
                     default:
                 return "UNKNOWN COMMAND";
         }
@@ -98,6 +104,55 @@ namespace asio_server
         COMMAND command{};
     };
 
+    namespace search_protocol
+    {
+        inline constexpr std::uint32_t ERROR_RESPONSE_VERSION = 1;
+        inline constexpr std::uint32_t PROTOCOL_CAPABILITIES_VERSION = 1;
+        inline constexpr std::uint32_t CAPABILITY_TYPED_ERRORS_V1 = 1u << 0;
+
+        struct ErrorResponseV1
+        {
+            std::uint32_t version{ERROR_RESPONSE_VERSION};
+            std::uint32_t errorCode{};
+        };
+
+        struct ProtocolCapabilitiesV1
+        {
+            std::uint32_t version{PROTOCOL_CAPABILITIES_VERSION};
+            std::uint32_t capabilities{CAPABILITY_TYPED_ERRORS_V1};
+        };
+    }
+
+    [[nodiscard]] inline constexpr bool isRequestCommand(COMMAND command) noexcept
+    {
+        switch (command)
+        {
+            case COMMAND::SOLOREQUEST:
+            case COMMAND::FILETEXT:
+            case COMMAND::GETSQLJSONANSWEAR:
+            case COMMAND::GETBINFILE:
+            case COMMAND::GET_VH_TELEGI_FROM_SQL:
+            case COMMAND::GET_ISH_TELEGI_FROM_SQL:
+            case COMMAND::START_UPDATE_BASE:
+            case COMMAND::LOAD_TLG_TO_SEND:
+            case COMMAND::GET_MESSAGE: // LEGACY
+            case COMMAND::USER_REGISTRY:
+            case COMMAND::PING:
+            case COMMAND::GET_VH_TELEGA_WAY:
+            case COMMAND::GET_ISH_TELEGA_WAY:
+            case COMMAND::GET_OPIS_BASE:
+            case COMMAND::LOAD_RAZN:
+            case COMMAND::GET_ATTACHMENTS:
+            case COMMAND::GET_ISH_PDTV:
+            case COMMAND::GET_TELEGA_ATACHMENTS:
+            case COMMAND::GET_SINGLE_ATACHMENT:
+            case COMMAND::NEGOTIATE_PROTOCOL_V1:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     [[nodiscard]] inline constexpr COMMAND legacyErrorCommand(
         command_execution::ErrorCode error) noexcept
     {
@@ -112,6 +167,14 @@ namespace asio_server
         return Header{0, legacyErrorCommand(error)};
     }
 
+    [[nodiscard]] inline constexpr search_protocol::ErrorResponseV1
+    makeTypedErrorResponse(command_execution::ErrorCode error) noexcept
+    {
+        return search_protocol::ErrorResponseV1{
+            search_protocol::ERROR_RESPONSE_VERSION,
+            static_cast<std::uint32_t>(error)};
+    }
+
     static_assert(sizeof(uint_fast64_t) == 8);
     static_assert(sizeof(Header) == 16);
     static_assert(std::is_trivially_copyable_v<Header>);
@@ -122,7 +185,13 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT) == 26);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SERVER_BUSY_ERROR) == 27);
     static_assert(static_cast<uint_fast64_t>(COMMAND::END_COMMAND) == 28);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::ERROR_RESPONSE) == 29);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1) == 30);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
+    static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
+    static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);
+    static_assert(std::is_trivially_copyable_v<search_protocol::ErrorResponseV1>);
+    static_assert(std::is_trivially_copyable_v<search_protocol::ProtocolCapabilitiesV1>);
 /** ------------------------session_START------------------------ **/
     class Interface;
 
@@ -163,6 +232,7 @@ namespace asio_server
         struct ErrorWrite
         {
             asio_server::Header header;
+            std::shared_ptr<std::vector<BYTE>> payload;
             bool closeAfterWrite{};
         };
 
@@ -177,6 +247,7 @@ namespace asio_server
         std::atomic_bool stopped_{false};
         std::atomic<bool> session_finished_{false};
         std::atomic<bool> terminal_error_queued_{false};
+        std::atomic_bool typed_errors_enabled_{false};
         std::shared_ptr<ServerActivity> activity_;
 
 
@@ -190,7 +261,7 @@ namespace asio_server
         bool trustCommand(
             Header& requestHeader,
             std::optional<uint_fast32_t>& saveMessageUserId);
-        boost::asio::awaitable<bool> queueLegacyError(
+        boost::asio::awaitable<bool> queueError(
             command_execution::ErrorCode error,
             std::string diagnostic = {},
             bool closeAfterWrite = false,
