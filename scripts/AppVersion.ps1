@@ -14,15 +14,8 @@ function Resolve-SearchEngineReleaseScript {
         [Parameter(Mandatory)][string]$ScriptName
     )
 
-    $resolveScript = @(
-        (Join-Path $ProjectRoot '..\..\TOOLS\scripts\release\Resolve-WorkspaceReleaseScript.ps1'),
-        (Join-Path $ProjectRoot '..\..\..\TOOLS\scripts\release\Resolve-WorkspaceReleaseScript.ps1')
-    ) | ForEach-Object { [IO.Path]::GetFullPath($_) } |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-        Select-Object -First 1
-    if ($null -eq $resolveScript) {
-        throw 'Resolve-WorkspaceReleaseScript.ps1 not found under TOOLS\scripts\release.'
-    }
+    $resolveScript = & (Join-Path $PSScriptRoot 'Find-WorkspaceReleaseRoot.ps1') `
+        -Name 'Resolve-WorkspaceReleaseScript.ps1' -StartPath $ProjectRoot
 
     $resolved = & $resolveScript -ScriptName $ScriptName -StartPath $ProjectRoot
     if ([string]::IsNullOrWhiteSpace($resolved)) {

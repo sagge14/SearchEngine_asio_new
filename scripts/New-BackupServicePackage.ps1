@@ -415,12 +415,9 @@ Write-Host 'Copy the entire package directory to the target computer.'
 $cloudZipName = Get-SearchEngineCloudZipName `
     -PackageLeaf $packageName `
     -ReleaseId $CloudReleaseId
-$cloudHelper = @(
-    (Join-Path $projectRoot '..\..\TOOLS\scripts\release\Publish-ReleasePackageIfConfigured.ps1'),
-    (Join-Path $projectRoot '..\..\..\TOOLS\scripts\release\Publish-ReleasePackageIfConfigured.ps1')
-) | ForEach-Object { [IO.Path]::GetFullPath($_) } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
+$cloudHelper = & (Join-Path $PSScriptRoot 'Find-WorkspaceReleaseRoot.ps1') `
+    -Name 'Publish-ReleasePackageIfConfigured.ps1' -StartPath $projectRoot `
+    -Optional
 if ($null -ne $cloudHelper) {
     $cloudArgs = @{
         PackageDirectory = $OutputDirectory
