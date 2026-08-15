@@ -4,7 +4,38 @@ setlocal EnableExtensions DisableDelayedExpansion
 set "PACKAGE_ROOT=%~dp0"
 set "SERVICE_INSTANCE=default"
 if exist "%PACKAGE_ROOT%ServiceInstance.cmd" call "%PACKAGE_ROOT%ServiceInstance.cmd"
-if not "%~1"=="" if /I not "%~1"=="/validate" set "SERVICE_INSTANCE=%~1"
+set "VALIDATE_ONLY=0"
+set "SKIP_VC_REDIST=0"
+set "INSTANCE_FROM_ARGS=0"
+set "BAD_ARG="
+
+:PARSE_ARGS
+if "%~1"=="" goto :ARGS_DONE
+if /I "%~1"=="/validate" (
+    set "VALIDATE_ONLY=1"
+    shift
+    goto :PARSE_ARGS
+)
+if /I "%~1"=="/SkipVcRedist" (
+    set "SKIP_VC_REDIST=1"
+    shift
+    goto :PARSE_ARGS
+)
+set "ARG=%~1"
+if "%ARG:~0,1%"=="/" (
+    set "BAD_ARG=%~1"
+    goto :UNKNOWN_ARGUMENT
+)
+if "%INSTANCE_FROM_ARGS%"=="1" (
+    set "BAD_ARG=%~1"
+    goto :UNKNOWN_ARGUMENT
+)
+set "SERVICE_INSTANCE=%~1"
+set "INSTANCE_FROM_ARGS=1"
+shift
+goto :PARSE_ARGS
+
+:ARGS_DONE
 set "SERVICE_NAME=SearchEngineBackupService"
 set "DISPLAY_NAME=SearchEngine Backup Service"
 set "TARGET_ARCH={{ARCHITECTURE}}"
@@ -45,7 +76,7 @@ if errorlevel 1 goto :PACKAGE_DAMAGED
 "%BINARY%" --validate-config --config "%CONFIG_TEMPLATE%" --data-dir "%PACKAGE_ROOT%data"
 if errorlevel 1 goto :CONFIG_INVALID
 
-if /I "%~1"=="/validate" goto :VALIDATED
+if "%VALIDATE_ONLY%"=="1" goto :VALIDATED
 
 fsutil.exe dirty query %SystemDrive% >nul 2>&1
 if errorlevel 1 goto :NOT_ADMIN
@@ -98,14 +129,49 @@ echo   2 - Cancel and edit Backup.json
 choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 goto :CANCELLED
 
-echo [1/6] Installing Microsoft Visual C++ Runtime...
+echo [1/6] Ensuring Microsoft Visual C++ Runtime...
+if "%SKIP_VC_REDIST%"=="1" goto :REDIST_SKIP_FLAG
+set "CRT_PROBE_OK=0"
+call :PROBE_VC_RUNTIME
+if not errorlevel 1 set "CRT_PROBE_OK=1"
+if "%CRT_PROBE_OK%"=="1" goto :REDIST_ASK_WHEN_PRESENT
+echo Visual C++ Runtime files were not detected for architecture %TARGET_ARCH%.
+echo   1 - Install or update the packaged redistributable ^(recommended^)
+echo   2 - Skip redistributable setup
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :REDIST_SKIP_CHOICE
+goto :REDIST_INSTALL
+
+:REDIST_ASK_WHEN_PRESENT
+echo Visual C++ Runtime files were found on this computer.
+echo   1 - Skip redistributable setup ^(recommended^)
+echo   2 - Install or update the packaged redistributable anyway
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :REDIST_INSTALL
+goto :REDIST_SKIP_CHOICE
+
+:REDIST_INSTALL
+echo Installing Microsoft Visual C++ Runtime...
 start "" /wait "%VC_REDIST%" /install /quiet /norestart
 set "REDIST_EXIT=%ERRORLEVEL%"
 if "%REDIST_EXIT%"=="0" goto :REDIST_OK
 if "%REDIST_EXIT%"=="1638" goto :REDIST_OK
 if "%REDIST_EXIT%"=="3010" goto :REDIST_RESTART
-echo Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
-goto :FAILED
+echo WARNING: Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
+echo BackupService.exe already ran, so the runtime is likely already present.
+echo   1 - Continue installation
+echo   2 - Cancel
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :FAILED
+goto :REDIST_OK
+
+:REDIST_SKIP_FLAG
+echo Skipping Visual C++ Runtime setup because /SkipVcRedist was specified.
+goto :REDIST_OK
+
+:REDIST_SKIP_CHOICE
+echo Skipping Visual C++ Runtime redistributable setup by user choice.
+goto :REDIST_OK
 
 :REDIST_RESTART
 echo WARNING: Windows must be restarted after the installation.
@@ -240,6 +306,28 @@ if not exist "%EXPORT_ROOT%\" exit /b 1
 if exist "%DATA_DIR%\Backup.json" copy /Y "%DATA_DIR%\Backup.json" "%EXPORT_ROOT%\Backup.json" >nul
 if exist "%DATA_DIR%\logs\" xcopy.exe "%DATA_DIR%\logs\*" "%EXPORT_ROOT%\logs\" /E /I /H /R /Y >nul
 echo Backup exported to: %EXPORT_ROOT%
+exit /b 0
+
+:PROBE_VC_RUNTIME
+REM Prefer loading BackupService.exe: same /MD CRT as the installed binary.
+REM File probes alone are unreliable under 32-bit cmd (System32 -> SysWOW64).
+"%BINARY%" --validate-config --config "%CONFIG_TEMPLATE%" --data-dir "%PACKAGE_ROOT%data" >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+if /I "%TARGET_ARCH%"=="x64" goto :PROBE_VC_X64
+set "CRT_DIR=%SystemRoot%\System32"
+if not "%ProgramFiles(x86)%"=="" set "CRT_DIR=%SystemRoot%\SysWOW64"
+goto :PROBE_VC_CHECK
+
+:PROBE_VC_X64
+set "CRT_DIR=%SystemRoot%\System32"
+if exist "%SystemRoot%\Sysnative\" set "CRT_DIR=%SystemRoot%\Sysnative"
+goto :PROBE_VC_CHECK
+
+:PROBE_VC_CHECK
+if not exist "%CRT_DIR%\vcruntime140.dll" exit /b 1
+if not exist "%CRT_DIR%\msvcp140.dll" exit /b 1
+if not exist "%CRT_DIR%\vcruntime140_1.dll" exit /b 1
 exit /b 0
 
 :STOP_SERVICE
@@ -411,6 +499,12 @@ goto :FAILED
 :NOT_ADMIN
 echo ERROR: Run Install-BackupService.bat as Administrator.
 goto :FAILED
+
+:UNKNOWN_ARGUMENT
+echo ERROR: Unknown argument "%BAD_ARG%".
+echo Supported: /validate, /SkipVcRedist, and an optional instance id.
+goto :FAILED
+
 :PACKAGE_MISSING
 echo ERROR: The portable package is incomplete. Copy the entire folder again.
 goto :FAILED

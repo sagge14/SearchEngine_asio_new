@@ -65,6 +65,17 @@ Firewall не настраивается: BackupService не слушает се
 
   app\BackupService.exe --validate-config --config data\Backup.json --data-dir data
 
+Дополнительные флаги установщика:
+
+  /SkipVcRedist   не спрашивать и не запускать установщик VC++ Runtime
+                  (для автоматизации, когда runtime уже гарантирован).
+
+  Install-BackupService.bat /SkipVcRedist
+
+Без /SkipVcRedist на шаге Runtime установщик спрашивает: поставить packaged
+redistributable или пропустить. Если CRT уже доступен (BackupService.exe
+успешно загрузился), рекомендуется пропуск; иначе — установка.
+
 3. УСТАНОВКА
 ------------
 
@@ -74,7 +85,9 @@ Firewall не настраивается: BackupService не слушает се
 2) вызывает BackupService.exe --validate-config;
 3) при leftover-папках без зарегистрированной службы предлагает удалить их
    или отменить установку;
-4) устанавливает Microsoft Visual C++ Runtime из prerequisites;
+4) обеспечивает VC++ Runtime best-effort: интерактивный вопрос или
+   /SkipVcRedist; при сбое quiet-установщика предлагает продолжить или
+   отменить;
 5) при переустановке: stop → wait STOPPED → wait PID → экспорт настроек/логов
    → move в rollback → копирование → sc create/config → start → RUNNING →
    удаление rollback;

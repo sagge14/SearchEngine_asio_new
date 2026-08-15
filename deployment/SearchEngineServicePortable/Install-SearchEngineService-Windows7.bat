@@ -5,9 +5,38 @@ set "PACKAGE_ROOT=%~dp0"
 set "SERVICE_INSTANCE=default"
 if exist "%PACKAGE_ROOT%ServiceInstance.cmd" call "%PACKAGE_ROOT%ServiceInstance.cmd"
 set "VALIDATE_ONLY=0"
+set "SKIP_VC_REDIST=0"
+set "INSTANCE_FROM_ARGS=0"
 set "UI_LANGUAGE=auto"
-if /I "%~1"=="/validate" set "VALIDATE_ONLY=1"
-if not "%~1"=="" if /I not "%~1"=="/validate" set "SERVICE_INSTANCE=%~1"
+set "BAD_ARG="
+
+:PARSE_ARGS
+if "%~1"=="" goto :ARGS_DONE
+if /I "%~1"=="/validate" (
+    set "VALIDATE_ONLY=1"
+    shift
+    goto :PARSE_ARGS
+)
+if /I "%~1"=="/SkipVcRedist" (
+    set "SKIP_VC_REDIST=1"
+    shift
+    goto :PARSE_ARGS
+)
+set "ARG=%~1"
+if "%ARG:~0,1%"=="/" (
+    set "BAD_ARG=%~1"
+    goto :UNKNOWN_ARGUMENT
+)
+if "%INSTANCE_FROM_ARGS%"=="1" (
+    set "BAD_ARG=%~1"
+    goto :UNKNOWN_ARGUMENT
+)
+set "SERVICE_INSTANCE=%~1"
+set "INSTANCE_FROM_ARGS=1"
+shift
+goto :PARSE_ARGS
+
+:ARGS_DONE
 set "TARGET_ARCH={{ARCHITECTURE}}"
 set "HELPER=%PACKAGE_ROOT%tools\SearchEngineConfig.exe"
 set "SETTINGS_TEMPLATE=%PACKAGE_ROOT%data\Settings.json"
@@ -26,7 +55,7 @@ call "%PACKAGE_ROOT%Verify-Package.bat" /quiet
 if errorlevel 1 goto :PACKAGE_DAMAGED
 
 if "%VALIDATE_ONLY%"=="1" goto :INSTANCE_READY
-if not "%~1"=="" goto :INSTANCE_READY
+if "%INSTANCE_FROM_ARGS%"=="1" goto :INSTANCE_READY
 "%HELPER%" choose-instance --default "%SERVICE_INSTANCE%" --output "%INSTANCE_TEMP%"
 if errorlevel 1 goto :HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "SELECTED_%%A=%%B"
@@ -181,14 +210,49 @@ if "%PRM_AUTODETECT%"=="0" echo   PRM short content:    disabled
 echo   Document catalog:     %DOCUMENT_CATALOG_STORAGE%
 echo.
 
-echo [1/8] Installing Microsoft Visual C++ Runtime...
+echo [1/8] Ensuring Microsoft Visual C++ Runtime...
+if "%SKIP_VC_REDIST%"=="1" goto :REDIST_SKIP_FLAG
+set "CRT_PROBE_OK=0"
+call :PROBE_VC_RUNTIME
+if not errorlevel 1 set "CRT_PROBE_OK=1"
+if "%CRT_PROBE_OK%"=="1" goto :REDIST_ASK_WHEN_PRESENT
+echo Visual C++ Runtime files were not detected for architecture %TARGET_ARCH%.
+echo   1 - Install or update the packaged redistributable ^(recommended^)
+echo   2 - Skip redistributable setup
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :REDIST_SKIP_CHOICE
+goto :REDIST_INSTALL
+
+:REDIST_ASK_WHEN_PRESENT
+echo Visual C++ Runtime files were found on this computer.
+echo   1 - Skip redistributable setup ^(recommended^)
+echo   2 - Install or update the packaged redistributable anyway
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :REDIST_INSTALL
+goto :REDIST_SKIP_CHOICE
+
+:REDIST_INSTALL
+echo Installing Microsoft Visual C++ Runtime...
 start "" /wait "%VC_REDIST%" /install /quiet /norestart
 set "REDIST_EXIT=%ERRORLEVEL%"
 if "%REDIST_EXIT%"=="0" goto :REDIST_OK
 if "%REDIST_EXIT%"=="1638" goto :REDIST_OK
 if "%REDIST_EXIT%"=="3010" goto :REDIST_RESTART
-echo Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
-goto :FAILED
+echo WARNING: Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
+echo SearchEngineConfig.exe already ran, so the runtime is likely already present.
+echo   1 - Continue installation
+echo   2 - Cancel
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :FAILED
+goto :REDIST_OK
+
+:REDIST_SKIP_FLAG
+echo Skipping Visual C++ Runtime setup because /SkipVcRedist was specified.
+goto :REDIST_OK
+
+:REDIST_SKIP_CHOICE
+echo Skipping Visual C++ Runtime redistributable setup by user choice.
+goto :REDIST_OK
 
 :REDIST_RESTART
 echo WARNING: Windows must be restarted after the installation.
@@ -334,6 +398,31 @@ choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 set "BACKUP_MODE=none"
 if errorlevel 2 exit /b 0
 exit /b 1
+
+:PROBE_VC_RUNTIME
+REM Prefer loading the packaged helper: same /MD CRT as SearchEngine.exe.
+REM File probes alone are unreliable under 32-bit cmd (System32 -> SysWOW64).
+"%HELPER%" system-info >nul 2>&1
+if not errorlevel 1 exit /b 0
+
+if /I "%TARGET_ARCH%"=="x64" goto :PROBE_VC_X64
+REM x86 and x86-modern: 32-bit CRT lives in SysWOW64 on 64-bit Windows.
+set "CRT_DIR=%SystemRoot%\System32"
+if not "%ProgramFiles(x86)%"=="" set "CRT_DIR=%SystemRoot%\SysWOW64"
+goto :PROBE_VC_CHECK
+
+:PROBE_VC_X64
+REM Real 64-bit System32. Sysnative is required when this BAT runs in WOW64
+REM (for example from 32-bit Far Manager); native 64-bit cmd has no Sysnative.
+set "CRT_DIR=%SystemRoot%\System32"
+if exist "%SystemRoot%\Sysnative\" set "CRT_DIR=%SystemRoot%\Sysnative"
+goto :PROBE_VC_CHECK
+
+:PROBE_VC_CHECK
+if not exist "%CRT_DIR%\vcruntime140.dll" exit /b 1
+if not exist "%CRT_DIR%\msvcp140.dll" exit /b 1
+if not exist "%CRT_DIR%\vcruntime140_1.dll" exit /b 1
+exit /b 0
 
 :STOP_SERVICE
 set "STOPPED_SERVICE_PID="
@@ -524,6 +613,11 @@ echo ERROR: Invalid service instance id "%SERVICE_INSTANCE%".
 echo Use 1-32 ASCII letters, digits, underscore or hyphen; the first character must be alphanumeric.
 pause
 exit /b 1
+
+:UNKNOWN_ARGUMENT
+echo ERROR: Unknown argument "%BAD_ARG%".
+echo Supported: /validate, /SkipVcRedist, and an optional instance id.
+goto :FAILED
 
 :NOT_ADMIN
 echo ERROR: Run Install-SearchEngineService.bat as Administrator.
