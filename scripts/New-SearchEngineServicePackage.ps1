@@ -162,6 +162,18 @@ $binaryPath = Resolve-RequiredFile `
 $configToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
     'SearchEngineConfig Release helper'
+$authDbToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'AuthDbTool.exe') `
+    'AuthDbTool Release helper'
+$tokenIssuerPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchClientTokenIssuer.exe') `
+    'SearchClientTokenIssuer Release helper'
+$tokenIssuerDefaultsPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'searchclient-auth-token.defaults.json') `
+    'SearchClientTokenIssuer defaults JSON'
+$registerAuthScriptPath = Resolve-RequiredFile `
+    (Join-Path $projectRoot 'scripts\Register-AuthClientFromToken.ps1') `
+    'Register-AuthClientFromToken.ps1'
 Assert-PeMatchesAppVersion `
     -BinaryPath $binaryPath `
     -ExpectedProductVersion $versionInfo.Version `
@@ -190,6 +202,16 @@ $configToolMachine = Get-PeMachine $configToolPath
 if ($configToolMachine -ne $expectedMachine) {
     throw ('SearchEngineConfig.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $configToolMachine)
+}
+$authDbToolMachine = Get-PeMachine $authDbToolPath
+if ($authDbToolMachine -ne $expectedMachine) {
+    throw ('AuthDbTool.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $authDbToolMachine)
+}
+$tokenIssuerMachine = Get-PeMachine $tokenIssuerPath
+if ($tokenIssuerMachine -ne $expectedMachine) {
+    throw ('SearchClientTokenIssuer.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $tokenIssuerMachine)
 }
 
 & $configToolPath validate --settings $SettingsPath
@@ -260,6 +282,42 @@ try {
         -Destination (Join-Path $stagingDirectory 'app\SearchEngine.exe')
     Copy-Item -LiteralPath $configToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\SearchEngineConfig.exe')
+    Copy-Item -LiteralPath $authDbToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
+    Copy-Item -LiteralPath $tokenIssuerPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchClientTokenIssuer.exe')
+    Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
+        -Destination (Join-Path $stagingDirectory `
+            'tools\searchclient-auth-token.defaults.json')
+    # OpenSSL runtime DLL: SearchEngine.exe (auth verify) and TokenIssuer both
+    # import libcrypto dynamically. Ship it next to each EXE — the service runs
+    # from install\bin, tools stay in install\tools, and Windows does not search
+    # across those folders.
+    $opensslDllName = if ($Architecture -eq 'x64') {
+        'libcrypto-3-x64.dll'
+    } else {
+        'libcrypto-3.dll'
+    }
+    $opensslDllCandidates = @(
+        (Join-Path $BuildDirectory $opensslDllName),
+        (Join-Path ${env:ProgramFiles} "OpenSSL-Win64\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles} "OpenSSL\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\libcrypto-3.dll")
+    )
+    $opensslDll = $opensslDllCandidates |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Select-Object -First 1
+    if (-not $opensslDll) {
+        throw "OpenSSL DLL '$opensslDllName' was not found for SearchEngine/TokenIssuer packaging."
+    }
+    $opensslFileName = [IO.Path]::GetFileName($opensslDll)
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("app\" + $opensslFileName))
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
+    Copy-Item -LiteralPath $registerAuthScriptPath `
+        -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $SettingsPath `
         -Destination (Join-Path $stagingDirectory 'data\Settings.json')
     Copy-Item -LiteralPath $IgnorePath `
@@ -296,6 +354,10 @@ try {
         @{
             Source = 'Uninstall-SearchEngineService-Windows7.bat'
             Destination = 'Uninstall-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Register-AuthClient-FromToken-Windows7.bat'
+            Destination = 'Register-AuthClient-FromToken.bat'
         },
         @{
             Source = 'Verify-Package-Windows7.bat'
@@ -367,6 +429,7 @@ try {
         'Start-SearchEngineService.bat',
         'Restart-SearchEngineService.bat',
         'Uninstall-SearchEngineService.bat',
+        'Register-AuthClient-FromToken.bat',
         'Verify-Package.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `

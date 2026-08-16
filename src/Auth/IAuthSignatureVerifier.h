@@ -1,0 +1,36 @@
+#pragma once
+
+#include <string>
+#include <string_view>
+
+namespace auth
+{
+    struct AuthIdentity
+    {
+        std::string client_id;
+        std::string client_name;
+        std::string flash_serial;
+    };
+
+    class IAuthSignatureVerifier
+    {
+    public:
+        virtual ~IAuthSignatureVerifier() = default;
+
+        // Stage 1: stub implementations accept any signature payload.
+        [[nodiscard]] virtual bool verify(
+            const AuthIdentity& identity,
+            std::string_view signature) const = 0;
+    };
+
+    class StubAuthSignatureVerifier final : public IAuthSignatureVerifier
+    {
+    public:
+        [[nodiscard]] bool verify(
+            const AuthIdentity& /*identity*/,
+            std::string_view /*signature*/) const override
+        {
+            return true;
+        }
+    };
+}

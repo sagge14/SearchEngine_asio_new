@@ -20,6 +20,9 @@
 #include "Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.h"
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
 #include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
+#include "Commands/Auth/AuthenticateCmd.h"
+#include "Auth/AuthRuntime.h"
+#include <nlohmann/json.hpp>
 #include <mutex>
 #include <algorithm>
 #include <cstring>
@@ -473,6 +476,22 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
+        // Session authorization gate: data commands require
+        // USER_REGISTRY("admin") from TCP peer 127.0.0.1, or successful
+        // AUTHENTICATE_V1 (any peer). Unauthenticated data access fails closed.
+        const auto gate = evaluateSessionCommandGate(
+            requestHeader.command,
+            authenticated_);
+        if (!gate.allow_execute)
+        {
+            co_await queueError(
+                command_execution::ErrorCode::AuthRequired,
+                "session is not authenticated",
+                gate.close_after_auth_required,
+                requestHeader.command);
+            co_return;
+        }
+
         if (requestHeader.command == COMMAND::GETBINFILE)
         {
             // answer содержит путь к файлу (в виде std::vector<BYTE>, но это строка пути)
@@ -537,17 +556,118 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
 
             if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
             {
-                const search_protocol::ProtocolCapabilitiesV1 capabilities{};
+                search_protocol::ProtocolCapabilitiesV1 capabilities{};
+                capabilities.capabilities =
+                    search_protocol::CAPABILITY_TYPED_ERRORS_V1 |
+                    search_protocol::CAPABILITY_CLIENT_AUTH_V1;
                 answer.resize(sizeof(capabilities));
                 std::memcpy(answer.data(), &capabilities, sizeof(capabilities));
                 enableTypedErrorsAfterResponse = true;
             }
             else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
+                // Legacy admin: payload "admin" AND TCP peer exactly 127.0.0.1.
+                // Arbitrary usernames and non-localhost peers must not authorize.
+                const std::string requestedName(
+                    requestData.begin(),
+                    requestData.end());
+                if (!isLegacyAdminUserRegistryPayload(requestedName)) {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "USER_REGISTRY allows only legacy admin session",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+                if (!isLocalAdminPeer()) {
+                    search_server::addToLog(
+                        "legacy admin authorization rejected: remote peer is not 127.0.0.1, remote="
+                        + getRemoteIP());
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "legacy admin authorization requires TCP peer 127.0.0.1",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
                 std::lock_guard<std::mutex> lock(user_name_mutex_);
-                userName_ = std::string(requestData.begin(), requestData.end());
-                std::string answer_str = "OK";
+                userName_ = "admin";
+                authenticated_ = true;
+                const std::string answer_str = "OK";
                 answer = std::vector<BYTE>(answer_str.begin(), answer_str.end());
+            }
+            else if (requestHeader.command == COMMAND::AUTHENTICATE_V1)
+            {
+                // Failed AUTHENTICATE_V1 is terminal: send ERROR_RESPONSE, then
+                // close. The client must not keep a half-open unauthenticated
+                // TCP session after an explicit auth rejection.
+                if (!auth::AuthRuntime::instance().isInitialized()) {
+                    co_await queueError(
+                        command_execution::ErrorCode::ConfigurationError,
+                        "AuthClientStore is not initialized",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                AuthenticateCmd command(
+                    auth::AuthRuntime::instance().store(),
+                    auth::AuthRuntime::instance().verifier());
+                auto result = command.executeResult(requestData);
+                if (result.failed()) {
+                    co_await queueError(
+                        *result.error,
+                        std::move(result.diagnostic),
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                std::optional<command_execution::CommandResult> authSessionError;
+                try {
+                    const nlohmann::json response = nlohmann::json::parse(
+                        result.payload.begin(),
+                        result.payload.end());
+                    const auto client_name =
+                        response.at("client_name").get<std::string>();
+                    const auto client_id =
+                        response.at("client_id").get<std::string>();
+                    std::string flash_serial;
+                    try {
+                        const nlohmann::json request = nlohmann::json::parse(
+                            requestData.begin(),
+                            requestData.end());
+                        if (request.contains("flash_serial") &&
+                            request.at("flash_serial").is_string())
+                        {
+                            flash_serial =
+                                request.at("flash_serial").get<std::string>();
+                        }
+                    } catch (...) {
+                    }
+                    std::lock_guard<std::mutex> lock(user_name_mutex_);
+                    userName_ = client_name;
+                    clientId_ = client_id;
+                    flashSerial_ = std::move(flash_serial);
+                    authenticated_ = true;
+                } catch (const std::exception& ex) {
+                    authSessionError = command_execution::CommandResult::failure(
+                        command_execution::ErrorCode::SerializationFailed,
+                        std::string("AUTHENTICATE_V1 response parse failed: ") +
+                            ex.what());
+                }
+
+                if (authSessionError && authSessionError->error) {
+                    co_await queueError(
+                        *authSessionError->error,
+                        std::move(authSessionError->diagnostic),
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                answer = std::move(result.payload);
             }
             else if (requestHeader.command == COMMAND::SAVE_MESSAGE_TO &&
                      saveMessageUserId)
@@ -632,6 +752,21 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             std::move(unexpectedFailure->diagnostic),
             false,
             requestHeader.command);
+    }
+}
+
+bool asio_server::session::isLocalAdminPeer() const
+{
+    // Fail closed: any remote_endpoint error/exception means not local admin.
+    try {
+        boost::system::error_code ec;
+        const boost::asio::ip::tcp::endpoint remote_ep =
+            socket_.remote_endpoint(ec);
+        if (ec)
+            return false;
+        return isLegacyAdminPeerAddress(remote_ep.address());
+    } catch (...) {
+        return false;
     }
 }
 

@@ -1,6 +1,7 @@
 #include "SearchEngineApplication.h"
 
 #include "AsioServer/AsioServer.h"
+#include "Auth/AuthRuntime.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
 #include "ContextRuntime/ContextRuntime.h"
@@ -225,6 +226,14 @@ bool SearchEngineApplication::start()
 
         throwIfStopRequested();
         SqlLogger::instance(paths_.log_database.string());
+        try {
+            auth::AuthRuntime::instance().initialize(paths_.auth_clients);
+            LG("Auth client store opened; path=", paths_.auth_clients.string());
+        } catch (const std::exception& ex) {
+            throw StartupError(
+                ERROR_OPEN_FAILED,
+                std::string("failed to open auth_clients.sqlite: ") + ex.what());
+        }
 
         pending->search_server =
             std::make_unique<search_server::SearchServer>(
@@ -382,6 +391,7 @@ void SearchEngineApplication::shutdownRuntime() noexcept
 {
     std::unique_ptr<Runtime> runtime = std::move(runtime_);
     if (!runtime) {
+        auth::AuthRuntime::instance().shutdown();
         SqlLogger::shutdown();
         return;
     }
@@ -421,6 +431,7 @@ void SearchEngineApplication::shutdownRuntime() noexcept
             runtime->search_server.reset();
         }
 
+        auth::AuthRuntime::instance().shutdown();
         SqlLogger::shutdown();
 
         LG("Shutdown: stop CPU and I/O runtimes");

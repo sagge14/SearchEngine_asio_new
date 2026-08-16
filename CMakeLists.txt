@@ -49,6 +49,8 @@ option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
 option(BUILD_BACKUP_RESTORE "Build the BackupRestore CLI and core library" ON)
+option(BUILD_AUTH_DB_TOOL "Build the AuthDbTool SQLite client admin CLI" ON)
+option(BUILD_TOKEN_ISSUER "Build the SearchClientTokenIssuer USB token CLI" ${WIN32})
 option(
         SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
         "After Release build of SearchEngine/BackupService/ZagEditor/BackupRestore in packagable presets (windows-x64, windows-x86, windows7-x86), run New-*Package and cloud-publish when configured"
@@ -178,7 +180,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE)
+if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
     set(_build_any_target ON)
 endif()
 
@@ -409,7 +411,7 @@ endif()
 # ---------------------------------------------------------------------------
 # OpenSSL (FindOpenSSL chooses MDd/MD and x86/x64 paths per configuration)
 # ---------------------------------------------------------------------------
-if(BUILD_SEARCHENGINE)
+if(BUILD_SEARCHENGINE OR BUILD_TOKEN_ISSUER)
     set(_default_openssl_root "")
     if(WIN32)
         if(
@@ -601,6 +603,118 @@ if(BUILD_BACKUP_SERVICE)
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# AuthDbTool
+# ---------------------------------------------------------------------------
+if(BUILD_AUTH_DB_TOOL)
+    add_executable(
+            AuthDbTool
+            tools/auth/main.cpp
+            src/Auth/AuthClientStore.cpp
+            src/SQLite/sqlite3.c
+    )
+    target_include_directories(
+            AuthDbTool
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+            AuthDbTool
+            PRIVATE
+            nlohmann_json::nlohmann_json
+    )
+    if(MSVC)
+        # sqlite3.c is C; keep C++20 for the tool sources.
+        set_source_files_properties(
+                src/SQLite/sqlite3.c
+                PROPERTIES LANGUAGE C
+        )
+    endif()
+    searchengine_configure_target(AuthDbTool)
+endif()
+
+# ---------------------------------------------------------------------------
+# SearchClientTokenIssuer (USB auth token issuance; Windows-only)
+# ---------------------------------------------------------------------------
+if(BUILD_TOKEN_ISSUER)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SearchClientTokenIssuer currently supports Windows only")
+    endif()
+
+    add_executable(
+            SearchClientTokenIssuer
+            tools/token_issuer/main.cpp
+            tools/token_issuer/VolumeSerial.cpp
+            tools/token_issuer/TokenAscii.cpp
+            tools/token_issuer/TokenDefaults.cpp
+            tools/token_issuer/TokenDocument.cpp
+            tools/token_issuer/CryptoStub.cpp
+    )
+    target_include_directories(
+            SearchClientTokenIssuer
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+    )
+    target_link_libraries(
+            SearchClientTokenIssuer
+            PRIVATE
+            nlohmann_json::nlohmann_json
+            ole32
+            oleaut32
+            wbemuuid
+    )
+    # Prefer arch-matched OpenSSL VC MD libs. Stock FindOpenSSL may cache a
+    # mismatched Release import lib (e.g. arm64) from another OpenSSL prefix.
+    if(
+            WIN32
+            AND SEARCHENGINE_OPENSSL_ROOT
+            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
+    )
+        target_include_directories(
+                SearchClientTokenIssuer
+                PRIVATE
+                "${SEARCHENGINE_OPENSSL_ROOT}/include"
+        )
+        target_link_libraries(
+                SearchClientTokenIssuer
+                PRIVATE
+                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib>"
+                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib>"
+        )
+    else()
+        target_link_libraries(
+                SearchClientTokenIssuer
+                PRIVATE
+                OpenSSL::Crypto
+        )
+    endif()
+    target_compile_definitions(
+            SearchClientTokenIssuer
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    searchengine_configure_target(SearchClientTokenIssuer)
+    add_custom_command(
+            TARGET SearchClientTokenIssuer
+            POST_BUILD
+            COMMAND
+            "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/data"
+            COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/token_issuer/data/searchclient-auth-token.defaults.json"
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/searchclient-auth-token.defaults.json"
+            COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/token_issuer/data/searchclient-auth-token.defaults.json"
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/data/searchclient-auth-token.defaults.json"
+            COMMENT
+            "Copy SearchClientTokenIssuer defaults JSON beside executable"
+            VERBATIM
+    )
+endif()
+
 if(
         WIN32
         AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
@@ -631,6 +745,13 @@ if(
     if(TARGET SearchEngine)
         if(TARGET SearchEngineConfig)
             add_dependencies(SearchEngine SearchEngineConfig)
+        endif()
+        # Portable package also ships AuthDbTool / TokenIssuer; build before PostBuild.
+        if(TARGET AuthDbTool)
+            add_dependencies(SearchEngine AuthDbTool)
+        endif()
+        if(TARGET SearchClientTokenIssuer)
+            add_dependencies(SearchEngine SearchClientTokenIssuer)
         endif()
         add_custom_command(
                 TARGET SearchEngine
@@ -902,6 +1023,8 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite/sqlite3.c"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetFile/GetFileCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/GetAttachmentsCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/Auth/AuthenticateCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Auth/AuthClientStore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"

@@ -7,7 +7,9 @@ SearchEngineService {{ARCHITECTURE}} — переносимый комплект
 На целевом компьютере PowerShell не требуется. Установка, переустановка,
 остановка, запуск, перезапуск и полное удаление выполняются BAT-файлами.
 Нативный помощник tools\SearchEngineConfig.exe имеет ту же архитектуру, что
-SearchEngine.exe.
+SearchEngine.exe. В tools\ также лежат AuthDbTool.exe (регистрация клиентов),
+SearchClientTokenIssuer.exe (выпуск USB-токена searchclient-auth-token.json) и
+Register-AuthClientFromToken.ps1.
 
 Перед установкой:
 

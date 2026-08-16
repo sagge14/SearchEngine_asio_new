@@ -9,8 +9,8 @@
 
 namespace command_execution
 {
-    // Internal server-side classification. These values are not part of the
-    // current client/server wire protocol.
+    // Wire ErrorResponseV1 codes (CAPABILITY_TYPED_ERRORS_V1). Numeric values
+    // are a stable client/server contract; never renumber existing entries.
     enum class ErrorCode : std::uint32_t
     {
         PayloadTooLarge = 1,
@@ -44,7 +44,18 @@ namespace command_execution
         MessageReadFailed = 29,
         ResponseQueueFull = 30,
         CommandExecutionFailed = 31,
-        InternalError = 32
+        InternalError = 32,
+        AuthFailed = 33,
+        AuthClientDisabled = 34,
+        AuthRequired = 35,
+        AuthClientIdMissing = 36,
+        AuthClientNameMissing = 37,
+        AuthFlashSerialMissing = 38,
+        AuthSignatureMissing = 39,
+        AuthClientIdNotFound = 40,
+        AuthClientNameMismatch = 41,
+        AuthFlashSerialMismatch = 42,
+        AuthSignatureInvalid = 43
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -83,6 +94,17 @@ namespace command_execution
             case ErrorCode::ResponseQueueFull: return "ResponseQueueFull";
             case ErrorCode::CommandExecutionFailed: return "CommandExecutionFailed";
             case ErrorCode::InternalError: return "InternalError";
+            case ErrorCode::AuthFailed: return "AuthFailed";
+            case ErrorCode::AuthClientDisabled: return "AuthClientDisabled";
+            case ErrorCode::AuthRequired: return "AuthRequired";
+            case ErrorCode::AuthClientIdMissing: return "AuthClientIdMissing";
+            case ErrorCode::AuthClientNameMissing: return "AuthClientNameMissing";
+            case ErrorCode::AuthFlashSerialMissing: return "AuthFlashSerialMissing";
+            case ErrorCode::AuthSignatureMissing: return "AuthSignatureMissing";
+            case ErrorCode::AuthClientIdNotFound: return "AuthClientIdNotFound";
+            case ErrorCode::AuthClientNameMismatch: return "AuthClientNameMismatch";
+            case ErrorCode::AuthFlashSerialMismatch: return "AuthFlashSerialMismatch";
+            case ErrorCode::AuthSignatureInvalid: return "AuthSignatureInvalid";
         }
 
         return "UnknownErrorCode";
