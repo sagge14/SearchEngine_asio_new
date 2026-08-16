@@ -181,6 +181,28 @@ namespace asio_server
         return payload == "admin";
     }
 
+    /// Strict IPv4 localhost peer check for legacy admin authorization.
+    /// Only 127.0.0.1 is accepted — not ::1, not other 127.0.0.0/8 addresses.
+    [[nodiscard]] inline bool isLegacyAdminPeerAddress(
+        const boost::asio::ip::address& remote_peer) noexcept
+    {
+        return remote_peer.is_v4()
+            && remote_peer.to_v4() == boost::asio::ip::address_v4::loopback();
+    }
+
+    /// Combined legacy-admin gate used by session and regression tests.
+    /// peerLookupSucceeded must be true only when remote_endpoint() succeeded;
+    /// lookup failure fails closed (never authorizes admin).
+    [[nodiscard]] inline bool mayAuthorizeLegacyAdmin(
+        std::string_view payload,
+        bool peerLookupSucceeded,
+        const boost::asio::ip::address& remote_peer) noexcept
+    {
+        return isLegacyAdminUserRegistryPayload(payload)
+            && peerLookupSucceeded
+            && isLegacyAdminPeerAddress(remote_peer);
+    }
+
     /// Session wire gate used by commandExec before any data handler runs.
     struct SessionCommandGateDecision
     {
@@ -291,7 +313,8 @@ namespace asio_server
         std::string userName_ = "default_user";
         std::string clientId_;
         std::string flashSerial_;
-        /// Session gate: set only by USER_REGISTRY("admin") or successful AUTHENTICATE_V1.
+        /// Session gate: set only by USER_REGISTRY("admin")+127.0.0.1 peer
+        /// or successful AUTHENTICATE_V1 (any peer).
         bool authenticated_{false};
         std::string remoteIP_;
         mutable std::mutex user_name_mutex_;
@@ -317,6 +340,8 @@ namespace asio_server
             std::string diagnostic = {},
             bool closeAfterWrite = false,
             COMMAND requestCommand = COMMAND::SOMEERROR);
+        /// True only when TCP remote peer is exactly 127.0.0.1 (fail closed).
+        [[nodiscard]] bool isLocalAdminPeer() const;
         std::string getRemoteIP() const;
         void stopOnExecutor(const std::string& why);
         void finishSession() noexcept;

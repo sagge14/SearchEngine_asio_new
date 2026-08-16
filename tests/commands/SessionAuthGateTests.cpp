@@ -128,6 +128,7 @@ TEST(SessionAuthGate, UnauthenticatedDataCommandIsRejectedAndCloses)
 TEST(SessionAuthGate, NonAdminUserRegistryPayloadIsRejected)
 {
     // TEST 2: arbitrary legacy usernames must not authorize.
+    const auto loopback = boost::asio::ip::make_address("127.0.0.1");
     for (const auto* payload : {
              "old_user",
              "vasya",
@@ -139,18 +140,53 @@ TEST(SessionAuthGate, NonAdminUserRegistryPayloadIsRejected)
     {
         EXPECT_FALSE(asio_server::isLegacyAdminUserRegistryPayload(payload))
             << payload;
+        EXPECT_FALSE(
+            asio_server::mayAuthorizeLegacyAdmin(payload, true, loopback))
+            << payload;
     }
 }
 
-TEST(SessionAuthGate, AdminUserRegistryPayloadAuthorizesAndAllowsData)
+TEST(SessionAuthGate, AdminUserRegistryRequiresIpv4LocalhostPeer)
 {
-    // TEST 3: only exact "admin" is the legacy auth path.
+    // TEST 3: "admin" + exactly 127.0.0.1 authorizes; other peers fail closed.
     EXPECT_TRUE(asio_server::isLegacyAdminUserRegistryPayload("admin"));
+
+    const auto peer127 = boost::asio::ip::make_address("127.0.0.1");
+    EXPECT_TRUE(asio_server::isLegacyAdminPeerAddress(peer127));
+    EXPECT_TRUE(asio_server::mayAuthorizeLegacyAdmin("admin", true, peer127));
+
+    for (const auto* addressText : {
+             "192.168.1.10",
+             "127.0.0.2",
+             "127.0.0.0",
+             "10.0.0.1",
+             "::1",
+             "0.0.0.0"})
+    {
+        const auto peer = boost::asio::ip::make_address(addressText);
+        EXPECT_FALSE(asio_server::isLegacyAdminPeerAddress(peer)) << addressText;
+        EXPECT_FALSE(
+            asio_server::mayAuthorizeLegacyAdmin("admin", true, peer))
+            << addressText;
+    }
+
+    // Fail closed when remote_endpoint lookup did not succeed.
+    EXPECT_FALSE(
+        asio_server::mayAuthorizeLegacyAdmin("admin", false, peer127));
 
     const auto afterAdmin = asio_server::evaluateSessionCommandGate(
         COMMAND::SOLOREQUEST,
         true);
     EXPECT_TRUE(afterAdmin.allow_execute);
+}
+
+TEST(SessionAuthGate, LocalhostOrdinaryUserRegistryIsRejected)
+{
+    const auto peer127 = boost::asio::ip::make_address("127.0.0.1");
+    EXPECT_FALSE(
+        asio_server::mayAuthorizeLegacyAdmin("ordinary_user", true, peer127));
+    EXPECT_FALSE(
+        asio_server::mayAuthorizeLegacyAdmin("vasya", true, peer127));
 }
 
 TEST(SessionAuthGate, AuthenticateUnknownClientFailsClosed)
@@ -166,9 +202,11 @@ TEST(SessionAuthGate, AuthenticateUnknownClientFailsClosed)
     expectAuthFailure(result, ErrorCode::AuthClientIdNotFound);
 }
 
-TEST(SessionAuthGate, SuccessfulAuthenticateAllowsDataGate)
+TEST(SessionAuthGate, SuccessfulAuthenticateAllowsDataGateWithoutLocalhost)
 {
-    // TEST 5: full AUTHENTICATE_V1 success implies authenticated session gate.
+    // TEST 5: AUTHENTICATE_V1 success is independent of TCP peer address.
+    // Legacy admin is localhost-only; AUTHENTICATE_V1 must remain available
+    // to ordinary remote network clients.
     TempAuthDb db;
     db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
     AcceptingVerifier verifier;
@@ -180,7 +218,13 @@ TEST(SessionAuthGate, SuccessfulAuthenticateAllowsDataGate)
     EXPECT_TRUE(result.succeeded());
     EXPECT_FALSE(result.error.has_value());
 
-    // Session sets authenticated_ only after successful AUTHENTICATE_V1.
+    // Session sets authenticated_ after successful AUTHENTICATE_V1 regardless
+    // of peer (remote LAN clients are expected).
+    const auto remotePeer = boost::asio::ip::make_address("192.168.1.10");
+    EXPECT_FALSE(asio_server::isLegacyAdminPeerAddress(remotePeer));
+    EXPECT_FALSE(
+        asio_server::mayAuthorizeLegacyAdmin("admin", true, remotePeer));
+
     const auto gate = asio_server::evaluateSessionCommandGate(
         COMMAND::GETSQLJSONANSWEAR,
         true);

@@ -476,8 +476,9 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
-        // Session authorization gate: data commands require USER_REGISTRY("admin")
-        // or successful AUTHENTICATE_V1. Unauthenticated data access fails closed.
+        // Session authorization gate: data commands require
+        // USER_REGISTRY("admin") from TCP peer 127.0.0.1, or successful
+        // AUTHENTICATE_V1 (any peer). Unauthenticated data access fails closed.
         const auto gate = evaluateSessionCommandGate(
             requestHeader.command,
             authenticated_);
@@ -565,8 +566,8 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
             else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
-                // Legacy admin compatibility only. Arbitrary usernames must not
-                // authorize a session (old clients used this as a free pass).
+                // Legacy admin: payload "admin" AND TCP peer exactly 127.0.0.1.
+                // Arbitrary usernames and non-localhost peers must not authorize.
                 const std::string requestedName(
                     requestData.begin(),
                     requestData.end());
@@ -574,6 +575,17 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                     co_await queueError(
                         command_execution::ErrorCode::AuthFailed,
                         "USER_REGISTRY allows only legacy admin session",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+                if (!isLocalAdminPeer()) {
+                    search_server::addToLog(
+                        "legacy admin authorization rejected: remote peer is not 127.0.0.1, remote="
+                        + getRemoteIP());
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "legacy admin authorization requires TCP peer 127.0.0.1",
                         true,
                         requestHeader.command);
                     co_return;
@@ -740,6 +752,21 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             std::move(unexpectedFailure->diagnostic),
             false,
             requestHeader.command);
+    }
+}
+
+bool asio_server::session::isLocalAdminPeer() const
+{
+    // Fail closed: any remote_endpoint error/exception means not local admin.
+    try {
+        boost::system::error_code ec;
+        const boost::asio::ip::tcp::endpoint remote_ep =
+            socket_.remote_endpoint(ec);
+        if (ec)
+            return false;
+        return isLegacyAdminPeerAddress(remote_ep.address());
+    } catch (...) {
+        return false;
     }
 }
 
