@@ -59,7 +59,9 @@ namespace command_execution
         AuthClientNameMismatch = 42,
         AuthDeviceTypeMismatch = 43,
         AuthDeviceIdMismatch = 44,
-        AuthSignatureInvalid = 45
+        AuthSignatureInvalid = 45,
+        DataSourceDisabled = 46,
+        DataSourceUnavailable = 47
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -111,6 +113,8 @@ namespace command_execution
             case ErrorCode::AuthDeviceTypeMismatch: return "AuthDeviceTypeMismatch";
             case ErrorCode::AuthDeviceIdMismatch: return "AuthDeviceIdMismatch";
             case ErrorCode::AuthSignatureInvalid: return "AuthSignatureInvalid";
+            case ErrorCode::DataSourceDisabled: return "DataSourceDisabled";
+            case ErrorCode::DataSourceUnavailable: return "DataSourceUnavailable";
         }
 
         return "UnknownErrorCode";

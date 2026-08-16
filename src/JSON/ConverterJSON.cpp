@@ -172,18 +172,17 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             criticalErrors.push_back("config.year (required for database paths)");
         }
 
-        // prm_base_dir - не может быть пустым
-        if (config.contains("prm_base_dir") && !config["prm_base_dir"].get<std::string>().empty()) {
+        // prm_base_dir / prd_base_dir — строки; пустая строка = источник отключён
+        if (config.contains("prm_base_dir") && config["prm_base_dir"].is_string()) {
             config.at("prm_base_dir").get_to(s.prm_base_dir);
         } else {
-            criticalErrors.push_back("config.prm_base_dir (cannot be empty)");
+            criticalErrors.push_back("config.prm_base_dir (must be a string; empty disables PRM)");
         }
 
-        // prd_base_dir - не может быть пустым
-        if (config.contains("prd_base_dir") && !config["prd_base_dir"].get<std::string>().empty()) {
+        if (config.contains("prd_base_dir") && config["prd_base_dir"].is_string()) {
             config.at("prd_base_dir").get_to(s.prd_base_dir);
         } else {
-            criticalErrors.push_back("config.prd_base_dir (cannot be empty)");
+            criticalErrors.push_back("config.prd_base_dir (must be a string; empty disables PRD)");
         }
 
         // === ОПЦИОНАЛЬНЫЕ ПОЛЯ (с автодополнением) ===

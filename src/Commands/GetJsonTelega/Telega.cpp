@@ -5,6 +5,9 @@
 #include "Telega.h"
 #include "SQLite/SQLiteConnectionManager.h"
 #include "MyUtils/Encoding.h"
+#include <algorithm>
+#include <cctype>
+#include <ctime>
 #include <string>
 #include <regex>
 #include <sstream>
@@ -125,10 +128,107 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
             }
         }
     }
-    catch(...)
-    {std::cout << "sql error" << std::endl;}
+    catch (const std::exception&)
+    {
+        throw;
+    }
 
     return std::move(result);
+}
+
+const std::string& Telega::baseDir(TYPE type) noexcept
+{
+    switch (type)
+    {
+        case TYPE::VHOD: return prm_base_dir;
+        case TYPE::ISHOD: return prd_base_dir;
+        case TYPE::NOTTG: break;
+    }
+    static const std::string empty;
+    return empty;
+}
+
+bool Telega::isSourceConfigured(TYPE type) noexcept
+{
+    return !baseDir(type).empty();
+}
+
+const char* Telega::sourceLabel(TYPE type) noexcept
+{
+    switch (type)
+    {
+        case TYPE::VHOD: return "PRM";
+        case TYPE::ISHOD: return "PRD";
+        case TYPE::NOTTG: break;
+    }
+    return "UNKNOWN";
+}
+
+std::string Telega::disabledDiagnostic(TYPE type)
+{
+    return std::string(sourceLabel(type)) + " data source is disabled";
+}
+
+std::string Telega::unavailableDiagnostic(TYPE type)
+{
+    return std::string(sourceLabel(type)) + " data source is unavailable";
+}
+
+Telega::SourceAvailability Telega::probeSource(TYPE type)
+{
+    if (!isSourceConfigured(type))
+        return SourceAvailability::Disabled;
+
+    std::error_code ec;
+    const auto path = std::filesystem::u8path(baseDir(type));
+    if (!std::filesystem::is_directory(path, ec) || ec)
+        return SourceAvailability::Unavailable;
+    return SourceAvailability::Configured;
+}
+
+void Telega::ensureBasesLoaded(TYPE type)
+{
+    if (type != TYPE::VHOD && type != TYPE::ISHOD)
+    {
+        throw SourceError(
+            SourceAvailability::Unavailable,
+            type,
+            "unsupported AutoPad source type");
+    }
+
+    if (!isSourceConfigured(type))
+    {
+        if (type == TYPE::VHOD)
+            b_prm.clear();
+        else
+            b_prd.clear();
+        throw SourceError(
+            SourceAvailability::Disabled,
+            type,
+            disabledDiagnostic(type));
+    }
+
+    if (probeSource(type) == SourceAvailability::Unavailable)
+    {
+        throw SourceError(
+            SourceAvailability::Unavailable,
+            type,
+            unavailableDiagnostic(type));
+    }
+
+    auto bases = getBases(type);
+    if (type == TYPE::VHOD)
+        b_prm = std::move(bases);
+    else
+        b_prd = std::move(bases);
+}
+
+std::string Telega::archiveDbPathFor(TYPE type)
+{
+    const auto& dir = baseDir(type);
+    if (dir.empty())
+        return {};
+    return dir + "\\ARCHIVE.DB3";
 }
 
 std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
@@ -155,6 +255,11 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
             break;
     }
 
+    // Empty path means the source is disabled: never touch the filesystem
+    // and never build rooted paths like "\ARCHIVE.db3".
+    if (bases_dir.empty())
+        return res;
+
     if(getYearNow() == Telega::year)
         res.push_back(bases_dir + "\\ARCHIVE.db3");
 
@@ -174,7 +279,7 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
     }
 
     if(res.empty() && getYearNow() != Telega::year)
-        res.push_back(bases_dir + "ARCHIVE.db3");
+        res.push_back(bases_dir + "\\ARCHIVE.db3");
 
     return res;
 }

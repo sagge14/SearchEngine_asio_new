@@ -39,7 +39,7 @@ namespace
                 ("searchengine-telega-attachment-" +
                  std::to_string(uniqueValue));
             attachmentDirectory_ = root_ / "attachments";
-            databasePath_ = root_ / "archive.db3";
+            databasePath_ = root_ / "ARCHIVE.db3";
             invalidDatabasePath_ = root_ / "invalid-schema.db3";
             fs::create_directories(attachmentDirectory_);
 
@@ -47,14 +47,19 @@ namespace
             createArchiveDatabase();
             createEmptyDatabase(invalidDatabasePath_);
 
-            Telega::b_prm = {databasePath_.string()};
-            Telega::b_prd = {databasePath_.string()};
+            Telega::year = "2099";
+            Telega::prm_base_dir = root_.string();
+            Telega::prd_base_dir = root_.string();
+            Telega::b_prm.clear();
+            Telega::b_prd.clear();
         }
 
         void TearDown() override
         {
             Telega::b_prm.clear();
             Telega::b_prd.clear();
+            Telega::prm_base_dir.clear();
+            Telega::prd_base_dir.clear();
             SQLiteConnectionManager::instance().closeConnection(
                 databasePath_.string());
             SQLiteConnectionManager::instance().closeConnection(
@@ -244,7 +249,14 @@ TEST_F(TelegaAttachmentCommandResultTest, ReportsMissingOrUnadvertisedAttachment
 
 TEST_F(TelegaAttachmentCommandResultTest, ReportsDatabaseQueryFailure)
 {
-    Telega::b_prm = {invalidDatabasePath_.string()};
+    SQLiteConnectionManager::instance().closeConnection(databasePath_.string());
+    fs::copy_file(
+        invalidDatabasePath_,
+        databasePath_,
+        fs::copy_options::overwrite_existing);
+    Telega::b_prm.clear();
+    Telega::b_prd.clear();
+
     GetTelegaAttachmentsCmd command;
 
     const auto result = command.executeResult(

@@ -86,6 +86,26 @@ command_execution::CommandResult GetTelegaSingleAttachmentCmd::executeResult(
 
     const int telegramId = static_cast<int>(wireId);
     const auto telegramType = static_cast<Telega::TYPE>(wireType);
+
+    if (!Telega::isSourceConfigured(telegramType)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::DataSourceDisabled,
+            Telega::disabledDiagnostic(telegramType));
+    }
+    try {
+        Telega::ensureBasesLoaded(telegramType);
+    }
+    catch (const Telega::SourceError& error) {
+        if (error.availability == Telega::SourceAvailability::Disabled) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DataSourceDisabled,
+                error.what());
+        }
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::DataSourceUnavailable,
+            error.what());
+    }
+
     const auto* bases = telegramType == Telega::TYPE::VHOD
         ? &Telega::b_prm
         : &Telega::b_prd;

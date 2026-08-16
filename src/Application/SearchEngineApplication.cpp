@@ -87,12 +87,7 @@ void validateSettings(const search_server::Settings& settings)
     if (settings.year.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.year is empty");
     }
-    if (settings.prm_base_dir.empty() || settings.prd_base_dir.empty()) {
-        throw StartupError(
-            ERROR_INVALID_DATA,
-            "config.prm_base_dir or config.prd_base_dir is empty"
-        );
-    }
+    // prm_base_dir / prd_base_dir may be empty: empty disables that AutoPad source.
     if (settings.fileIndexingTimeoutSec < 10 ||
         settings.fileIndexingTimeoutSec > 600)
     {
@@ -204,9 +199,12 @@ bool SearchEngineApplication::start()
         throwIfStopRequested();
         initializeLocale();
         OEMCase::init(paths_.oem866.string());
+        Telega::year = pending->settings.year;
+        Telega::prd_base_dir = pending->settings.prd_base_dir;
+        Telega::prm_base_dir = pending->settings.prm_base_dir;
         RecordProcessor::setDefaultDirs(
-            "D:\\BASES\\ARCHIVE.DB3",
-            "D:\\BASES_PRD\\ARCHIVE.DB3",
+            Telega::archiveDbPathFor(Telega::TYPE::VHOD),
+            Telega::archiveDbPathFor(Telega::TYPE::ISHOD),
             "D:\\OPIS_ADMIN\\" + pending->settings.year + ".DB",
             "PRM",
             "PRD"
@@ -215,9 +213,6 @@ bool SearchEngineApplication::start()
         TelegaWay::base_way_dir = "D:\\F12\\" + pending->settings.year + ".db";
         TelegaWay::base_f12_dir = "D:\\F12\\base.db";
         TelegaWay::work_year = pending->settings.year;
-        Telega::year = pending->settings.year;
-        Telega::prd_base_dir = pending->settings.prd_base_dir;
-        Telega::prm_base_dir = pending->settings.prm_base_dir;
 
         pending->contexts = std::make_unique<ContextRuntime>(
             pending->settings.threadCount
