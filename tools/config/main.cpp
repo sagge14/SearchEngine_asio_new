@@ -688,8 +688,15 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     };
     requireString("Name");
     requireString("year");
-    requireString("prm_base_dir");
-    requireString("prd_base_dir");
+    const auto requireBaseDirString = [&](const char* name) {
+        if (!config.contains(name) || !config[name].is_string())
+        {
+            errors.emplace_back(std::string("config.") + name +
+                                " must be a string (empty disables the source)");
+        }
+    };
+    requireBaseDirString("prm_base_dir");
+    requireBaseDirString("prd_base_dir");
 
     if (!config.contains("dirs") || !config["dirs"].is_array() ||
         config["dirs"].empty())
@@ -814,8 +821,12 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     }
     if (checkDirectories) {
         for (const char* name : {"prm_base_dir", "prd_base_dir"}) {
-            if (config.contains(name) && config[name].is_string() &&
-                !fs::is_directory(fs::u8path(config[name].get<std::string>())))
+            if (!config.contains(name) || !config[name].is_string())
+                continue;
+            const auto& value = config[name].get_ref<const std::string&>();
+            if (value.empty())
+                continue;
+            if (!fs::is_directory(fs::u8path(value)))
             {
                 errors.emplace_back(
                     std::string("configured ") + name + " directory is missing"

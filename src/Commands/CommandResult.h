@@ -55,7 +55,9 @@ namespace command_execution
         AuthClientIdNotFound = 40,
         AuthClientNameMismatch = 41,
         AuthFlashSerialMismatch = 42,
-        AuthSignatureInvalid = 43
+        AuthSignatureInvalid = 43,
+        DataSourceDisabled = 44,
+        DataSourceUnavailable = 45
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -105,6 +107,8 @@ namespace command_execution
             case ErrorCode::AuthClientNameMismatch: return "AuthClientNameMismatch";
             case ErrorCode::AuthFlashSerialMismatch: return "AuthFlashSerialMismatch";
             case ErrorCode::AuthSignatureInvalid: return "AuthSignatureInvalid";
+            case ErrorCode::DataSourceDisabled: return "DataSourceDisabled";
+            case ErrorCode::DataSourceUnavailable: return "DataSourceUnavailable";
         }
 
         return "UnknownErrorCode";
