@@ -1,7 +1,7 @@
 ﻿{
-    "formatVersion":  1,
-    "major":  0,
-    "minor":  1,
-    "patch":  25,
-    "productName":  "SearchEngineService"
+  "formatVersion": 1,
+  "major": 0,
+  "minor": 1,
+  "patch": 27,
+  "productName": "SearchEngineService"
 }

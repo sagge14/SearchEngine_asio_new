@@ -1,5 +1,10 @@
 # Register a USB auth token into auth_clients.sqlite for an installed
-# SearchEngineService instance (or an explicit --DataDir).
+# SearchEngineService instance (or an explicit -DataDir).
+# Compatible with Windows PowerShell 2.0 (Windows 7 SP1).
+#
+# Prefer launching via Register-AuthClient-FromToken.bat so instance selection
+# runs in cmd.exe (visible prompts). Calling SearchEngineConfig interactive
+# commands from inside PowerShell often looks like a hang.
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -14,8 +19,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# $PSScriptRoot is PowerShell 3+; Win7 ships with 2.0.
+if (-not $PSScriptRoot) {
+    $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+
+function Test-NullOrWhiteSpace([string]$Value) {
+    # [string]::IsNullOrWhiteSpace is .NET 4+ / PowerShell 3+.
+    if ([string]::IsNullOrEmpty($Value)) {
+        return $true
+    }
+    return ($Value.Trim().Length -eq 0)
+}
+
 function Resolve-ExistingFile([string]$Path, [string]$Label) {
-    if ([string]::IsNullOrWhiteSpace($Path)) {
+    if (Test-NullOrWhiteSpace $Path) {
         throw "$Label path is empty."
     }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -25,7 +43,7 @@ function Resolve-ExistingFile([string]$Path, [string]$Label) {
 }
 
 function Resolve-ExistingDirectory([string]$Path, [string]$Label) {
-    if ([string]::IsNullOrWhiteSpace($Path)) {
+    if (Test-NullOrWhiteSpace $Path) {
         throw "$Label path is empty."
     }
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
@@ -34,16 +52,36 @@ function Resolve-ExistingDirectory([string]$Path, [string]$Label) {
     return (Resolve-Path -LiteralPath $Path).Path
 }
 
+function Get-Win32Service {
+    param(
+        [string]$Filter
+    )
+
+    # Get-CimInstance is PowerShell 3+; Win7 uses Get-WmiObject.
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        if (-not (Test-NullOrWhiteSpace $Filter)) {
+            return Get-CimInstance -ClassName Win32_Service -Filter $Filter `
+                -ErrorAction SilentlyContinue
+        }
+        return Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-NullOrWhiteSpace $Filter)) {
+        return Get-WmiObject -Class Win32_Service -Filter $Filter `
+            -ErrorAction SilentlyContinue
+    }
+    return Get-WmiObject -Class Win32_Service -ErrorAction SilentlyContinue
+}
+
 function Get-ServiceDataDir([string]$ServiceName) {
-    $cim = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" `
-        -ErrorAction SilentlyContinue
-    if (-not $cim -or [string]::IsNullOrWhiteSpace($cim.PathName)) {
+    $svc = Get-Win32Service -Filter "Name='$ServiceName'"
+    if (-not $svc -or (Test-NullOrWhiteSpace $svc.PathName)) {
         return $null
     }
-    if ($cim.PathName -match '--data-dir\s+"([^"]+)"') {
+    if ($svc.PathName -match '--data-dir\s+"([^"]+)"') {
         return $Matches[1]
     }
-    if ($cim.PathName -match '--data-dir\s+(\S+)') {
+    if ($svc.PathName -match '--data-dir\s+(\S+)') {
         return $Matches[1].Trim('"')
     }
     return $null
@@ -71,49 +109,24 @@ function Resolve-ToolBesideScript([string]$FileName) {
     return $null
 }
 
-function Select-InstalledInstanceInteractive([string]$ConfigTool) {
-    $output = Join-Path $env:TEMP (
-        'SearchEngine-AuthRegister-' + [Guid]::NewGuid().ToString('N') + '.txt'
-    )
-    try {
-        & $ConfigTool choose-installed-instance --output $output
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 3) {
-            throw 'No installed SearchEngine services were found.'
-        }
-        if ($exitCode -eq 2) {
-            throw 'Instance selection was cancelled.'
-        }
-        if ($exitCode -ne 0) {
-            throw "SearchEngineConfig choose-installed-instance failed ($exitCode)."
-        }
-        $selected = $null
-        Get-Content -LiteralPath $output -Encoding UTF8 | ForEach-Object {
-            if ($_ -match '^instance=(.+)$') {
-                $selected = $Matches[1].Trim()
-            }
-        }
-        if ([string]::IsNullOrWhiteSpace($selected)) {
-            throw 'SearchEngineConfig did not return an instance id.'
-        }
-        return $selected
-    } finally {
-        if (Test-Path -LiteralPath $output) {
-            Remove-Item -LiteralPath $output -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
 function Select-InstalledInstanceFallback {
-    $services = @(Get-CimInstance -ClassName Win32_Service -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -eq 'SearchEngineService' -or
-            $_.Name -like 'SearchEngineService-*'
-        } |
+    Write-Host 'Looking up installed SearchEngine services...'
+    # Filtered WMI query — enumerating every Win32_Service is slow on older PCs.
+    $services = @(Get-Win32Service -Filter `
+        "Name='SearchEngineService' OR Name LIKE 'SearchEngineService-%'" |
         Sort-Object Name)
 
     if ($services.Count -eq 0) {
         throw 'No installed SearchEngine services were found.'
+    }
+
+    if ($services.Count -eq 1) {
+        $name = $services[0].Name
+        Write-Host "Using the only installed service: $name"
+        if ($name -eq 'SearchEngineService') {
+            return 'default'
+        }
+        return $name.Substring('SearchEngineService-'.Length)
     }
 
     Write-Host ''
@@ -148,17 +161,26 @@ function Select-InstalledInstanceFallback {
 
 function Select-TokenPathInteractive {
     $defaultToken = 'E:\searchclient-auth-token.json'
+    Write-Host ''
+    Write-Host 'Select the USB auth token file (searchclient-auth-token.json).'
     if (Test-Path -LiteralPath $defaultToken -PathType Leaf) {
-        Write-Host ''
         Write-Host "Default token found: $defaultToken"
         $useDefault = Read-Host 'Use this token? [Y/n]'
-        if ([string]::IsNullOrWhiteSpace($useDefault) -or
+        if ((Test-NullOrWhiteSpace $useDefault) -or
             $useDefault -match '^(y|yes)$')
         {
             return (Resolve-Path -LiteralPath $defaultToken).Path
         }
     }
 
+    Write-Host 'Enter the full path to searchclient-auth-token.json,'
+    Write-Host 'or press Enter to open a file dialog.'
+    $typed = Read-Host 'Token path'
+    if (-not (Test-NullOrWhiteSpace $typed)) {
+        return $typed.Trim('"')
+    }
+
+    Write-Host 'Opening file dialog (check behind other windows if it is not visible)...'
     Add-Type -AssemblyName System.Windows.Forms | Out-Null
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Title = 'Select searchclient-auth-token.json'
@@ -168,78 +190,96 @@ function Select-TokenPathInteractive {
     if (Test-Path -LiteralPath 'E:\' -PathType Container) {
         $dialog.InitialDirectory = 'E:\'
     }
-    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-        throw 'Token selection was cancelled.'
-    }
-    return $dialog.FileName
-}
 
-if (-not $AuthDbToolPath) {
-    $AuthDbToolPath = Resolve-ToolBesideScript 'AuthDbTool.exe'
-}
-if (-not $AuthDbToolPath) {
-    throw 'AuthDbTool.exe was not found. Pass -AuthDbToolPath or place it next to this script / in tools\.'
-}
-$AuthDbToolPath = Resolve-ExistingFile $AuthDbToolPath 'AuthDbTool.exe'
-
-if (-not $DataDir) {
-    if (-not $InstanceId) {
-        if (-not $SearchEngineConfigPath) {
-            $SearchEngineConfigPath = Resolve-ToolBesideScript 'SearchEngineConfig.exe'
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.TopMost = $true
+    $owner.ShowInTaskbar = $false
+    $owner.WindowState = 'Minimized'
+    try {
+        if ($dialog.ShowDialog($owner) -ne [System.Windows.Forms.DialogResult]::OK) {
+            throw 'Token selection was cancelled.'
         }
-        if ($SearchEngineConfigPath -and
-            (Test-Path -LiteralPath $SearchEngineConfigPath -PathType Leaf))
-        {
-            $InstanceId = Select-InstalledInstanceInteractive $SearchEngineConfigPath
-        } else {
-            Write-Host 'SearchEngineConfig.exe not found; using service list fallback.'
+        return $dialog.FileName
+    } finally {
+        $owner.Dispose()
+    }
+}
+
+try {
+    Write-Host 'Resolving AuthDbTool...'
+    if (Test-NullOrWhiteSpace $AuthDbToolPath) {
+        $AuthDbToolPath = Resolve-ToolBesideScript 'AuthDbTool.exe'
+    }
+    if (Test-NullOrWhiteSpace $AuthDbToolPath) {
+        throw 'AuthDbTool.exe was not found. Pass -AuthDbToolPath or place it next to this script / in tools\.'
+    }
+    $AuthDbToolPath = Resolve-ExistingFile $AuthDbToolPath 'AuthDbTool.exe'
+
+    if (Test-NullOrWhiteSpace $DataDir) {
+        if (Test-NullOrWhiteSpace $InstanceId) {
+            # Do not call SearchEngineConfig interactive UI from PowerShell — prompts
+            # often do not show and look like a hang. Use the console/WMI path.
             $InstanceId = Select-InstalledInstanceFallback
         }
+
+        Write-Host "Resolving data directory for instance '$InstanceId'..."
+        $serviceName = Get-ServiceNameFromInstance $InstanceId
+        $resolved = Get-ServiceDataDir $serviceName
+        if (-not (Test-NullOrWhiteSpace $resolved)) {
+            $DataDir = $resolved
+        } else {
+            $DataDir = Join-Path $env:ProgramData $serviceName
+        }
     }
 
-    $serviceName = Get-ServiceNameFromInstance $InstanceId
-    $resolved = Get-ServiceDataDir $serviceName
-    if ($resolved) {
-        $DataDir = $resolved
-    } else {
-        $DataDir = Join-Path $env:ProgramData $serviceName
+    $DataDir = Resolve-ExistingDirectory $DataDir 'Data directory'
+    $dbPath = Join-Path $DataDir 'auth_clients.sqlite'
+
+    if (Test-NullOrWhiteSpace $TokenPath) {
+        $TokenPath = Select-TokenPathInteractive
     }
-}
+    $TokenPath = Resolve-ExistingFile $TokenPath 'Token file'
 
-$DataDir = Resolve-ExistingDirectory $DataDir 'Data directory'
-$dbPath = Join-Path $DataDir 'auth_clients.sqlite'
+    $instanceLabel = '(explicit data-dir)'
+    if (-not (Test-NullOrWhiteSpace $InstanceId)) {
+        $instanceLabel = $InstanceId
+    }
+    Write-Host ''
+    Write-Host "Instance: $instanceLabel"
+    Write-Host "Data dir: $DataDir"
+    Write-Host "Auth DB:  $dbPath"
+    Write-Host "Token:    $TokenPath"
+    Write-Host 'Registering client...'
 
-if (-not $TokenPath) {
-    $TokenPath = Select-TokenPathInteractive
-}
-$TokenPath = Resolve-ExistingFile $TokenPath 'Token file'
+    $toolArgs = @(
+        '--db', $dbPath,
+        'add-from-token',
+        '--token', $TokenPath
+    )
+    if ($Disabled) {
+        $toolArgs += '--disabled'
+    }
 
-Write-Host "Instance: $(if ($InstanceId) { $InstanceId } else { '(explicit data-dir)' })"
-Write-Host "Data dir: $DataDir"
-Write-Host "Auth DB:  $dbPath"
-Write-Host "Token:    $TokenPath"
+    if (-not $PSCmdlet.ShouldProcess($dbPath, "Register auth client from $TokenPath")) {
+        return
+    }
 
-$toolArgs = @(
-    '--db', $dbPath,
-    'add-from-token',
-    '--token', $TokenPath
-)
-if ($Disabled) {
-    $toolArgs += '--disabled'
-}
+    & $AuthDbToolPath @toolArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "AuthDbTool failed with exit code $LASTEXITCODE."
+    }
 
-if (-not $PSCmdlet.ShouldProcess($dbPath, "Register auth client from $TokenPath")) {
-    return
-}
-
-& $AuthDbToolPath @toolArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "AuthDbTool failed with exit code $LASTEXITCODE."
-}
-
-Write-Host ''
-Write-Host 'Current clients:'
-& $AuthDbToolPath --db $dbPath list
-if ($LASTEXITCODE -ne 0) {
-    throw "AuthDbTool list failed with exit code $LASTEXITCODE."
+    Write-Host ''
+    Write-Host 'Current clients:'
+    & $AuthDbToolPath --db $dbPath list
+    if ($LASTEXITCODE -ne 0) {
+        throw "AuthDbTool list failed with exit code $LASTEXITCODE."
+    }
+} catch {
+    $message = $_.Exception.Message
+    if (Test-NullOrWhiteSpace $message) {
+        $message = "$_"
+    }
+    Write-Host "ERROR: $message"
+    exit 1
 }
