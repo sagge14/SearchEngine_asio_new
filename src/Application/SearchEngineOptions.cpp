@@ -174,6 +174,7 @@ SearchEngineRuntimePaths resolveSearchEngineRuntimePaths(
     paths.server_log = paths.data_dir / L"server_log.log";
     paths.logs = paths.data_dir / L"logs";
     paths.messages = paths.data_dir / L"messages";
+    paths.auth_clients = paths.data_dir / L"auth_clients.sqlite";
     return paths;
 }
 

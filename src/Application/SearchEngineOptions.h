@@ -27,6 +27,7 @@ struct SearchEngineRuntimePaths {
     std::filesystem::path server_log;
     std::filesystem::path logs;
     std::filesystem::path messages;
+    std::filesystem::path auth_clients;
 };
 
 bool parseSearchEngineOptions(

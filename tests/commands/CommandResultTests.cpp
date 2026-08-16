@@ -18,7 +18,7 @@ namespace
     using command_execution::CommandResult;
     using command_execution::ErrorCode;
 
-    constexpr std::array<ErrorCode, 32> allErrorCodes{
+    constexpr std::array<ErrorCode, 35> allErrorCodes{
         ErrorCode::PayloadTooLarge,
         ErrorCode::InvalidCommand,
         ErrorCode::CommandNotRegistered,
@@ -51,6 +51,9 @@ namespace
         ErrorCode::ResponseQueueFull,
         ErrorCode::CommandExecutionFailed,
         ErrorCode::InternalError,
+        ErrorCode::AuthFailed,
+        ErrorCode::AuthClientDisabled,
+        ErrorCode::AuthRequired,
     };
 
     class LegacyCommand final : public Command
@@ -88,6 +91,7 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::END_COMMAND), 28u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::ERROR_RESPONSE), 29u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1), 30u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::AUTHENTICATE_V1), 31u);
     EXPECT_EQ(
         static_cast<std::uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO),
         2781032419ULL);
@@ -104,6 +108,7 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GETBINFILE));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::USER_REGISTRY));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::NEGOTIATE_PROTOCOL_V1));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::AUTHENTICATE_V1));
 
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SOMEERROR));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::JSONREGUEST));
@@ -116,7 +121,10 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
 
 TEST(ProtocolNegotiation, CapabilitiesAdvertiseTypedErrorsV1)
 {
-    constexpr asio_server::search_protocol::ProtocolCapabilitiesV1 capabilities{};
+    asio_server::search_protocol::ProtocolCapabilitiesV1 capabilities{};
+    capabilities.capabilities =
+        asio_server::search_protocol::CAPABILITY_TYPED_ERRORS_V1 |
+        asio_server::search_protocol::CAPABILITY_CLIENT_AUTH_V1;
 
     EXPECT_EQ(
         capabilities.version,
@@ -124,6 +132,10 @@ TEST(ProtocolNegotiation, CapabilitiesAdvertiseTypedErrorsV1)
     EXPECT_NE(
         capabilities.capabilities &
             asio_server::search_protocol::CAPABILITY_TYPED_ERRORS_V1,
+        0u);
+    EXPECT_NE(
+        capabilities.capabilities &
+            asio_server::search_protocol::CAPABILITY_CLIENT_AUTH_V1,
         0u);
 }
 

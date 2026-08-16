@@ -44,7 +44,10 @@ namespace command_execution
         MessageReadFailed = 29,
         ResponseQueueFull = 30,
         CommandExecutionFailed = 31,
-        InternalError = 32
+        InternalError = 32,
+        AuthFailed = 33,
+        AuthClientDisabled = 34,
+        AuthRequired = 35
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -83,6 +86,9 @@ namespace command_execution
             case ErrorCode::ResponseQueueFull: return "ResponseQueueFull";
             case ErrorCode::CommandExecutionFailed: return "CommandExecutionFailed";
             case ErrorCode::InternalError: return "InternalError";
+            case ErrorCode::AuthFailed: return "AuthFailed";
+            case ErrorCode::AuthClientDisabled: return "AuthClientDisabled";
+            case ErrorCode::AuthRequired: return "AuthRequired";
         }
 
         return "UnknownErrorCode";

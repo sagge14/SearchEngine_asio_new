@@ -76,6 +76,7 @@ namespace asio_server
         // otherwise the established values 0..28 would move.
         ERROR_RESPONSE = 29,
         NEGOTIATE_PROTOCOL_V1 = 30,
+        AUTHENTICATE_V1 = 31,
         // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
@@ -88,6 +89,7 @@ namespace asio_server
         #undef X
                     case COMMAND::ERROR_RESPONSE: return "ERROR_RESPONSE";
                     case COMMAND::NEGOTIATE_PROTOCOL_V1: return "NEGOTIATE_PROTOCOL_V1";
+                    case COMMAND::AUTHENTICATE_V1: return "AUTHENTICATE_V1";
                     default:
                 return "UNKNOWN COMMAND";
         }
@@ -109,6 +111,7 @@ namespace asio_server
         inline constexpr std::uint32_t ERROR_RESPONSE_VERSION = 1;
         inline constexpr std::uint32_t PROTOCOL_CAPABILITIES_VERSION = 1;
         inline constexpr std::uint32_t CAPABILITY_TYPED_ERRORS_V1 = 1u << 0;
+        inline constexpr std::uint32_t CAPABILITY_CLIENT_AUTH_V1 = 1u << 1;
 
         struct ErrorResponseV1
         {
@@ -147,6 +150,7 @@ namespace asio_server
             case COMMAND::GET_TELEGA_ATACHMENTS:
             case COMMAND::GET_SINGLE_ATACHMENT:
             case COMMAND::NEGOTIATE_PROTOCOL_V1:
+            case COMMAND::AUTHENTICATE_V1:
                 return true;
             default:
                 return false;
@@ -187,6 +191,7 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::END_COMMAND) == 28);
     static_assert(static_cast<uint_fast64_t>(COMMAND::ERROR_RESPONSE) == 29);
     static_assert(static_cast<uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1) == 30);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::AUTHENTICATE_V1) == 31);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
     static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
     static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);
@@ -242,6 +247,9 @@ namespace asio_server
         boost::asio::strand<boost::asio::any_io_executor> strand_;
         boost::asio::thread_pool& cpu_pool_;
         std::string userName_ = "default_user";
+        std::string clientId_;
+        std::string flashSerial_;
+        bool authenticated_{false};
         std::string remoteIP_;
         mutable std::mutex user_name_mutex_;
         std::atomic_bool stopped_{false};

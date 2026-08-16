@@ -49,6 +49,7 @@ option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
 option(BUILD_BACKUP_RESTORE "Build the BackupRestore CLI and core library" ON)
+option(BUILD_AUTH_DB_TOOL "Build the AuthDbTool SQLite client admin CLI" ON)
 option(
         SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
         "After Release build of SearchEngine/BackupService/ZagEditor/BackupRestore in packagable presets (windows-x64, windows-x86, windows7-x86), run New-*Package and cloud-publish when configured"
@@ -599,6 +600,31 @@ if(BUILD_BACKUP_SERVICE)
             PRODUCT_NAME "BackupService"
             ORIGINAL_FILENAME "BackupService.exe"
     )
+endif()
+
+# ---------------------------------------------------------------------------
+# AuthDbTool
+# ---------------------------------------------------------------------------
+if(BUILD_AUTH_DB_TOOL)
+    add_executable(
+            AuthDbTool
+            tools/auth/main.cpp
+            src/Auth/AuthClientStore.cpp
+            src/SQLite/sqlite3.c
+    )
+    target_include_directories(
+            AuthDbTool
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+    )
+    if(MSVC)
+        # sqlite3.c is C; keep C++20 for the tool sources.
+        set_source_files_properties(
+                src/SQLite/sqlite3.c
+                PROPERTIES LANGUAGE C
+        )
+    endif()
+    searchengine_configure_target(AuthDbTool)
 endif()
 
 if(
