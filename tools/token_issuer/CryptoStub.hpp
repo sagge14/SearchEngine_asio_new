@@ -6,50 +6,53 @@
 
 namespace token_issuer {
 
-// RSA-2048 key generation + password-encrypted private PEM (OpenSSL).
-// Token signature on the stick remains stage-1 alg "none" until full rollout.
+// RSA-2048 keystore + RS256 sign/verify of identity message.
+// Crypto verification of tokens is performed on the server only.
 
 struct KeystorePaths {
     std::filesystem::path root;
     std::filesystem::path public_key;   // public.pem
-    std::filesystem::path private_enc;  // private.enc.pem (encrypted PKCS#8)
-    std::filesystem::path meta;         // keystore.meta.json
+    std::filesystem::path private_enc;  // private.enc.pem
+    std::filesystem::path meta;
 };
 
 KeystorePaths ResolveKeystorePaths(const std::filesystem::path& root);
 
 bool KeystoreExists(const KeystorePaths& paths);
 
-// RSA-2048; writes public.pem + password-protected private.enc.pem.
 void GenerateKeyPair(const KeystorePaths& paths, std::string_view password);
 
-// Re-encrypts a PEM private key with password (AES-256-CBC PKCS#8).
 void ProtectPrivateKey(
     const KeystorePaths& paths,
     std::string_view password,
     std::string_view private_pem_plaintext);
 
-// Decrypts private.enc.pem; returns unencrypted PEM (never written to disk).
 std::string UnlockPrivateKey(
     const KeystorePaths& paths,
     std::string_view password);
 
-struct StubSignature {
-    std::string alg = "none";
+struct TokenSignature {
+    std::string alg = "RS256";
     std::string encoding = "base64";
     std::string value;
 };
 
-// Stage 1 wire: still alg=none (signing rollout is separate).
-StubSignature SignTokenPayload(std::string_view canonical_payload_utf8);
+TokenSignature SignTokenPayload(
+    std::string_view identity_message_utf8,
+    std::string_view private_pem_plaintext);
 
 bool VerifyTokenSignature(
-    std::string_view alg,
-    std::string_view signature_value,
-    std::string_view canonical_payload_utf8);
+    std::string_view identity_message_utf8,
+    std::string_view signature_base64,
+    std::string_view public_pem);
+
+void ExportPublicKey(
+    const KeystorePaths& paths,
+    const std::filesystem::path& destination);
 
 std::filesystem::path DefaultKeystoreRoot();
 
 constexpr int kRsaBits = 2048;
+constexpr const char* kSignatureAlg = "RS256";
 
 } // namespace token_issuer

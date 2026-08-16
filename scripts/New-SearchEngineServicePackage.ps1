@@ -289,6 +289,27 @@ try {
     Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
         -Destination (Join-Path $stagingDirectory `
             'tools\searchclient-auth-token.defaults.json')
+    # OpenSSL runtime DLL for SearchClientTokenIssuer (RSA keystore / RS256).
+    $opensslDllName = if ($Architecture -eq 'x64') {
+        'libcrypto-3-x64.dll'
+    } else {
+        'libcrypto-3.dll'
+    }
+    $opensslDllCandidates = @(
+        (Join-Path $BuildDirectory $opensslDllName),
+        (Join-Path ${env:ProgramFiles} "OpenSSL-Win64\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles} "OpenSSL\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\libcrypto-3.dll")
+    )
+    $opensslDll = $opensslDllCandidates |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Select-Object -First 1
+    if (-not $opensslDll) {
+        throw "OpenSSL DLL '$opensslDllName' was not found for TokenIssuer packaging."
+    }
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("tools\" + [IO.Path]::GetFileName($opensslDll)))
     Copy-Item -LiteralPath $registerAuthScriptPath `
         -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $SettingsPath `

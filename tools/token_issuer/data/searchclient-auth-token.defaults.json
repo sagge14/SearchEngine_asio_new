@@ -1,6 +1,6 @@
 {
   "format": "searchclient-auth-token",
-  "format_version": 1,
+  "format_version": 2,
   "client_id": "C-001",
   "client_name": "Ivanov I.I.",
   "flash_serial": "",
@@ -8,7 +8,7 @@
   "expires_at": null,
   "issuer": "auth-server",
   "signature": {
-    "alg": "none",
+    "alg": "RS256",
     "encoding": "base64",
     "value": ""
   },

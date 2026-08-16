@@ -16,6 +16,10 @@ namespace auth
         auto store = std::make_unique<AuthClientStore>();
         store->open(db_path);
         store_ = std::move(store);
+
+        const auto public_pem = db_path.parent_path() / "issuer-public.pem";
+        rsa_verifier_ =
+            std::make_unique<RsaIdentitySignatureVerifier>(public_pem);
         initialized_ = true;
     }
 
@@ -23,6 +27,7 @@ namespace auth
     {
         std::lock_guard lock(mutex_);
         store_.reset();
+        rsa_verifier_.reset();
         initialized_ = false;
     }
 
@@ -43,6 +48,10 @@ namespace auth
 
     const IAuthSignatureVerifier& AuthRuntime::verifier() const
     {
-        return stub_verifier_;
+        std::lock_guard lock(mutex_);
+        if (!initialized_ || !rsa_verifier_) {
+            throw std::runtime_error("AuthRuntime is not initialized");
+        }
+        return *rsa_verifier_;
     }
 }

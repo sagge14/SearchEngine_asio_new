@@ -87,8 +87,10 @@ TokenFields loadTokenFields(const std::string& token_path)
         throw std::runtime_error(
             "token format must be searchclient-auth-token");
     }
-    if (document.value("format_version", 0) != 1) {
-        throw std::runtime_error("token format_version must be 1");
+    if (document.value("format_version", 0) != 1 &&
+        document.value("format_version", 0) != 2)
+    {
+        throw std::runtime_error("token format_version must be 1 or 2");
     }
 
     TokenFields fields;
@@ -104,16 +106,35 @@ TokenFields loadTokenFields(const std::string& token_path)
             "token requires non-empty client_id, client_name, flash_serial");
     }
 
+    const int format_version = document.value("format_version", 0);
     if (document.contains("signature")) {
         if (!document.at("signature").is_object()) {
             throw std::runtime_error("token signature must be a JSON object");
         }
         const auto alg = document.at("signature").value("alg", std::string());
-        if (!alg.empty() && alg != "none") {
-            throw std::runtime_error(
-                "token signature.alg must be empty or \"none\" for stage 1");
+        if (format_version == 1) {
+            if (!alg.empty() && alg != "none") {
+                throw std::runtime_error(
+                    "token signature.alg must be empty or \"none\" for "
+                    "format_version 1");
+            }
+        } else if (format_version == 2) {
+            if (alg != "RS256") {
+                throw std::runtime_error(
+                    "token signature.alg must be \"RS256\" for format_version 2");
+            }
+            const auto value =
+                document.at("signature").value("value", std::string());
+            if (value.empty()) {
+                throw std::runtime_error(
+                    "token signature.value must be non-empty for "
+                    "format_version 2");
+            }
         }
         fields.signature_meta = document.at("signature").dump();
+    } else if (format_version == 2) {
+        throw std::runtime_error(
+            "format_version 2 token requires a signature object");
     }
 
     return fields;

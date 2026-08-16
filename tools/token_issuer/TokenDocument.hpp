@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CryptoStub.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -19,19 +21,23 @@ struct TokenFields {
 
 constexpr const char* kTokenFileName = "searchclient-auth-token.json";
 constexpr const char* kTokenFormat = "searchclient-auth-token";
-constexpr int kTokenFormatVersion = 1;
+constexpr int kTokenFormatVersion = 2;
 
 std::string NowUtcIso8601();
 
-// Validates ASCII fields and required non-empty values; throws on error.
 void ValidateTokenFields(const TokenFields& fields);
 
-nlohmann::json BuildTokenDocument(const TokenFields& fields);
+nlohmann::json BuildTokenDocument(
+    const TokenFields& fields,
+    const TokenSignature& signature);
 
-std::string PreviewTokenJson(const TokenFields& fields);
+std::string PreviewTokenJson(
+    const TokenFields& fields,
+    const TokenSignature& signature);
 
 void WriteTokenFile(
     const std::filesystem::path& path,
-    const TokenFields& fields);
+    const TokenFields& fields,
+    const TokenSignature& signature);
 
 } // namespace token_issuer

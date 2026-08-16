@@ -3,18 +3,28 @@
 Windows CLI that issues `searchclient-auth-token.json` onto a removable USB
 volume for SearchClient flash authentication.
 
-## Stage 1 notes
+## Crypto / signature
 
-- **RSA-2048 keystore** is generated locally (`--init-keystore` or first issue).
-  Private key is stored as PKCS#8 encrypted with AES-256-CBC (`private.enc.pem`).
-  Default directory: `%ProgramData%\SearchClientTokenIssuer\keys\`.
-- **Token `signature.alg` is still `"none"`** until client/server rollout.
-- **Token string fields are printable ASCII only** (`client_name`, `client_id`,
-  `issuer`, `notes`, …). Allowed extras: space `. , - _ ( ) / + # @ :`.
-  Cyrillic and other non-ASCII values are rejected.
-  Console prompts may still be Russian; JSON on the stick is ASCII.
-- Server registration is **not** performed by this tool. After writing the
-  token, register with:
+- **RSA-2048 keystore** (`--init-keystore` or first issue). Private key:
+  PKCS#8 AES-256-CBC (`private.enc.pem`). Default:
+  `%ProgramData%\SearchClientTokenIssuer\keys\`.
+- Issued tokens are **`format_version: 2`** with `signature.alg: "RS256"`.
+- Signed message (UTF-8):
+  `client_id + "\n" + client_name + "\n" + flash_serial + "\n"`.
+- **Server** verifies RS256 with `issuer-public.pem` next to
+  `auth_clients.sqlite`. **Client** only checks hardware serial and forwards
+  `signature.value` in `AUTHENTICATE_V1`.
+- Export public key into the service data directory:
+
+```powershell
+.\SearchClientTokenIssuer.exe --export-public "$env:ProgramData\SearchEngineService"
+# writes ...\issuer-public.pem
+```
+
+- Token string fields are printable ASCII only (no Cyrillic).
+- `expires_at` is not enforced yet.
+
+## Register after issue
 
 ```powershell
 .\AuthDbTool.exe --db <data>\auth_clients.sqlite add-from-token --token E:\searchclient-auth-token.json
@@ -29,39 +39,26 @@ cmake --preset windows-x64
 cmake --build --preset windows-x64-release --target SearchClientTokenIssuer
 ```
 
-Portable SearchEngineService packages ship `tools\SearchClientTokenIssuer.exe`
-and `tools\searchclient-auth-token.defaults.json` (built by
-`Build-SearchEngineServicePackage.ps1` / PostBuild packaging).
+Portable packages ship `tools\SearchClientTokenIssuer.exe`, defaults JSON, and
+OpenSSL `libcrypto` DLL beside the tool.
 
 ## Usage
 
-Interactive (lists removable volumes with a hardware serial):
-
 ```powershell
-.\SearchClientTokenIssuer.exe
-```
-
-Non-interactive:
-
-```powershell
+.\SearchClientTokenIssuer.exe --init-keystore --password-env TOKEN_ISSUER_PASSWORD
+.\SearchClientTokenIssuer.exe --export-public "C:\ProgramData\SearchEngineService"
 .\SearchClientTokenIssuer.exe --drive E: --name "Ivanov I.I." --id C-001 --yes `
-  --keystore "$env:TEMP\token-issuer-keys" `
   --password-env TOKEN_ISSUER_PASSWORD
 ```
 
-Options:
-
 | Flag | Meaning |
 |------|---------|
+| `--init-keystore` | Create RSA-2048 keystore |
+| `--export-public PATH` | Copy `public.pem` to file or `issuer-public.pem` in a directory |
 | `--defaults PATH` | Token defaults JSON |
-| `--keystore PATH` | Stub keystore directory (default `%ProgramData%\SearchClientTokenIssuer\keys` or `keys\` beside EXE) |
-| `--password-env NAME` | Read keystore password from environment (never pass password on CLI) |
-| `--allow-manual-serial S` | Override hardware serial (prints a warning) |
+| `--keystore PATH` | Keystore directory |
+| `--password-env NAME` | Keystore password from environment |
+| `--allow-manual-serial S` | Override hardware serial (warning) |
 | `--yes` | Overwrite without confirm |
 
 Exit codes: `0` ok, `1` error, `2` cancelled, `3` no eligible volume/serial.
-
-## Defaults template
-
-`searchclient-auth-token.defaults.json` is copied next to the EXE (and under
-`data\`). Missing keys fall back to built-in ASCII samples.

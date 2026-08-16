@@ -49,6 +49,91 @@ using BioPtr = std::unique_ptr<BIO, BioDeleter>;
 using PkeyPtr = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
 using PkeyCtxPtr = std::unique_ptr<EVP_PKEY_CTX, PkeyCtxDeleter>;
 
+constexpr char kB64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string Base64Encode(std::string_view input)
+{
+    std::string out;
+    out.reserve(((input.size() + 2) / 3) * 4);
+    std::size_t i = 0;
+    while (i + 2 < input.size()) {
+        const unsigned triple =
+            (static_cast<unsigned>(static_cast<unsigned char>(input[i])) << 16) |
+            (static_cast<unsigned>(static_cast<unsigned char>(input[i + 1])) << 8) |
+            static_cast<unsigned>(static_cast<unsigned char>(input[i + 2]));
+        out.push_back(kB64[(triple >> 18) & 63]);
+        out.push_back(kB64[(triple >> 12) & 63]);
+        out.push_back(kB64[(triple >> 6) & 63]);
+        out.push_back(kB64[triple & 63]);
+        i += 3;
+    }
+    if (i < input.size()) {
+        unsigned triple =
+            static_cast<unsigned>(static_cast<unsigned char>(input[i])) << 16;
+        out.push_back(kB64[(triple >> 18) & 63]);
+        if (i + 1 < input.size()) {
+            triple |= static_cast<unsigned>(
+                          static_cast<unsigned char>(input[i + 1]))
+                << 8;
+            out.push_back(kB64[(triple >> 12) & 63]);
+            out.push_back(kB64[(triple >> 6) & 63]);
+            out.push_back('=');
+        } else {
+            out.push_back(kB64[(triple >> 12) & 63]);
+            out.push_back('=');
+            out.push_back('=');
+        }
+    }
+    return out;
+}
+
+int B64Value(char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 26;
+    }
+    if (c >= '0' && c <= '9') {
+        return c - '0' + 52;
+    }
+    if (c == '+') {
+        return 62;
+    }
+    if (c == '/') {
+        return 63;
+    }
+    return -1;
+}
+
+std::string Base64Decode(std::string_view input)
+{
+    std::string out;
+    int val = 0;
+    int valb = -8;
+    for (const char c : input) {
+        if (c == '=' || c == '\r' || c == '\n' || c == ' ') {
+            if (c == '=') {
+                break;
+            }
+            continue;
+        }
+        const int d = B64Value(c);
+        if (d < 0) {
+            continue;
+        }
+        val = (val << 6) + d;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
 [[noreturn]] void ThrowOpenSsl(const char* what)
 {
     char buffer[256]{};
@@ -272,8 +357,10 @@ void GenerateKeyPair(const KeystorePaths& paths, std::string_view password)
         {"private_protection", "PKCS8-AES-256-CBC"},
         {"public_file", "public.pem"},
         {"private_file", "private.enc.pem"},
+        {"signature_alg", kSignatureAlg},
         {"note",
-         "RSA-2048 keystore; token signature.alg remains none until rollout"},
+         "RSA-2048 keystore; tokens use RS256 over identity message; "
+         "server verifies"},
     };
     WriteTextFile(paths.meta, meta.dump(2));
 }
@@ -298,21 +385,134 @@ std::string UnlockPrivateKey(
     return PrivatePemPlainFromKey(key.get());
 }
 
-StubSignature SignTokenPayload(std::string_view /*canonical_payload_utf8*/)
+TokenSignature SignTokenPayload(
+    std::string_view identity_message_utf8,
+    std::string_view private_pem_plaintext)
 {
-    StubSignature signature;
-    signature.alg = "none";
-    signature.encoding = "base64";
-    signature.value.clear();
-    return signature;
+    auto key = LoadPrivatePem(private_pem_plaintext, {}, false);
+    if (RsaBits(key.get()) != kRsaBits) {
+        throw std::runtime_error("signing key is not RSA-2048");
+    }
+
+    struct MdCtxDeleter {
+        void operator()(EVP_MD_CTX* ctx) const
+        {
+            if (ctx) {
+                EVP_MD_CTX_free(ctx);
+            }
+        }
+    };
+    std::unique_ptr<EVP_MD_CTX, MdCtxDeleter> ctx(EVP_MD_CTX_new());
+    if (!ctx) {
+        ThrowOpenSsl("EVP_MD_CTX_new failed");
+    }
+    if (EVP_DigestSignInit(
+            ctx.get(), nullptr, EVP_sha256(), nullptr, key.get()) != 1)
+    {
+        ThrowOpenSsl("EVP_DigestSignInit failed");
+    }
+    if (EVP_DigestSignUpdate(
+            ctx.get(),
+            reinterpret_cast<const unsigned char*>(identity_message_utf8.data()),
+            identity_message_utf8.size()) != 1)
+    {
+        ThrowOpenSsl("EVP_DigestSignUpdate failed");
+    }
+    std::size_t sig_len = 0;
+    if (EVP_DigestSignFinal(ctx.get(), nullptr, &sig_len) != 1) {
+        ThrowOpenSsl("EVP_DigestSignFinal(size) failed");
+    }
+    std::string signature(sig_len, '\0');
+    if (EVP_DigestSignFinal(
+            ctx.get(),
+            reinterpret_cast<unsigned char*>(signature.data()),
+            &sig_len) != 1)
+    {
+        ThrowOpenSsl("EVP_DigestSignFinal failed");
+    }
+    signature.resize(sig_len);
+
+    TokenSignature out;
+    out.alg = kSignatureAlg;
+    out.encoding = "base64";
+    out.value = Base64Encode(signature);
+    return out;
 }
 
 bool VerifyTokenSignature(
-    std::string_view alg,
-    std::string_view /*signature_value*/,
-    std::string_view /*canonical_payload_utf8*/)
+    std::string_view identity_message_utf8,
+    std::string_view signature_base64,
+    std::string_view public_pem)
 {
-    return alg.empty() || alg == "none";
+    if (signature_base64.empty() || public_pem.empty()) {
+        return false;
+    }
+
+    BioPtr bio(BIO_new_mem_buf(public_pem.data(), static_cast<int>(public_pem.size())));
+    if (!bio) {
+        return false;
+    }
+    EVP_PKEY* raw = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
+    if (!raw) {
+        return false;
+    }
+    PkeyPtr key(raw);
+
+    const std::string decoded = Base64Decode(signature_base64);
+    if (decoded.empty()) {
+        return false;
+    }
+
+    struct MdCtxDeleter {
+        void operator()(EVP_MD_CTX* ctx) const
+        {
+            if (ctx) {
+                EVP_MD_CTX_free(ctx);
+            }
+        }
+    };
+    std::unique_ptr<EVP_MD_CTX, MdCtxDeleter> ctx(EVP_MD_CTX_new());
+    if (!ctx) {
+        return false;
+    }
+    if (EVP_DigestVerifyInit(
+            ctx.get(), nullptr, EVP_sha256(), nullptr, key.get()) != 1)
+    {
+        return false;
+    }
+    if (EVP_DigestVerifyUpdate(
+            ctx.get(),
+            reinterpret_cast<const unsigned char*>(identity_message_utf8.data()),
+            identity_message_utf8.size()) != 1)
+    {
+        return false;
+    }
+    return EVP_DigestVerifyFinal(
+               ctx.get(),
+               reinterpret_cast<const unsigned char*>(decoded.data()),
+               decoded.size()) == 1;
+}
+
+void ExportPublicKey(
+    const KeystorePaths& paths,
+    const std::filesystem::path& destination)
+{
+    if (!std::filesystem::is_regular_file(paths.public_key)) {
+        throw std::runtime_error(
+            "public key missing: " + paths.public_key.string());
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(destination.parent_path(), ec);
+    std::filesystem::copy_file(
+        paths.public_key,
+        destination,
+        std::filesystem::copy_options::overwrite_existing,
+        ec);
+    if (ec) {
+        throw std::runtime_error(
+            "cannot export public key to " + destination.string() + ": " +
+            ec.message());
+    }
 }
 
 } // namespace token_issuer

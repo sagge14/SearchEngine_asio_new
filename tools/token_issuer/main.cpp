@@ -2,12 +2,14 @@
 #include "TokenAscii.hpp"
 #include "TokenDefaults.hpp"
 #include "TokenDocument.hpp"
+#include "IdentitySigning.hpp"
 #include "VolumeSerial.hpp"
 
 #include <Windows.h>
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -157,6 +159,8 @@ void PrintUsage()
         L"\n"
         L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
         L"[--password-env NAME]\n"
+        L"  SearchClientTokenIssuer --export-public <file-or-dir> "
+        L"[--keystore path]\n"
         L"\n"
         L"Non-interactive issue:\n"
         L"  SearchClientTokenIssuer --drive E: --name \"Ivanov I.I.\" "
@@ -166,7 +170,7 @@ void PrintUsage()
         L"\n"
         L"Token string fields must be printable ASCII only (no Cyrillic).\n"
         L"Keystore: RSA-2048; private key encrypted PKCS#8 AES-256-CBC.\n"
-        L"Token signature.alg is still \"none\" in stage 1.\n"
+        L"Tokens: format_version 2, signature.alg RS256 (server verifies).\n"
         L"\n"
         L"Exit codes: 0 ok, 1 error, 2 cancelled, 3 no eligible volume/serial\n");
 }
@@ -318,7 +322,7 @@ std::string ResolvePassword(
     return Utf8(ReadPasswordLine());
 }
 
-void EnsureKeystore(
+std::string EnsureKeystore(
     const token_issuer::KeystorePaths& paths,
     const std::vector<std::wstring>& args)
 {
@@ -331,11 +335,11 @@ void EnsureKeystore(
         WriteOut(L"Keystore created at: ");
         WriteOut(paths.root.wstring());
         WriteOut(L"\n");
-        return;
+        return token_issuer::UnlockPrivateKey(paths, password);
     }
 
     const std::string password = ResolvePassword(args, false);
-    (void)token_issuer::UnlockPrivateKey(paths, password);
+    return token_issuer::UnlockPrivateKey(paths, password);
 }
 
 int RunInitKeystore(
@@ -348,11 +352,30 @@ int RunInitKeystore(
         WriteErr(L"\nRefuse to overwrite. Delete the folder first.\n");
         return kExitError;
     }
-    EnsureKeystore(keystore, args);
+    (void)EnsureKeystore(keystore, args);
     WriteOut(L"public:  ");
     WriteOut(keystore.public_key.wstring());
     WriteOut(L"\nprivate: ");
     WriteOut(keystore.private_enc.wstring());
+    WriteOut(L"\n");
+    return kExitOk;
+}
+
+int RunExportPublic(
+    const token_issuer::KeystorePaths& keystore,
+    const fs::path& destination_arg)
+{
+    if (!token_issuer::KeystoreExists(keystore)) {
+        throw std::runtime_error(
+            "keystore not found; run --init-keystore first");
+    }
+    fs::path destination = destination_arg;
+    if (fs::is_directory(destination)) {
+        destination /= "issuer-public.pem";
+    }
+    token_issuer::ExportPublicKey(keystore, destination);
+    WriteOut(L"Exported public key to: ");
+    WriteOut(destination.wstring());
     WriteOut(L"\n");
     return kExitOk;
 }
@@ -388,26 +411,62 @@ void PrintRegisterHint(const fs::path& token_path)
     WriteOut(token_path.wstring());
     WriteOut(
         L"\"\n"
-        L"  or scripts\\Register-AuthClientFromToken.ps1\n");
+        L"  or scripts\\Register-AuthClientFromToken.ps1\n"
+        L"Put issuer-public.pem next to auth_clients.sqlite "
+        L"(--export-public <data-dir>).\n");
+}
+
+token_issuer::TokenSignature SignFields(
+    const TokenFields& fields,
+    std::string_view private_pem,
+    const token_issuer::KeystorePaths& keystore)
+{
+    using token_issuer::TrimCopy;
+    using token_issuer::NormalizeFlashSerial;
+    const auto message = token_issuer::BuildIdentitySigningMessage(
+        TrimCopy(fields.client_id),
+        TrimCopy(fields.client_name),
+        NormalizeFlashSerial(fields.flash_serial));
+    auto signature =
+        token_issuer::SignTokenPayload(message, private_pem);
+
+    std::ifstream pub(keystore.public_key, std::ios::binary);
+    if (!pub) {
+        throw std::runtime_error(
+            "cannot read public key for self-check: " +
+            keystore.public_key.string());
+    }
+    const std::string public_pem(
+        (std::istreambuf_iterator<char>(pub)),
+        std::istreambuf_iterator<char>());
+    if (!token_issuer::VerifyTokenSignature(
+            message, signature.value, public_pem))
+    {
+        throw std::runtime_error("token signature self-check failed");
+    }
+    return signature;
 }
 
 int WriteWithConfirm(
     const fs::path& token_path,
     const TokenFields& fields,
-    bool yes)
+    bool yes,
+    std::string_view private_pem,
+    const token_issuer::KeystorePaths& keystore)
 {
-    (void)token_issuer::SignTokenPayload(
-        token_issuer::PreviewTokenJson(fields));
+    const auto signature = SignFields(fields, private_pem, keystore);
+
+    WriteOut(L"\nPreview:\n");
+    WriteOut(Wide(token_issuer::PreviewTokenJson(fields, signature)));
+    WriteOut(L"\n");
 
     if (fs::exists(token_path) && !yes) {
-        if (!PromptYesNo(
-                L"Token file exists. Overwrite?", false))
-        {
+        if (!PromptYesNo(L"Token file exists. Overwrite?", false)) {
             return kExitCancelled;
         }
     }
 
-    token_issuer::WriteTokenFile(token_path, fields);
+    token_issuer::WriteTokenFile(token_path, fields, signature);
     PrintRegisterHint(token_path);
     return kExitOk;
 }
@@ -417,7 +476,7 @@ int RunInteractive(
     const nlohmann::json& defaults,
     const token_issuer::KeystorePaths& keystore)
 {
-    EnsureKeystore(keystore, args);
+    const std::string private_pem = EnsureKeystore(keystore, args);
 
     const auto volumes = token_issuer::ListEligibleRemovableVolumes();
     if (volumes.empty()) {
@@ -480,10 +539,6 @@ int RunInteractive(
         fields.issued_at = token_issuer::NowUtcIso8601();
     }
 
-    WriteOut(L"\nPreview:\n");
-    WriteOut(Wide(token_issuer::PreviewTokenJson(fields)));
-    WriteOut(L"\n");
-
     if (!PromptYesNo(L"Write token to volume root?", true)) {
         return kExitCancelled;
     }
@@ -492,7 +547,8 @@ int RunInteractive(
         fs::path(Wide(volume.drive_letter + "\\")) /
         token_issuer::kTokenFileName;
     const bool yes = HasFlag(args, L"--yes");
-    return WriteWithConfirm(token_path, fields, yes);
+    return WriteWithConfirm(
+        token_path, fields, yes, private_pem, keystore);
 }
 
 int RunNonInteractive(
@@ -508,7 +564,7 @@ int RunNonInteractive(
             "non-interactive mode requires --drive --name --id");
     }
 
-    EnsureKeystore(keystore, args);
+    const std::string private_pem = EnsureKeystore(keystore, args);
 
     TokenFields fields = FieldsFromDefaults(defaults);
     fields.client_name = RequireAsciiField("client_name", Utf8(*name_opt));
@@ -554,10 +610,6 @@ int RunNonInteractive(
         fields.issued_at = token_issuer::NowUtcIso8601();
     }
 
-    WriteOut(L"Preview:\n");
-    WriteOut(Wide(token_issuer::PreviewTokenJson(fields)));
-    WriteOut(L"\n");
-
     const std::string drive = token_issuer::NormalizeDriveLetter(
         Utf8(*drive_opt));
     const fs::path token_path =
@@ -573,7 +625,8 @@ int RunNonInteractive(
         }
     }
 
-    return WriteWithConfirm(token_path, fields, true);
+    return WriteWithConfirm(
+        token_path, fields, true, private_pem, keystore);
 }
 
 } // namespace
@@ -620,6 +673,9 @@ int wmain(int argc, wchar_t* argv[])
 
         if (HasFlag(args, L"--init-keystore")) {
             return RunInitKeystore(args, keystore);
+        }
+        if (const auto export_to = Option(args, L"--export-public")) {
+            return RunExportPublic(keystore, *export_to);
         }
 
         const auto defaults = token_issuer::LoadTokenDefaults(

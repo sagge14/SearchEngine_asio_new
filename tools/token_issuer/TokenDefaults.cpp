@@ -110,7 +110,7 @@ nlohmann::json BuiltInTokenDefaults()
         {"expires_at", nullptr},
         {"issuer", "auth-server"},
         {"signature",
-         {{"alg", "none"}, {"encoding", "base64"}, {"value", ""}}},
+         {{"alg", "RS256"}, {"encoding", "base64"}, {"value", ""}}},
         {"notes", ""},
     };
 }

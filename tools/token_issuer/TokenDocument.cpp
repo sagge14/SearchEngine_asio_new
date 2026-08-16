@@ -1,4 +1,5 @@
 #include "TokenDocument.hpp"
+#include "CryptoStub.hpp"
 #include "TokenAscii.hpp"
 #include "VolumeSerial.hpp"
 
@@ -64,9 +65,17 @@ void ValidateTokenFields(const TokenFields& fields)
     }
 }
 
-nlohmann::json BuildTokenDocument(const TokenFields& fields)
+nlohmann::json BuildTokenDocument(
+    const TokenFields& fields,
+    const TokenSignature& signature)
 {
     ValidateTokenFields(fields);
+    if (signature.alg != kSignatureAlg || signature.encoding != "base64" ||
+        signature.value.empty())
+    {
+        throw std::runtime_error(
+            "token requires RS256 base64 signature value");
+    }
 
     nlohmann::json document = {
         {"format", kTokenFormat},
@@ -79,7 +88,9 @@ nlohmann::json BuildTokenDocument(const TokenFields& fields)
         {"expires_at", fields.expires_at},
         {"issuer", fields.issuer},
         {"signature",
-         {{"alg", "none"}, {"encoding", "base64"}, {"value", ""}}},
+         {{"alg", signature.alg},
+          {"encoding", signature.encoding},
+          {"value", signature.value}}},
         {"notes", fields.notes},
     };
 
@@ -89,16 +100,19 @@ nlohmann::json BuildTokenDocument(const TokenFields& fields)
     return document;
 }
 
-std::string PreviewTokenJson(const TokenFields& fields)
+std::string PreviewTokenJson(
+    const TokenFields& fields,
+    const TokenSignature& signature)
 {
-    return BuildTokenDocument(fields).dump(2);
+    return BuildTokenDocument(fields, signature).dump(2);
 }
 
 void WriteTokenFile(
     const std::filesystem::path& path,
-    const TokenFields& fields)
+    const TokenFields& fields,
+    const TokenSignature& signature)
 {
-    const nlohmann::json document = BuildTokenDocument(fields);
+    const nlohmann::json document = BuildTokenDocument(fields, signature);
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) {
         throw std::runtime_error("cannot write token file: " + path.string());
