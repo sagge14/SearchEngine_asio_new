@@ -4,6 +4,7 @@
 
 #include "GetTelegaAttachments.h"
 
+#include "Commands/GetJsonTelega/AutoPadSource.h"
 #include "MyUtils/Encoding.h"
 #include "SQLite/SQLiteConnectionManager.h"
 #include "nlohmann/json.hpp"
@@ -70,6 +71,21 @@ command_execution::CommandResult GetTelegaAttachmentsCmd::executeResult(
 
     const int telegramId = static_cast<int>(wireId);
     const auto telegramType = static_cast<Telega::TYPE>(wireType);
+
+    // Empty base dir: source intentionally disabled — normal empty attachment list.
+    if (!Telega::isSourceConfigured(telegramType)) {
+        const nh::json empty = nh::json::array();
+        const std::string serialized = empty.dump();
+        return command_execution::CommandResult::success(
+            {serialized.begin(), serialized.end()});
+    }
+    try {
+        Telega::ensureBasesLoaded(telegramType);
+    }
+    catch (const Telega::SourceError& error) {
+        return mapAutoPadSourceError(error);
+    }
+
     const auto* bases = telegramType == Telega::TYPE::VHOD
         ? &Telega::b_prm
         : &Telega::b_prd;

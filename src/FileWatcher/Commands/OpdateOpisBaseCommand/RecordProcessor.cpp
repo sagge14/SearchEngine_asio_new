@@ -54,6 +54,13 @@ RecordProcessor::RecordProcessor(Telega::TYPE type, int num, bool need_update_kr
         + L", num=" + std::to_wstring(num_)
         + L", need_update_kr=" + (need_update_kr ? L"true" : L"false"));
 
+    if (getSrcDB().empty()) {
+        LogFile::getRecord().write(std::string(
+            "[RecordProcessor] Source DB path empty (AutoPad source disabled); skipping"));
+        empty_ = true;
+        return;
+    }
+
     auto conn = SQLiteConnectionManager::instance().getConnection(getSrcDB());
     std::string sql_qry = "SELECT * FROM ARCHIVE WHERE `Index` = " + std::to_string(num_);
     conn->execSql(sql_qry);

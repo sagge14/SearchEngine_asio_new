@@ -37,6 +37,11 @@ public:
 
         // ── создаём RecordProcessor ───────────────
         Telega::TYPE type    = Telega::getTypeFromDir(fs_path);
+        if (!Telega::isSourceConfigured(type)) {
+            LogFile::getWatcher().write(
+                L"[opis_command] Skipped (AutoPad source disabled): " + path);
+            return;
+        }
         int          num     = std::atoi(Telega::getNumFromFileName(path).c_str());
         bool need_kr_update  = (type == Telega::TYPE::VHOD);
 

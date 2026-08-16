@@ -130,6 +130,11 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
         *client_id,
         *client_name,
         *flash_serial};
+    if (auto config_error = verifier_.configurationError()) {
+        return CommandResult::failure(
+            ErrorCode::ConfigurationError,
+            std::move(*config_error));
+    }
     if (!verifier_.verify(identity, signature)) {
         return CommandResult::failure(
             ErrorCode::AuthSignatureInvalid,

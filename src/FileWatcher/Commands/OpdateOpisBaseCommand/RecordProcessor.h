@@ -22,6 +22,9 @@ public:
             const std::string& dstDb,    const std::string& dstTableVh,
             const std::string& dstTableIsh);
 
+    [[nodiscard]] static const std::string& defaultSrcDbVh() noexcept { return srcDbVh_; }
+    [[nodiscard]] static const std::string& defaultSrcDbIsh() noexcept { return srcDbIsh_; }
+
     std::string getPodrazd();
     bool needUpdate();
 

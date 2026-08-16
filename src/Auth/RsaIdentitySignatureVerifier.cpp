@@ -107,10 +107,35 @@ PkeyPtr LoadPublicPemFile(const std::filesystem::path& path, std::string& error)
     }
     EVP_PKEY* raw = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
     if (!raw) {
-        error = "PEM_read_bio_PUBKEY failed for issuer public key";
+        error = "PEM_read_bio_PUBKEY failed for issuer public key: "
+            + path.string();
         return {};
     }
     return PkeyPtr(raw);
+}
+
+bool EnsurePublicKeyLoaded(
+    std::shared_ptr<void>& public_key,
+    std::string& load_error,
+    const std::filesystem::path& public_pem_path)
+{
+    if (public_key) {
+        return true;
+    }
+    std::string error;
+    auto loaded = LoadPublicPemFile(public_pem_path, error);
+    if (!loaded) {
+        load_error = std::move(error);
+        return false;
+    }
+    public_key = std::shared_ptr<void>(
+        loaded.release(),
+        [](void* p) {
+            if (p) {
+                EVP_PKEY_free(static_cast<EVP_PKEY*>(p));
+            }
+        });
+    return true;
 }
 
 } // namespace
@@ -127,6 +152,15 @@ bool RsaIdentitySignatureVerifier::publicKeyLoaded() const noexcept
     return static_cast<bool>(public_key_);
 }
 
+std::optional<std::string> RsaIdentitySignatureVerifier::configurationError() const
+{
+    std::lock_guard lock(mutex_);
+    if (EnsurePublicKeyLoaded(public_key_, load_error_, public_pem_path_)) {
+        return std::nullopt;
+    }
+    return load_error_;
+}
+
 bool RsaIdentitySignatureVerifier::verify(
     const AuthIdentity& identity,
     std::string_view signature_base64) const
@@ -138,20 +172,8 @@ bool RsaIdentitySignatureVerifier::verify(
     std::shared_ptr<void> key_holder;
     {
         std::lock_guard lock(mutex_);
-        if (!public_key_) {
-            std::string error;
-            auto loaded = LoadPublicPemFile(public_pem_path_, error);
-            if (!loaded) {
-                load_error_ = std::move(error);
-                return false;
-            }
-            public_key_ = std::shared_ptr<void>(
-                loaded.release(),
-                [](void* p) {
-                    if (p) {
-                        EVP_PKEY_free(static_cast<EVP_PKEY*>(p));
-                    }
-                });
+        if (!EnsurePublicKeyLoaded(public_key_, load_error_, public_pem_path_)) {
+            return false;
         }
         key_holder = public_key_;
     }

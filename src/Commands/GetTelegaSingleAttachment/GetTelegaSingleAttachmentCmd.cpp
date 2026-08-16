@@ -4,6 +4,7 @@
 
 #include "GetTelegaSingleAttachmentCmd.h"
 
+#include "Commands/GetJsonTelega/AutoPadSource.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "MyUtils/Encoding.h"
 #include "SQLite/SQLiteConnectionManager.h"
@@ -86,6 +87,20 @@ command_execution::CommandResult GetTelegaSingleAttachmentCmd::executeResult(
 
     const int telegramId = static_cast<int>(wireId);
     const auto telegramType = static_cast<Telega::TYPE>(wireType);
+
+    // Empty base dir: source intentionally disabled — no attachment data here.
+    if (!Telega::isSourceConfigured(telegramType)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::AttachmentNotFound,
+            "telegram has no attachments");
+    }
+    try {
+        Telega::ensureBasesLoaded(telegramType);
+    }
+    catch (const Telega::SourceError& error) {
+        return mapAutoPadSourceError(error);
+    }
+
     const auto* bases = telegramType == Telega::TYPE::VHOD
         ? &Telega::b_prm
         : &Telega::b_prd;
