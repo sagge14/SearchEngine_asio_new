@@ -243,4 +243,9 @@ Telega::Telega(const std::filesystem::path& _p, float _rel, bool _deleted) : Tel
 
     if(!res.empty())
         initTelega(res.front());
+
+    // Карточка из автопада не найдена (или не разобралась) — номера остаются
+    // пустыми/нулями на клиенте, в «Краткое содержание» пишем пояснение.
+    if (num.empty())
+        kr = "Нет учётных данных в базах автопад";
 }
