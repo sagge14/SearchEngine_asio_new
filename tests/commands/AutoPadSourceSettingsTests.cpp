@@ -184,25 +184,55 @@ TEST_F(AutoPadSourceTest, GetBasesDisabledDoesNotTouchFilesystem)
         Telega::SourceAvailability::Disabled);
 }
 
-TEST_F(AutoPadSourceTest, SqlVhDisabledReturnsDataSourceDisabled)
+TEST_F(AutoPadSourceTest, SqlVhDisabledReturnsEmptySuccess)
 {
     Telega::prm_base_dir.clear();
     GetJsonTelegaVhCmd command;
     const auto result = command.executeResult(bytesOf("`index` = 1"));
-    ASSERT_TRUE(result.failed());
-    EXPECT_EQ(result.error, ErrorCode::DataSourceDisabled);
-    EXPECT_EQ(result.diagnostic, "PRM data source is disabled");
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto payload = nh::json::parse(
+        std::string(result.payload.begin(), result.payload.end()));
+    ASSERT_TRUE(payload.is_array());
+    EXPECT_TRUE(payload.empty());
     EXPECT_TRUE(Telega::b_prm.empty());
 }
 
-TEST_F(AutoPadSourceTest, SqlIshDisabledReturnsDataSourceDisabled)
+TEST_F(AutoPadSourceTest, SqlIshDisabledReturnsEmptySuccess)
 {
     Telega::prd_base_dir.clear();
     GetJsonTelegaIshCmd command;
     const auto result = command.executeResult(bytesOf("`index` = 1"));
-    ASSERT_TRUE(result.failed());
-    EXPECT_EQ(result.error, ErrorCode::DataSourceDisabled);
-    EXPECT_EQ(result.diagnostic, "PRD data source is disabled");
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto payload = nh::json::parse(
+        std::string(result.payload.begin(), result.payload.end()));
+    ASSERT_TRUE(payload.is_array());
+    EXPECT_TRUE(payload.empty());
+    EXPECT_TRUE(Telega::b_prd.empty());
+}
+
+TEST_F(AutoPadSourceTest, SqlBothDisabledReturnEmptyWithoutTypedError)
+{
+    Telega::prm_base_dir.clear();
+    Telega::prd_base_dir.clear();
+
+    GetJsonTelegaVhCmd vh;
+    GetJsonTelegaIshCmd ish;
+    const auto vhResult = vh.executeResult(bytesOf("`index` = 1"));
+    const auto ishResult = ish.executeResult(bytesOf("`index` = 1"));
+
+    ASSERT_TRUE(vhResult.succeeded()) << vhResult.diagnostic;
+    ASSERT_TRUE(ishResult.succeeded()) << ishResult.diagnostic;
+    EXPECT_FALSE(vhResult.error.has_value());
+    EXPECT_FALSE(ishResult.error.has_value());
+
+    const auto vhPayload = nh::json::parse(
+        std::string(vhResult.payload.begin(), vhResult.payload.end()));
+    const auto ishPayload = nh::json::parse(
+        std::string(ishResult.payload.begin(), ishResult.payload.end()));
+    EXPECT_TRUE(vhPayload.is_array());
+    EXPECT_TRUE(vhPayload.empty());
+    EXPECT_TRUE(ishPayload.is_array());
+    EXPECT_TRUE(ishPayload.empty());
 }
 
 TEST_F(AutoPadSourceTest, SqlVhMissingDirReturnsDataSourceUnavailable)
@@ -322,11 +352,15 @@ TEST_F(AutoPadSourceTest, HardcodedBasesNotUsedWhenPrmDisabled)
         prdDir_.string() + "\\ARCHIVE.DB3");
 }
 
-TEST_F(AutoPadSourceTest, PdtvDisabledReturnsDataSourceDisabled)
+TEST_F(AutoPadSourceTest, PdtvDisabledReturnsEmptySuccess)
 {
     Telega::prd_base_dir.clear();
     GetIshTelegaPdtvCommand command;
     const auto result = command.executeResult(bytesOf("1"));
-    ASSERT_TRUE(result.failed());
-    EXPECT_EQ(result.error, ErrorCode::DataSourceDisabled);
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto payload = nh::json::parse(
+        std::string(result.payload.begin(), result.payload.end()));
+    ASSERT_TRUE(payload.is_array());
+    EXPECT_TRUE(payload.empty());
+    EXPECT_TRUE(Telega::b_prd.empty());
 }
