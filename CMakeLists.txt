@@ -411,7 +411,7 @@ endif()
 # ---------------------------------------------------------------------------
 # OpenSSL (FindOpenSSL chooses MDd/MD and x86/x64 paths per configuration)
 # ---------------------------------------------------------------------------
-if(BUILD_SEARCHENGINE)
+if(BUILD_SEARCHENGINE OR BUILD_TOKEN_ISSUER)
     set(_default_openssl_root "")
     if(WIN32)
         if(
@@ -663,6 +663,31 @@ if(BUILD_TOKEN_ISSUER)
             oleaut32
             wbemuuid
     )
+    # Prefer arch-matched OpenSSL VC MD libs. Stock FindOpenSSL may cache a
+    # mismatched Release import lib (e.g. arm64) from another OpenSSL prefix.
+    if(
+            WIN32
+            AND SEARCHENGINE_OPENSSL_ROOT
+            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
+    )
+        target_include_directories(
+                SearchClientTokenIssuer
+                PRIVATE
+                "${SEARCHENGINE_OPENSSL_ROOT}/include"
+        )
+        target_link_libraries(
+                SearchClientTokenIssuer
+                PRIVATE
+                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib>"
+                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib>"
+        )
+    else()
+        target_link_libraries(
+                SearchClientTokenIssuer
+                PRIVATE
+                OpenSSL::Crypto
+        )
+    endif()
     target_compile_definitions(
             SearchClientTokenIssuer
             PRIVATE

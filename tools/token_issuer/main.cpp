@@ -155,15 +155,18 @@ void PrintUsage()
         L"Interactive (default):\n"
         L"  SearchClientTokenIssuer\n"
         L"\n"
-        L"Non-interactive:\n"
+        L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
+        L"[--password-env NAME]\n"
+        L"\n"
+        L"Non-interactive issue:\n"
         L"  SearchClientTokenIssuer --drive E: --name \"Ivanov I.I.\" "
         L"--id C-001 [--defaults path] [--yes]\n"
         L"    [--keystore path] [--password-env TOKEN_ISSUER_PASSWORD]\n"
         L"    [--allow-manual-serial SERIAL] [--issuer ...] [--notes ...]\n"
         L"\n"
         L"Token string fields must be printable ASCII only (no Cyrillic).\n"
-        L"Crypto is stub; production RSA later. signature.alg is always "
-        L"\"none\" in stage 1.\n"
+        L"Keystore: RSA-2048; private key encrypted PKCS#8 AES-256-CBC.\n"
+        L"Token signature.alg is still \"none\" in stage 1.\n"
         L"\n"
         L"Exit codes: 0 ok, 1 error, 2 cancelled, 3 no eligible volume/serial\n");
 }
@@ -321,8 +324,8 @@ void EnsureKeystore(
 {
     if (!token_issuer::KeystoreExists(paths)) {
         WriteOut(
-            L"No stub keystore found. Creating key pair "
-            L"(crypto is stub; production RSA later)...\n");
+            L"No RSA keystore found. Generating RSA-2048 key pair "
+            L"(private key encrypted with your password)...\n");
         const std::string password = ResolvePassword(args, true);
         token_issuer::GenerateKeyPair(paths, password);
         WriteOut(L"Keystore created at: ");
@@ -333,6 +336,25 @@ void EnsureKeystore(
 
     const std::string password = ResolvePassword(args, false);
     (void)token_issuer::UnlockPrivateKey(paths, password);
+}
+
+int RunInitKeystore(
+    const std::vector<std::wstring>& args,
+    const token_issuer::KeystorePaths& keystore)
+{
+    if (token_issuer::KeystoreExists(keystore)) {
+        WriteErr(L"Keystore already exists: ");
+        WriteErr(keystore.root.wstring());
+        WriteErr(L"\nRefuse to overwrite. Delete the folder first.\n");
+        return kExitError;
+    }
+    EnsureKeystore(keystore, args);
+    WriteOut(L"public:  ");
+    WriteOut(keystore.public_key.wstring());
+    WriteOut(L"\nprivate: ");
+    WriteOut(keystore.private_enc.wstring());
+    WriteOut(L"\n");
+    return kExitOk;
 }
 
 TokenFields FieldsFromDefaults(const nlohmann::json& defaults)
@@ -584,6 +606,7 @@ int wmain(int argc, wchar_t* argv[])
         } else {
             const fs::path beside = ExeDirectory() / "keys";
             if (fs::is_directory(beside) ||
+                fs::is_regular_file(beside / "private.enc.pem") ||
                 fs::is_regular_file(beside / "private.stub.enc"))
             {
                 keystore_root = beside;
@@ -592,10 +615,15 @@ int wmain(int argc, wchar_t* argv[])
             }
         }
 
-        const auto defaults = token_issuer::LoadTokenDefaults(
-            ExeDirectory(), defaults_path);
         const auto keystore =
             token_issuer::ResolveKeystorePaths(keystore_root);
+
+        if (HasFlag(args, L"--init-keystore")) {
+            return RunInitKeystore(args, keystore);
+        }
+
+        const auto defaults = token_issuer::LoadTokenDefaults(
+            ExeDirectory(), defaults_path);
 
         const bool non_interactive =
             Option(args, L"--drive").has_value() ||

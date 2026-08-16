@@ -5,9 +5,10 @@ volume for SearchClient flash authentication.
 
 ## Stage 1 notes
 
-- **Crypto is stub; production RSA later.** Local keystore uses placeholder
-  keys and a fake `stub-v1` password blob. Token `signature.alg` is always
-  `"none"` so clients and `AuthDbTool` accept the file today.
+- **RSA-2048 keystore** is generated locally (`--init-keystore` or first issue).
+  Private key is stored as PKCS#8 encrypted with AES-256-CBC (`private.enc.pem`).
+  Default directory: `%ProgramData%\SearchClientTokenIssuer\keys\`.
+- **Token `signature.alg` is still `"none"`** until client/server rollout.
 - **Token string fields are printable ASCII only** (`client_name`, `client_id`,
   `issuer`, `notes`, …). Allowed extras: space `. , - _ ( ) / + # @ :`.
   Cyrillic and other non-ASCII values are rejected.
