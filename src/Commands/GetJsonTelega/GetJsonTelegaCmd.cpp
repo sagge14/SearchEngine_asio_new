@@ -52,10 +52,11 @@ command_execution::CommandResult GetJsonTelegaCmd::getSqlJsonTelegaResult(
     const std::vector<uint8_t>& data,
     Telega::TYPE type)
 {
+    // Empty prm_base_dir / prd_base_dir means the source is intentionally
+    // disabled on this server. Clients fan out the same SQL query to every
+    // server and must get a normal empty result, not a typed error.
     if (!Telega::isSourceConfigured(type)) {
-        return command_execution::CommandResult::failure(
-            command_execution::ErrorCode::DataSourceDisabled,
-            Telega::disabledDiagnostic(type));
+        return jsonPayloadFromTelegi({});
     }
 
     try {

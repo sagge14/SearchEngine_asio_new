@@ -21,10 +21,11 @@ command_execution::CommandResult GetIshTelegaPdtvCommand::executeResult(
 {
     namespace nh = nlohmann;
 
+    // Empty prd_base_dir: PRD intentionally disabled — normal empty JSON array.
     if (!Telega::isSourceConfigured(Telega::TYPE::ISHOD)) {
-        return command_execution::CommandResult::failure(
-            command_execution::ErrorCode::DataSourceDisabled,
-            Telega::disabledDiagnostic(Telega::TYPE::ISHOD));
+        const std::string empty = "[]";
+        return command_execution::CommandResult::success(
+            {empty.begin(), empty.end()});
     }
 
     try {
