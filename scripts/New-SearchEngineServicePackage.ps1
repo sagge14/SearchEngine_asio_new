@@ -289,7 +289,10 @@ try {
     Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
         -Destination (Join-Path $stagingDirectory `
             'tools\searchclient-auth-token.defaults.json')
-    # OpenSSL runtime DLL for SearchClientTokenIssuer (RSA keystore / RS256).
+    # OpenSSL runtime DLL: SearchEngine.exe (auth verify) and TokenIssuer both
+    # import libcrypto dynamically. Ship it next to each EXE — the service runs
+    # from install\bin, tools stay in install\tools, and Windows does not search
+    # across those folders.
     $opensslDllName = if ($Architecture -eq 'x64') {
         'libcrypto-3-x64.dll'
     } else {
@@ -306,10 +309,13 @@ try {
         Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
         Select-Object -First 1
     if (-not $opensslDll) {
-        throw "OpenSSL DLL '$opensslDllName' was not found for TokenIssuer packaging."
+        throw "OpenSSL DLL '$opensslDllName' was not found for SearchEngine/TokenIssuer packaging."
     }
+    $opensslFileName = [IO.Path]::GetFileName($opensslDll)
     Copy-Item -LiteralPath $opensslDll `
-        -Destination (Join-Path $stagingDirectory ("tools\" + [IO.Path]::GetFileName($opensslDll)))
+        -Destination (Join-Path $stagingDirectory ("app\" + $opensslFileName))
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
     Copy-Item -LiteralPath $registerAuthScriptPath `
         -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $SettingsPath `
