@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 namespace auth
@@ -18,6 +19,8 @@ namespace auth
         [[nodiscard]] bool verify(
             const AuthIdentity& identity,
             std::string_view signature_base64) const override;
+
+        [[nodiscard]] std::optional<std::string> configurationError() const override;
 
         [[nodiscard]] const std::filesystem::path& publicPemPath() const noexcept
         {
