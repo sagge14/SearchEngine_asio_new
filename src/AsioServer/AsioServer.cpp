@@ -476,6 +476,20 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
+        // Session authorization gate: data commands require USER_REGISTRY
+        // (admin/legacy) or AUTHENTICATE_V1. Keep the TCP session open so the
+        // client can still authenticate on the same connection.
+        if (!isSessionBootstrapCommand(requestHeader.command) &&
+            !authenticated_)
+        {
+            co_await queueError(
+                command_execution::ErrorCode::AuthRequired,
+                "session is not authenticated",
+                false,
+                requestHeader.command);
+            co_return;
+        }
+
         if (requestHeader.command == COMMAND::GETBINFILE)
         {
             // answer содержит путь к файлу (в виде std::vector<BYTE>, но это строка пути)
@@ -550,8 +564,11 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
             else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
+                // Legacy/admin path: USER_REGISTRY authorizes the session
+                // without AuthClientStore / AUTHENTICATE_V1.
                 std::lock_guard<std::mutex> lock(user_name_mutex_);
                 userName_ = std::string(requestData.begin(), requestData.end());
+                authenticated_ = true;
                 std::string answer_str = "OK";
                 answer = std::vector<BYTE>(answer_str.begin(), answer_str.end());
             }

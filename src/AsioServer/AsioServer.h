@@ -157,6 +157,22 @@ namespace asio_server
         }
     }
 
+    /// Commands allowed before session authorization (USER_REGISTRY or AUTHENTICATE_V1).
+    [[nodiscard]] inline constexpr bool isSessionBootstrapCommand(
+        COMMAND command) noexcept
+    {
+        switch (command)
+        {
+            case COMMAND::NEGOTIATE_PROTOCOL_V1:
+            case COMMAND::USER_REGISTRY:
+            case COMMAND::AUTHENTICATE_V1:
+            case COMMAND::PING:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     [[nodiscard]] inline constexpr COMMAND legacyErrorCommand(
         command_execution::ErrorCode error) noexcept
     {
@@ -249,6 +265,7 @@ namespace asio_server
         std::string userName_ = "default_user";
         std::string clientId_;
         std::string flashSerial_;
+        /// Session gate: set by successful USER_REGISTRY (admin/legacy) or AUTHENTICATE_V1.
         bool authenticated_{false};
         std::string remoteIP_;
         mutable std::mutex user_name_mutex_;
