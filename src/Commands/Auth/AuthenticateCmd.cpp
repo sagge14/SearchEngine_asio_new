@@ -60,23 +60,41 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
     };
 
     const auto client_id = readRequiredString("client_id");
-    const auto client_name = readRequiredString("client_name");
-    const auto flash_serial = readRequiredString("flash_serial");
-    if (!client_id || !client_name || !flash_serial) {
+    if (!client_id) {
         return CommandResult::failure(
-            ErrorCode::InvalidRequest,
-            "AUTHENTICATE_V1 requires non-empty client_id, client_name, "
-            "flash_serial");
+            ErrorCode::AuthClientIdMissing,
+            "AUTHENTICATE_V1 client_id is missing or empty");
     }
 
-    std::string signature;
-    if (document.contains("signature")) {
-        if (!document.at("signature").is_string()) {
-            return CommandResult::failure(
-                ErrorCode::InvalidRequest,
-                "AUTHENTICATE_V1 signature must be a string");
-        }
-        signature = document.at("signature").get<std::string>();
+    const auto client_name = readRequiredString("client_name");
+    if (!client_name) {
+        return CommandResult::failure(
+            ErrorCode::AuthClientNameMissing,
+            "AUTHENTICATE_V1 client_name is missing or empty");
+    }
+
+    const auto flash_serial = readRequiredString("flash_serial");
+    if (!flash_serial) {
+        return CommandResult::failure(
+            ErrorCode::AuthFlashSerialMissing,
+            "AUTHENTICATE_V1 flash_serial is missing or empty");
+    }
+
+    if (!document.contains("signature")) {
+        return CommandResult::failure(
+            ErrorCode::AuthSignatureMissing,
+            "AUTHENTICATE_V1 signature is missing");
+    }
+    if (!document.at("signature").is_string()) {
+        return CommandResult::failure(
+            ErrorCode::InvalidRequest,
+            "AUTHENTICATE_V1 signature must be a string");
+    }
+    const auto signature = document.at("signature").get<std::string>();
+    if (signature.empty()) {
+        return CommandResult::failure(
+            ErrorCode::AuthSignatureMissing,
+            "AUTHENTICATE_V1 signature is empty");
     }
 
     std::optional<auth::AuthClientRecord> match;
@@ -84,20 +102,23 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
         match = store_.getClient(*client_id);
         if (!match) {
             return CommandResult::failure(
-                ErrorCode::AuthFailed,
-                "auth client_id not found");
+                ErrorCode::AuthClientIdNotFound,
+                "auth client_id not found: " + *client_id);
         }
         if (!match->enabled) {
             return CommandResult::failure(
                 ErrorCode::AuthClientDisabled,
-                "auth client is disabled");
+                "auth client is disabled: " + *client_id);
         }
-        if (match->client_name != *client_name ||
-            match->flash_serial != *flash_serial)
-        {
+        if (match->client_name != *client_name) {
             return CommandResult::failure(
-                ErrorCode::AuthFailed,
-                "auth identity mismatch");
+                ErrorCode::AuthClientNameMismatch,
+                "auth client_name mismatch for client_id: " + *client_id);
+        }
+        if (match->flash_serial != *flash_serial) {
+            return CommandResult::failure(
+                ErrorCode::AuthFlashSerialMismatch,
+                "auth flash_serial mismatch for client_id: " + *client_id);
         }
     } catch (const std::exception& ex) {
         return CommandResult::failure(
@@ -111,8 +132,8 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
         *flash_serial};
     if (!verifier_.verify(identity, signature)) {
         return CommandResult::failure(
-            ErrorCode::AuthFailed,
-            "auth signature rejected");
+            ErrorCode::AuthSignatureInvalid,
+            "auth signature rejected for client_id: " + *client_id);
     }
 
     nlohmann::json response{

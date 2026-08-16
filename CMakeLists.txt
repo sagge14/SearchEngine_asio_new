@@ -1023,6 +1023,8 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite/sqlite3.c"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetFile/GetFileCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/GetAttachmentsCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/Auth/AuthenticateCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Auth/AuthClientStore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"

@@ -173,6 +173,32 @@ namespace asio_server
         }
     }
 
+    /// Legacy USER_REGISTRY authorizes only the exact admin session name.
+    /// Any other payload must fail closed (AuthFailed + TCP close).
+    [[nodiscard]] inline bool isLegacyAdminUserRegistryPayload(
+        std::string_view payload) noexcept
+    {
+        return payload == "admin";
+    }
+
+    /// Session wire gate used by commandExec before any data handler runs.
+    struct SessionCommandGateDecision
+    {
+        bool allow_execute{false};
+        /// When allow_execute is false, AuthRequired must close the TCP session.
+        bool close_after_auth_required{true};
+    };
+
+    [[nodiscard]] inline constexpr SessionCommandGateDecision
+    evaluateSessionCommandGate(
+        COMMAND command,
+        bool authenticated) noexcept
+    {
+        if (isSessionBootstrapCommand(command) || authenticated)
+            return {true, true};
+        return {false, true};
+    }
+
     [[nodiscard]] inline constexpr COMMAND legacyErrorCommand(
         command_execution::ErrorCode error) noexcept
     {
@@ -265,7 +291,7 @@ namespace asio_server
         std::string userName_ = "default_user";
         std::string clientId_;
         std::string flashSerial_;
-        /// Session gate: set by successful USER_REGISTRY (admin/legacy) or AUTHENTICATE_V1.
+        /// Session gate: set only by USER_REGISTRY("admin") or successful AUTHENTICATE_V1.
         bool authenticated_{false};
         std::string remoteIP_;
         mutable std::mutex user_name_mutex_;

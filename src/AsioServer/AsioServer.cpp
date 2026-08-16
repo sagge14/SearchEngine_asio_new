@@ -476,16 +476,17 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
-        // Session authorization gate: data commands require USER_REGISTRY
-        // (admin/legacy) or AUTHENTICATE_V1. Keep the TCP session open so the
-        // client can still authenticate on the same connection.
-        if (!isSessionBootstrapCommand(requestHeader.command) &&
-            !authenticated_)
+        // Session authorization gate: data commands require USER_REGISTRY("admin")
+        // or successful AUTHENTICATE_V1. Unauthenticated data access fails closed.
+        const auto gate = evaluateSessionCommandGate(
+            requestHeader.command,
+            authenticated_);
+        if (!gate.allow_execute)
         {
             co_await queueError(
                 command_execution::ErrorCode::AuthRequired,
                 "session is not authenticated",
-                false,
+                gate.close_after_auth_required,
                 requestHeader.command);
             co_return;
         }
@@ -564,12 +565,24 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
             else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
-                // Legacy/admin path: USER_REGISTRY authorizes the session
-                // without AuthClientStore / AUTHENTICATE_V1.
+                // Legacy admin compatibility only. Arbitrary usernames must not
+                // authorize a session (old clients used this as a free pass).
+                const std::string requestedName(
+                    requestData.begin(),
+                    requestData.end());
+                if (!isLegacyAdminUserRegistryPayload(requestedName)) {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "USER_REGISTRY allows only legacy admin session",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
                 std::lock_guard<std::mutex> lock(user_name_mutex_);
-                userName_ = std::string(requestData.begin(), requestData.end());
+                userName_ = "admin";
                 authenticated_ = true;
-                std::string answer_str = "OK";
+                const std::string answer_str = "OK";
                 answer = std::vector<BYTE>(answer_str.begin(), answer_str.end());
             }
             else if (requestHeader.command == COMMAND::AUTHENTICATE_V1)
