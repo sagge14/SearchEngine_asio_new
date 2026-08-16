@@ -50,6 +50,7 @@ option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
 option(BUILD_BACKUP_RESTORE "Build the BackupRestore CLI and core library" ON)
 option(BUILD_AUTH_DB_TOOL "Build the AuthDbTool SQLite client admin CLI" ON)
+option(BUILD_TOKEN_ISSUER "Build the SearchClientTokenIssuer USB token CLI" ${WIN32})
 option(
         SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
         "After Release build of SearchEngine/BackupService/ZagEditor/BackupRestore in packagable presets (windows-x64, windows-x86, windows7-x86), run New-*Package and cloud-publish when configured"
@@ -632,6 +633,63 @@ if(BUILD_AUTH_DB_TOOL)
     searchengine_configure_target(AuthDbTool)
 endif()
 
+# ---------------------------------------------------------------------------
+# SearchClientTokenIssuer (USB auth token issuance; Windows-only)
+# ---------------------------------------------------------------------------
+if(BUILD_TOKEN_ISSUER)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SearchClientTokenIssuer currently supports Windows only")
+    endif()
+
+    add_executable(
+            SearchClientTokenIssuer
+            tools/token_issuer/main.cpp
+            tools/token_issuer/VolumeSerial.cpp
+            tools/token_issuer/TokenAscii.cpp
+            tools/token_issuer/TokenDefaults.cpp
+            tools/token_issuer/TokenDocument.cpp
+            tools/token_issuer/CryptoStub.cpp
+    )
+    target_include_directories(
+            SearchClientTokenIssuer
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+    )
+    target_link_libraries(
+            SearchClientTokenIssuer
+            PRIVATE
+            nlohmann_json::nlohmann_json
+            ole32
+            oleaut32
+            wbemuuid
+    )
+    target_compile_definitions(
+            SearchClientTokenIssuer
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    searchengine_configure_target(SearchClientTokenIssuer)
+    add_custom_command(
+            TARGET SearchClientTokenIssuer
+            POST_BUILD
+            COMMAND
+            "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/data"
+            COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/token_issuer/data/searchclient-auth-token.defaults.json"
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/searchclient-auth-token.defaults.json"
+            COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/token_issuer/data/searchclient-auth-token.defaults.json"
+            "$<TARGET_FILE_DIR:SearchClientTokenIssuer>/data/searchclient-auth-token.defaults.json"
+            COMMENT
+            "Copy SearchClientTokenIssuer defaults JSON beside executable"
+            VERBATIM
+    )
+endif()
+
 if(
         WIN32
         AND SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
@@ -663,9 +721,12 @@ if(
         if(TARGET SearchEngineConfig)
             add_dependencies(SearchEngine SearchEngineConfig)
         endif()
-        # Portable package also ships AuthDbTool; build it before PostBuild packaging.
+        # Portable package also ships AuthDbTool / TokenIssuer; build before PostBuild.
         if(TARGET AuthDbTool)
             add_dependencies(SearchEngine AuthDbTool)
+        endif()
+        if(TARGET SearchClientTokenIssuer)
+            add_dependencies(SearchEngine SearchClientTokenIssuer)
         endif()
         add_custom_command(
                 TARGET SearchEngine

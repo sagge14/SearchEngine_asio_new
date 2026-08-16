@@ -1,0 +1,615 @@
+#include "CryptoStub.hpp"
+#include "TokenAscii.hpp"
+#include "TokenDefaults.hpp"
+#include "TokenDocument.hpp"
+#include "VolumeSerial.hpp"
+
+#include <Windows.h>
+
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+using token_issuer::TokenFields;
+
+namespace {
+
+constexpr int kExitOk = 0;
+constexpr int kExitError = 1;
+constexpr int kExitCancelled = 2;
+constexpr int kExitNoVolume = 3;
+
+std::string Utf8(const std::wstring& value)
+{
+    if (value.empty()) {
+        return {};
+    }
+    const int size = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        throw std::runtime_error("cannot encode text as UTF-8");
+    }
+    std::string result(static_cast<std::size_t>(size), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+std::wstring Wide(const std::string& value)
+{
+    if (value.empty()) {
+        return {};
+    }
+    const int size = MultiByteToWideChar(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (size <= 0) {
+        throw std::runtime_error("cannot decode UTF-8 text");
+    }
+    std::wstring result(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        result.data(), size);
+    return result;
+}
+
+void WriteOut(const std::wstring& text)
+{
+    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    if (output != INVALID_HANDLE_VALUE && output != nullptr &&
+        GetConsoleMode(output, &mode))
+    {
+        DWORD written = 0;
+        WriteConsoleW(
+            output, text.data(), static_cast<DWORD>(text.size()), &written,
+            nullptr);
+        return;
+    }
+    std::cout << Utf8(text);
+    std::cout.flush();
+}
+
+void WriteErr(const std::wstring& text)
+{
+    const HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD mode = 0;
+    if (output != INVALID_HANDLE_VALUE && output != nullptr &&
+        GetConsoleMode(output, &mode))
+    {
+        DWORD written = 0;
+        WriteConsoleW(
+            output, text.data(), static_cast<DWORD>(text.size()), &written,
+            nullptr);
+        return;
+    }
+    std::cerr << Utf8(text);
+    std::cerr.flush();
+}
+
+std::wstring ReadLine()
+{
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (input != INVALID_HANDLE_VALUE && input != nullptr &&
+        GetConsoleMode(input, &mode))
+    {
+        wchar_t buffer[512]{};
+        DWORD read = 0;
+        if (!ReadConsoleW(input, buffer, 511, &read, nullptr)) {
+            throw std::runtime_error("cannot read from the console");
+        }
+        std::wstring result(buffer, buffer + read);
+        while (!result.empty() &&
+            (result.back() == L'\r' || result.back() == L'\n'))
+        {
+            result.pop_back();
+        }
+        return result;
+    }
+
+    std::string line;
+    if (!std::getline(std::cin, line)) {
+        throw std::runtime_error("cannot read interactive input");
+    }
+    return Wide(line);
+}
+
+std::wstring ReadPasswordLine()
+{
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    const bool console =
+        input != INVALID_HANDLE_VALUE && input != nullptr &&
+        GetConsoleMode(input, &mode);
+    if (console) {
+        SetConsoleMode(input, mode & ~ENABLE_ECHO_INPUT);
+    }
+    std::wstring line;
+    try {
+        line = ReadLine();
+    } catch (...) {
+        if (console) {
+            SetConsoleMode(input, mode);
+        }
+        throw;
+    }
+    if (console) {
+        SetConsoleMode(input, mode);
+        WriteOut(L"\n");
+    }
+    return line;
+}
+
+void PrintUsage()
+{
+    WriteErr(
+        L"SearchClientTokenIssuer - issue searchclient-auth-token.json\n"
+        L"\n"
+        L"Interactive (default):\n"
+        L"  SearchClientTokenIssuer\n"
+        L"\n"
+        L"Non-interactive:\n"
+        L"  SearchClientTokenIssuer --drive E: --name \"Ivanov I.I.\" "
+        L"--id C-001 [--defaults path] [--yes]\n"
+        L"    [--keystore path] [--password-env TOKEN_ISSUER_PASSWORD]\n"
+        L"    [--allow-manual-serial SERIAL] [--issuer ...] [--notes ...]\n"
+        L"\n"
+        L"Token string fields must be printable ASCII only (no Cyrillic).\n"
+        L"Crypto is stub; production RSA later. signature.alg is always "
+        L"\"none\" in stage 1.\n"
+        L"\n"
+        L"Exit codes: 0 ok, 1 error, 2 cancelled, 3 no eligible volume/serial\n");
+}
+
+std::optional<std::wstring> Option(
+    const std::vector<std::wstring>& args,
+    const std::wstring& name)
+{
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == name) {
+            if (i + 1 >= args.size()) {
+                throw std::runtime_error(
+                    Utf8(name) + " requires a value");
+            }
+            return args[i + 1];
+        }
+    }
+    return std::nullopt;
+}
+
+bool HasFlag(const std::vector<std::wstring>& args, const std::wstring& name)
+{
+    for (const auto& arg : args) {
+        if (arg == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fs::path ExeDirectory()
+{
+    wchar_t buffer[MAX_PATH]{};
+    const DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        return fs::current_path();
+    }
+    return fs::path(buffer).parent_path();
+}
+
+std::string RequireAsciiField(const std::string& label, std::string value)
+{
+    value = token_issuer::TrimCopy(std::move(value));
+    if (value.empty()) {
+        throw std::runtime_error(label + " must be non-empty");
+    }
+    if (!token_issuer::IsAsciiTokenField(value)) {
+        throw std::runtime_error(
+            label +
+            " must be printable ASCII only (A-Z a-z 0-9 space .,-_()/+#@:; "
+            "no Cyrillic)");
+    }
+    return value;
+}
+
+std::string PromptAsciiField(
+    const std::wstring& prompt,
+    const std::string& default_value,
+    bool allow_empty_default = false)
+{
+    for (;;) {
+        WriteOut(prompt);
+        if (!default_value.empty() || allow_empty_default) {
+            WriteOut(L" [");
+            WriteOut(Wide(default_value));
+            WriteOut(L"]");
+        }
+        WriteOut(L": ");
+        const std::string answer =
+            token_issuer::TrimCopy(Utf8(ReadLine()));
+        const std::string value =
+            answer.empty() ? default_value : answer;
+        if (value.empty() && !allow_empty_default) {
+            WriteErr(L"Value must be non-empty.\n");
+            continue;
+        }
+        if (!value.empty() && !token_issuer::IsAsciiTokenField(value)) {
+            WriteErr(
+                L"Use printable ASCII only (no Cyrillic / no quotes).\n");
+            continue;
+        }
+        return value;
+    }
+}
+
+bool PromptYesNo(const std::wstring& prompt, bool default_yes)
+{
+    for (;;) {
+        WriteOut(prompt);
+        WriteOut(default_yes ? L" [Y/n]: " : L" [y/N]: ");
+        const std::wstring answer = ReadLine();
+        if (answer.empty()) {
+            return default_yes;
+        }
+        if (answer == L"y" || answer == L"Y" || answer == L"yes" ||
+            answer == L"YES")
+        {
+            return true;
+        }
+        if (answer == L"n" || answer == L"N" || answer == L"no" ||
+            answer == L"NO")
+        {
+            return false;
+        }
+        WriteErr(L"Enter Y or N.\n");
+    }
+}
+
+std::string ResolvePassword(
+    const std::vector<std::wstring>& args,
+    bool creating)
+{
+    if (const auto env_name = Option(args, L"--password-env")) {
+        const std::string name = Utf8(*env_name);
+        char* value = nullptr;
+        std::size_t length = 0;
+        if (_dupenv_s(&value, &length, name.c_str()) != 0 || value == nullptr) {
+            throw std::runtime_error(
+                "environment variable not set: " + name);
+        }
+        std::string password(value);
+        free(value);
+        if (password.empty()) {
+            throw std::runtime_error(
+                "environment variable is empty: " + name);
+        }
+        return password;
+    }
+
+    if (creating) {
+        for (;;) {
+            WriteOut(L"Create keystore password: ");
+            const std::wstring a = ReadPasswordLine();
+            WriteOut(L"Confirm password: ");
+            const std::wstring b = ReadPasswordLine();
+            if (a.empty()) {
+                WriteErr(L"Password must not be empty.\n");
+                continue;
+            }
+            if (a != b) {
+                WriteErr(L"Passwords do not match.\n");
+                continue;
+            }
+            return Utf8(a);
+        }
+    }
+
+    WriteOut(L"Keystore password: ");
+    return Utf8(ReadPasswordLine());
+}
+
+void EnsureKeystore(
+    const token_issuer::KeystorePaths& paths,
+    const std::vector<std::wstring>& args)
+{
+    if (!token_issuer::KeystoreExists(paths)) {
+        WriteOut(
+            L"No stub keystore found. Creating key pair "
+            L"(crypto is stub; production RSA later)...\n");
+        const std::string password = ResolvePassword(args, true);
+        token_issuer::GenerateKeyPair(paths, password);
+        WriteOut(L"Keystore created at: ");
+        WriteOut(paths.root.wstring());
+        WriteOut(L"\n");
+        return;
+    }
+
+    const std::string password = ResolvePassword(args, false);
+    (void)token_issuer::UnlockPrivateKey(paths, password);
+}
+
+TokenFields FieldsFromDefaults(const nlohmann::json& defaults)
+{
+    TokenFields fields;
+    fields.client_id = defaults.value("client_id", std::string());
+    fields.client_name = defaults.value("client_name", std::string());
+    fields.issuer = defaults.value("issuer", std::string("auth-server"));
+    fields.notes = defaults.value("notes", std::string());
+    fields.issued_at = defaults.value("issued_at", std::string());
+    if (fields.issued_at.empty()) {
+        fields.issued_at = token_issuer::NowUtcIso8601();
+    }
+    if (defaults.contains("expires_at")) {
+        fields.expires_at = defaults.at("expires_at");
+    } else {
+        fields.expires_at = nullptr;
+    }
+    return fields;
+}
+
+void PrintRegisterHint(const fs::path& token_path)
+{
+    WriteOut(L"\nToken written: ");
+    WriteOut(token_path.wstring());
+    WriteOut(L"\n");
+    WriteOut(
+        L"Register on the server (separate step):\n"
+        L"  AuthDbTool --db <data>\\auth_clients.sqlite add-from-token "
+        L"--token \"");
+    WriteOut(token_path.wstring());
+    WriteOut(
+        L"\"\n"
+        L"  or scripts\\Register-AuthClientFromToken.ps1\n");
+}
+
+int WriteWithConfirm(
+    const fs::path& token_path,
+    const TokenFields& fields,
+    bool yes)
+{
+    (void)token_issuer::SignTokenPayload(
+        token_issuer::PreviewTokenJson(fields));
+
+    if (fs::exists(token_path) && !yes) {
+        if (!PromptYesNo(
+                L"Token file exists. Overwrite?", false))
+        {
+            return kExitCancelled;
+        }
+    }
+
+    token_issuer::WriteTokenFile(token_path, fields);
+    PrintRegisterHint(token_path);
+    return kExitOk;
+}
+
+int RunInteractive(
+    const std::vector<std::wstring>& args,
+    const nlohmann::json& defaults,
+    const token_issuer::KeystorePaths& keystore)
+{
+    EnsureKeystore(keystore, args);
+
+    const auto volumes = token_issuer::ListEligibleRemovableVolumes();
+    if (volumes.empty()) {
+        WriteErr(
+            L"No removable volumes with a readable hardware serial.\n");
+        return kExitNoVolume;
+    }
+
+    WriteOut(L"\nEligible removable volumes:\n");
+    for (std::size_t i = 0; i < volumes.size(); ++i) {
+        WriteOut(L"  ");
+        WriteOut(std::to_wstring(i + 1));
+        WriteOut(L" - ");
+        WriteOut(Wide(volumes[i].drive_letter));
+        WriteOut(L"  serial=");
+        WriteOut(Wide(volumes[i].serial));
+        WriteOut(L"\n");
+    }
+    WriteOut(L"  0 - Cancel\n");
+
+    int selected = -1;
+    for (;;) {
+        WriteOut(L"Select volume: ");
+        const std::wstring answer = ReadLine();
+        try {
+            selected = std::stoi(Utf8(answer));
+        } catch (...) {
+            WriteErr(L"Enter a number from the list.\n");
+            continue;
+        }
+        if (selected == 0) {
+            return kExitCancelled;
+        }
+        if (selected >= 1 &&
+            static_cast<std::size_t>(selected) <= volumes.size())
+        {
+            break;
+        }
+        WriteErr(L"Enter a number from the list.\n");
+    }
+
+    const auto& volume = volumes[static_cast<std::size_t>(selected - 1)];
+    TokenFields fields = FieldsFromDefaults(defaults);
+    fields.flash_serial = volume.serial;
+
+    std::string default_id = fields.client_id;
+    if (default_id.empty()) {
+        default_id = token_issuer::GenerateClientId();
+    }
+
+    fields.client_name = PromptAsciiField(
+        L"client_name", fields.client_name);
+    fields.client_id = PromptAsciiField(L"client_id", default_id);
+    fields.issuer = PromptAsciiField(L"issuer", fields.issuer, true);
+    fields.notes = PromptAsciiField(L"notes", fields.notes, true);
+
+    WriteOut(L"issued_at default is now UTC; expires_at stays null unless "
+             L"set in defaults.\n");
+    if (fields.issued_at.empty()) {
+        fields.issued_at = token_issuer::NowUtcIso8601();
+    }
+
+    WriteOut(L"\nPreview:\n");
+    WriteOut(Wide(token_issuer::PreviewTokenJson(fields)));
+    WriteOut(L"\n");
+
+    if (!PromptYesNo(L"Write token to volume root?", true)) {
+        return kExitCancelled;
+    }
+
+    const fs::path token_path =
+        fs::path(Wide(volume.drive_letter + "\\")) /
+        token_issuer::kTokenFileName;
+    const bool yes = HasFlag(args, L"--yes");
+    return WriteWithConfirm(token_path, fields, yes);
+}
+
+int RunNonInteractive(
+    const std::vector<std::wstring>& args,
+    const nlohmann::json& defaults,
+    const token_issuer::KeystorePaths& keystore)
+{
+    const auto drive_opt = Option(args, L"--drive");
+    const auto name_opt = Option(args, L"--name");
+    const auto id_opt = Option(args, L"--id");
+    if (!drive_opt || !name_opt || !id_opt) {
+        throw std::runtime_error(
+            "non-interactive mode requires --drive --name --id");
+    }
+
+    EnsureKeystore(keystore, args);
+
+    TokenFields fields = FieldsFromDefaults(defaults);
+    fields.client_name = RequireAsciiField("client_name", Utf8(*name_opt));
+    fields.client_id = RequireAsciiField("client_id", Utf8(*id_opt));
+
+    if (const auto issuer = Option(args, L"--issuer")) {
+        fields.issuer = RequireAsciiField("issuer", Utf8(*issuer));
+    }
+    if (const auto notes = Option(args, L"--notes")) {
+        fields.notes = token_issuer::TrimCopy(Utf8(*notes));
+        if (!token_issuer::IsAsciiTokenField(fields.notes)) {
+            throw std::runtime_error(
+                "notes must be printable ASCII only (no Cyrillic)");
+        }
+    }
+
+    if (const auto manual = Option(args, L"--allow-manual-serial")) {
+        WriteErr(
+            L"WARNING: using manual flash_serial override; "
+            L"prefer hardware serial from the volume.\n");
+        fields.flash_serial = RequireAsciiField(
+            "flash_serial",
+            token_issuer::NormalizeFlashSerial(Utf8(*manual)));
+    } else {
+        const std::string drive = token_issuer::NormalizeDriveLetter(
+            Utf8(*drive_opt));
+        if (drive.empty()) {
+            throw std::runtime_error("invalid --drive");
+        }
+        const std::string serial =
+            token_issuer::GetSerialForDriveLetter(drive);
+        if (serial.empty() || serial == "(UNKNOWN)") {
+            WriteErr(
+                L"Cannot read hardware serial for drive ");
+            WriteErr(Wide(drive));
+            WriteErr(L"\n");
+            return kExitNoVolume;
+        }
+        fields.flash_serial = token_issuer::NormalizeFlashSerial(serial);
+    }
+
+    if (fields.issued_at.empty()) {
+        fields.issued_at = token_issuer::NowUtcIso8601();
+    }
+
+    WriteOut(L"Preview:\n");
+    WriteOut(Wide(token_issuer::PreviewTokenJson(fields)));
+    WriteOut(L"\n");
+
+    const std::string drive = token_issuer::NormalizeDriveLetter(
+        Utf8(*drive_opt));
+    const fs::path token_path =
+        fs::path(Wide(drive + "\\")) / token_issuer::kTokenFileName;
+    const bool yes = HasFlag(args, L"--yes");
+    if (!yes && fs::exists(token_path)) {
+        if (!PromptYesNo(L"Token file exists. Overwrite?", false)) {
+            return kExitCancelled;
+        }
+    } else if (!yes) {
+        if (!PromptYesNo(L"Write token to volume root?", true)) {
+            return kExitCancelled;
+        }
+    }
+
+    return WriteWithConfirm(token_path, fields, true);
+}
+
+} // namespace
+
+int wmain(int argc, wchar_t* argv[])
+{
+    try {
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+
+        std::vector<std::wstring> args;
+        args.reserve(static_cast<std::size_t>(argc));
+        for (int i = 1; i < argc; ++i) {
+            args.emplace_back(argv[i]);
+        }
+
+        if (HasFlag(args, L"--help") || HasFlag(args, L"-h")) {
+            PrintUsage();
+            return kExitOk;
+        }
+
+        fs::path defaults_path;
+        if (const auto value = Option(args, L"--defaults")) {
+            defaults_path = *value;
+        }
+
+        fs::path keystore_root;
+        if (const auto value = Option(args, L"--keystore")) {
+            keystore_root = *value;
+        } else {
+            const fs::path beside = ExeDirectory() / "keys";
+            if (fs::is_directory(beside) ||
+                fs::is_regular_file(beside / "private.stub.enc"))
+            {
+                keystore_root = beside;
+            } else {
+                keystore_root = token_issuer::DefaultKeystoreRoot();
+            }
+        }
+
+        const auto defaults = token_issuer::LoadTokenDefaults(
+            ExeDirectory(), defaults_path);
+        const auto keystore =
+            token_issuer::ResolveKeystorePaths(keystore_root);
+
+        const bool non_interactive =
+            Option(args, L"--drive").has_value() ||
+            Option(args, L"--name").has_value() ||
+            Option(args, L"--id").has_value();
+
+        if (non_interactive) {
+            return RunNonInteractive(args, defaults, keystore);
+        }
+        return RunInteractive(args, defaults, keystore);
+    } catch (const std::exception& ex) {
+        WriteErr(L"SearchClientTokenIssuer error: ");
+        WriteErr(Wide(ex.what()));
+        WriteErr(L"\n");
+        return kExitError;
+    }
+}

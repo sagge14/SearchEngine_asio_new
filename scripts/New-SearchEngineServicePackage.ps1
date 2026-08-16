@@ -165,6 +165,12 @@ $configToolPath = Resolve-RequiredFile `
 $authDbToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'AuthDbTool.exe') `
     'AuthDbTool Release helper'
+$tokenIssuerPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchClientTokenIssuer.exe') `
+    'SearchClientTokenIssuer Release helper'
+$tokenIssuerDefaultsPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'searchclient-auth-token.defaults.json') `
+    'SearchClientTokenIssuer defaults JSON'
 $registerAuthScriptPath = Resolve-RequiredFile `
     (Join-Path $projectRoot 'scripts\Register-AuthClientFromToken.ps1') `
     'Register-AuthClientFromToken.ps1'
@@ -201,6 +207,11 @@ $authDbToolMachine = Get-PeMachine $authDbToolPath
 if ($authDbToolMachine -ne $expectedMachine) {
     throw ('AuthDbTool.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $authDbToolMachine)
+}
+$tokenIssuerMachine = Get-PeMachine $tokenIssuerPath
+if ($tokenIssuerMachine -ne $expectedMachine) {
+    throw ('SearchClientTokenIssuer.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $tokenIssuerMachine)
 }
 
 & $configToolPath validate --settings $SettingsPath
@@ -273,6 +284,11 @@ try {
         -Destination (Join-Path $stagingDirectory 'tools\SearchEngineConfig.exe')
     Copy-Item -LiteralPath $authDbToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
+    Copy-Item -LiteralPath $tokenIssuerPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchClientTokenIssuer.exe')
+    Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
+        -Destination (Join-Path $stagingDirectory `
+            'tools\searchclient-auth-token.defaults.json')
     Copy-Item -LiteralPath $registerAuthScriptPath `
         -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $SettingsPath `
