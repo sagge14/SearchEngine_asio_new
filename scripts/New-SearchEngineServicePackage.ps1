@@ -162,6 +162,12 @@ $binaryPath = Resolve-RequiredFile `
 $configToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
     'SearchEngineConfig Release helper'
+$authDbToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'AuthDbTool.exe') `
+    'AuthDbTool Release helper'
+$registerAuthScriptPath = Resolve-RequiredFile `
+    (Join-Path $projectRoot 'scripts\Register-AuthClientFromToken.ps1') `
+    'Register-AuthClientFromToken.ps1'
 Assert-PeMatchesAppVersion `
     -BinaryPath $binaryPath `
     -ExpectedProductVersion $versionInfo.Version `
@@ -190,6 +196,11 @@ $configToolMachine = Get-PeMachine $configToolPath
 if ($configToolMachine -ne $expectedMachine) {
     throw ('SearchEngineConfig.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $configToolMachine)
+}
+$authDbToolMachine = Get-PeMachine $authDbToolPath
+if ($authDbToolMachine -ne $expectedMachine) {
+    throw ('AuthDbTool.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $authDbToolMachine)
 }
 
 & $configToolPath validate --settings $SettingsPath
@@ -260,6 +271,10 @@ try {
         -Destination (Join-Path $stagingDirectory 'app\SearchEngine.exe')
     Copy-Item -LiteralPath $configToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\SearchEngineConfig.exe')
+    Copy-Item -LiteralPath $authDbToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
+    Copy-Item -LiteralPath $registerAuthScriptPath `
+        -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $SettingsPath `
         -Destination (Join-Path $stagingDirectory 'data\Settings.json')
     Copy-Item -LiteralPath $IgnorePath `
@@ -296,6 +311,10 @@ try {
         @{
             Source = 'Uninstall-SearchEngineService-Windows7.bat'
             Destination = 'Uninstall-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Register-AuthClient-FromToken-Windows7.bat'
+            Destination = 'Register-AuthClient-FromToken.bat'
         },
         @{
             Source = 'Verify-Package-Windows7.bat'
@@ -367,6 +386,7 @@ try {
         'Start-SearchEngineService.bat',
         'Restart-SearchEngineService.bat',
         'Uninstall-SearchEngineService.bat',
+        'Register-AuthClient-FromToken.bat',
         'Verify-Package.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `

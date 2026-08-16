@@ -557,11 +557,14 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
             else if (requestHeader.command == COMMAND::AUTHENTICATE_V1)
             {
+                // Failed AUTHENTICATE_V1 is terminal: send ERROR_RESPONSE, then
+                // close. The client must not keep a half-open unauthenticated
+                // TCP session after an explicit auth rejection.
                 if (!auth::AuthRuntime::instance().isInitialized()) {
                     co_await queueError(
                         command_execution::ErrorCode::ConfigurationError,
                         "AuthClientStore is not initialized",
-                        false,
+                        true,
                         requestHeader.command);
                     co_return;
                 }
@@ -574,7 +577,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                     co_await queueError(
                         *result.error,
                         std::move(result.diagnostic),
-                        false,
+                        true,
                         requestHeader.command);
                     co_return;
                 }
@@ -617,7 +620,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                     co_await queueError(
                         *authSessionError->error,
                         std::move(authSessionError->diagnostic),
-                        false,
+                        true,
                         requestHeader.command);
                     co_return;
                 }

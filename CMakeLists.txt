@@ -179,7 +179,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE)
+if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
     set(_build_any_target ON)
 endif()
 
@@ -617,6 +617,11 @@ if(BUILD_AUTH_DB_TOOL)
             PRIVATE
             "${PROJECT_SOURCE_DIR}/src"
     )
+    target_link_libraries(
+            AuthDbTool
+            PRIVATE
+            nlohmann_json::nlohmann_json
+    )
     if(MSVC)
         # sqlite3.c is C; keep C++20 for the tool sources.
         set_source_files_properties(
@@ -657,6 +662,10 @@ if(
     if(TARGET SearchEngine)
         if(TARGET SearchEngineConfig)
             add_dependencies(SearchEngine SearchEngineConfig)
+        endif()
+        # Portable package also ships AuthDbTool; build it before PostBuild packaging.
+        if(TARGET AuthDbTool)
+            add_dependencies(SearchEngine AuthDbTool)
         endif()
         add_custom_command(
                 TARGET SearchEngine

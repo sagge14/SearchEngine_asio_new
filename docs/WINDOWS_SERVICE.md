@@ -79,11 +79,11 @@ Windows запускают ту же последовательность. В se
 ```powershell
 cmake --preset windows-x64
 cmake --build --preset windows-x64-release `
-  --target SearchEngine SearchEngineConfig
+  --target SearchEngine SearchEngineConfig AuthDbTool
 
 cmake --preset windows7-x86
 cmake --build --preset windows7-x86-release `
-  --target SearchEngine SearchEngineConfig
+  --target SearchEngine SearchEngineConfig AuthDbTool
 ```
 
 Executable остаётся обычным console-subsystem приложением с `wmain`; custom

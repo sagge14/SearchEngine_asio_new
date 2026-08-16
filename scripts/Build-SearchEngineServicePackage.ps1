@@ -60,10 +60,10 @@ foreach ($build in $builds) {
         # (e.g. -SkipConfigure after an IDE packagable configure).
         Invoke-SearchEngineCmakeBuildWithoutVersionBump {
             & cmake --build --preset $build.Build `
-                --target SearchEngine SearchEngineConfig -- /m
+                --target SearchEngine SearchEngineConfig AuthDbTool -- /m
             if ($LASTEXITCODE -ne 0) {
                 throw (
-                    "SearchEngine and SearchEngineConfig " +
+                    "SearchEngine, SearchEngineConfig, and AuthDbTool " +
                     "$($build.Architecture) Release build failed with exit code " +
                     "$LASTEXITCODE."
                 )
