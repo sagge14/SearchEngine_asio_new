@@ -345,6 +345,18 @@ std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
 int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
 {
     const fs::path outputPath = requiredOption(args, L"--output");
+    // Shared picker for uninstall / auth-register (and future callers).
+    // Default remains uninstall so older Uninstall-*.bat keep working.
+    const std::wstring purpose = [&]() {
+        std::wstring value = option(args, L"--purpose").value_or(L"uninstall");
+        std::transform(value.begin(), value.end(), value.begin(), towlower);
+        return value;
+    }();
+    if (purpose != L"uninstall" && purpose != L"register-auth") {
+        throw std::runtime_error(
+            "choose-installed-instance --purpose must be uninstall or register-auth");
+    }
+
     const UiLanguage language = chooseLanguage();
     const std::vector<InstalledSearchEngineService> instances =
         installedSearchEngineInstances();
@@ -355,9 +367,13 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
         return 3;
     }
 
-    writeInteractive(language == UiLanguage::Russian
-        ? L"\nВыберите службу SearchEngine для полного удаления:\n"
-        : L"\nSelect the SearchEngine service to remove completely:\n");
+    const wchar_t* promptRu = purpose == L"register-auth"
+        ? L"\nВыберите службу SearchEngine для регистрации auth-клиента:\n"
+        : L"\nВыберите службу SearchEngine для полного удаления:\n";
+    const wchar_t* promptEn = purpose == L"register-auth"
+        ? L"\nSelect the SearchEngine service to register the auth client:\n"
+        : L"\nSelect the SearchEngine service to remove completely:\n";
+    writeInteractive(language == UiLanguage::Russian ? promptRu : promptEn);
     for (std::size_t index = 0; index < instances.size(); ++index) {
         writeInteractive(
             L"  " + std::to_wstring(index + 1) + L" - " +
@@ -1470,6 +1486,7 @@ void printUsage()
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
         << "  choose-instance --default ID --output FILE\n"
         << "  choose-installed-instance --output FILE\n"
+        << "            [--purpose uninstall|register-auth]\n"
         << "  check-port --port N\n"
         << "  health --port N [--timeout-ms N]\n"
         << "  backup --install-root DIR --data-dir DIR --destination DIR\n"

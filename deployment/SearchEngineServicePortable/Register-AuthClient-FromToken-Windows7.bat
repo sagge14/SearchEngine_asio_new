@@ -73,7 +73,7 @@ if not "%SERVICE_INSTANCE%"=="" goto :INSTANCE_READY
 REM Interactive selection must run from cmd.exe, not from inside PowerShell:
 REM otherwise SearchEngineConfig prompts are easy to miss / look like a hang.
 echo Selecting installed SearchEngine service...
-"%CONFIG_TOOL%" choose-installed-instance --output "%INSTANCE_TEMP%"
+"%CONFIG_TOOL%" choose-installed-instance --purpose register-auth --output "%INSTANCE_TEMP%"
 if errorlevel 3 goto :NO_INSTALLED_SERVICES
 if errorlevel 2 goto :CANCELLED
 if errorlevel 1 goto :HELPER_FAILED
