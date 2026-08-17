@@ -1028,6 +1028,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/GetAttachmentsCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/Auth/AuthenticateCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Auth/AuthClientStore.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Auth/IssuerPublicKeyPath.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenAscii.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenDocument.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"

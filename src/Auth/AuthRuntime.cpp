@@ -1,4 +1,5 @@
 #include "Auth/AuthRuntime.h"
+#include "Auth/IssuerPublicKeyPath.h"
 
 #include <stdexcept>
 
@@ -17,7 +18,7 @@ namespace auth
         store->open(db_path);
         store_ = std::move(store);
 
-        const auto public_pem = db_path.parent_path() / "issuer-public.pem";
+        const auto public_pem = ResolveIssuerPublicPemPath(db_path);
         rsa_verifier_ =
             std::make_unique<RsaIdentitySignatureVerifier>(public_pem);
         initialized_ = true;

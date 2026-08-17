@@ -94,6 +94,10 @@ Place `issuer-public.pem` in the service data directory (next to
 .\SearchClientTokenIssuer.exe --export-public "$env:ProgramData\SearchEngineService"
 ```
 
+If `issuer-public.pem` is absent, the server falls back to
+`%ProgramData%\SearchClientTokenIssuer\keys\public.pem` from the issuer
+keystore (same path `SearchClientTokenIssuer` uses by default).
+
 The client checks the local device identity (`usb` hardware serial or
 `computer` SMBIOS UUID); the server verifies the signature on `AUTHENTICATE_V1`.
 
@@ -207,8 +211,9 @@ out\package\SearchEngineService-x86-Windows7\
 на новой машине это изменяемые данные, и служба создаёт их в своём data-dir.
 Редактировать `data\Settings.json` в уже собранном комплекте разрешено — это
 целевой конфиг конкретного компьютера.
-Он намеренно исключён из SHA-256-проверки пакета; его JSON-структура и
-обязательные настройки валидируются установщиком отдельно.
+Вся папка `data\` намеренно исключена из SHA-256-проверки пакета, включая
+`OEM866.INI` и `ignore.txt`. JSON сформированных настроек валидируется
+установщиком после диалога, а не по шаблону комплекта до установки.
 
 Скопируйте **всю** выбранную папку комплекта на носитель, затем на целевой
 компьютер. Запустите `Install-SearchEngineService.bat` от имени администратора.

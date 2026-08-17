@@ -27,11 +27,11 @@ set "RELATIVE_FILE=%~1"
 set "EXPECTED_HASH=%~2"
 set "ACTUAL_HASH="
 
-rem Settings.json is a machine-specific user template. Older packages may
-rem still list it in package-checksums.sha256, but editing it must not make
-rem the portable package fail its integrity check.
+rem Package data is a mutable template (Settings.json, OEM866.INI, ignore.txt).
+rem Older checksum files may still list those paths; skip the whole data\ tree.
 set "RELATIVE_FILE=%RELATIVE_FILE:/=\%"
-if /I "%RELATIVE_FILE%"=="data\Settings.json" exit /b 0
+set "RELATIVE_PREFIX=%RELATIVE_FILE:~0,5%"
+if /I "%RELATIVE_PREFIX%"=="data\" exit /b 0
 
 if not exist "%PACKAGE_ROOT%%RELATIVE_FILE%" (
     echo ERROR: Package file is missing: %RELATIVE_FILE%

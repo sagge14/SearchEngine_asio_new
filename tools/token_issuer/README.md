@@ -12,7 +12,8 @@ device authentication (`device_type` = `usb` or `computer`).
 - Signed message (UTF-8):
   `client_id + "\n" + client_name + "\n" + device_type + "\n" + device_id + "\n"`.
 - **Server** verifies RS256 with `issuer-public.pem` next to
-  `auth_clients.sqlite`. **Client** checks the local device identity and forwards
+  `auth_clients.sqlite`, or `%ProgramData%\SearchClientTokenIssuer\keys\public.pem`
+  when the sibling export is missing. **Client** checks the local device identity and forwards
   `signature.value` in `AUTHENTICATE_V1`.
 - Export public key into the service data directory:
 

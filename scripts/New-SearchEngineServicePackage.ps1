@@ -425,8 +425,6 @@ try {
         $protectedFiles += Get-ChildItem -LiteralPath $absoluteRoot `
             -Recurse -File
     }
-    $protectedFiles += Get-Item -LiteralPath `
-        (Join-Path $stagingDirectory 'data\OEM866.INI')
     foreach ($name in @(
         'Install-SearchEngineService.bat',
         'Stop-SearchEngineService.bat',
@@ -449,8 +447,10 @@ try {
             size = $_.Length
         }
     })
-    if ($manifestEntries.path -contains 'data/Settings.json') {
-        throw 'Mutable data/Settings.json must not be checksum-protected.'
+    $protectedData = @($manifestEntries.path | Where-Object { $_ -like 'data/*' })
+    if ($protectedData.Count -gt 0) {
+        throw ('Mutable data files must not be checksum-protected: ' +
+            ($protectedData -join ', '))
     }
     $checksumLines = @($manifestEntries | ForEach-Object {
         '{0}  {1}' -f `
