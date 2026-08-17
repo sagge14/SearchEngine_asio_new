@@ -15,8 +15,9 @@ echo Issue SearchClient auth token (USB or computer)
 echo Architecture: %TARGET_ARCH%
 echo.
 echo Interactive: choose 1 USB or 2 Computer.
-echo For a computer token, default path is %ProgramData%\SearchEngine\searchclient-auth-token.json
-echo Press Enter at "output path" to open a Save dialog in that folder.
+echo For a computer token you can choose:
+echo   1 - standard ProgramData location
+echo   2 - another location manually (Save dialog)
 echo Extra arguments are passed to SearchClientTokenIssuer.exe.
 echo.
 

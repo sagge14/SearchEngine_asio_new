@@ -646,6 +646,7 @@ if(BUILD_TOKEN_ISSUER)
     add_executable(
             SearchClientTokenIssuer
             tools/token_issuer/main.cpp
+            tools/token_issuer/ComputerTokenPath.cpp
             tools/token_issuer/VolumeSerial.cpp
             tools/token_issuer/ComputerIdentity.cpp
             tools/token_issuer/TokenAscii.cpp
@@ -1033,6 +1034,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Auth/IssuerPublicKeyPath.cpp"
             "${PROJECT_SOURCE_DIR}/tools/auth/TokenLoader.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenAscii.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer/ComputerTokenPath.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenDocument.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"

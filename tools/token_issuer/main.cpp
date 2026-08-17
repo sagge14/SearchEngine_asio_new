@@ -5,6 +5,7 @@
 #include "IdentitySigning.hpp"
 #include "VolumeSerial.hpp"
 #include "ComputerIdentity.hpp"
+#include "ComputerTokenPath.hpp"
 #include "Auth/DeviceIdentity.h"
 
 #include <Windows.h>
@@ -29,6 +30,18 @@ constexpr int kExitOk = 0;
 constexpr int kExitError = 1;
 constexpr int kExitCancelled = 2;
 constexpr int kExitNoVolume = 3;
+constexpr int kExitRetrySaveLocation = 4;
+
+enum class OverwriteDeclineAction {
+    CancelIssuance,
+    RetrySaveLocation,
+};
+
+enum class ComputerSaveChoice {
+    Cancel = 0,
+    Standard = 1,
+    Manual = 2,
+};
 
 std::string Utf8(const std::wstring& value)
 {
@@ -161,7 +174,7 @@ void PrintUsage()
         L"Interactive (default):\n"
         L"  SearchClientTokenIssuer\n"
         L"    Token type: 1 USB, 2 Computer\n"
-        L"    Computer output: type a path, or Enter for a Save dialog\n"
+        L"    Computer save: 1 ProgramData standard, 2 manual Save dialog\n"
         L"\n"
         L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
         L"[--password-env NAME]\n"
@@ -223,38 +236,126 @@ fs::path ExeDirectory()
     return fs::path(buffer).parent_path();
 }
 
-fs::path StandardComputerTokenDirectory()
+std::optional<std::wstring> BrowseSaveTokenPath(
+    const std::optional<fs::path>& initial_dir)
 {
-    wchar_t* program_data = nullptr;
-    std::size_t length = 0;
-    if (_wdupenv_s(&program_data, &length, L"ProgramData") == 0 &&
-        program_data != nullptr)
+    wchar_t file[32768]{};
+    wcsncpy_s(
+        file, Wide(token_issuer::kTokenFileName).c_str(), _TRUNCATE);
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetConsoleWindow();
+    ofn.lpstrFilter =
+        L"Auth token (searchclient-auth-token.json)\0"
+        L"searchclient-auth-token.json\0"
+        L"JSON (*.json)\0*.json\0"
+        L"All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = static_cast<DWORD>(sizeof(file) / sizeof(file[0]));
+    ofn.lpstrTitle = L"Save searchclient-auth-token.json";
+    ofn.lpstrDefExt = L"json";
+    ofn.Flags =
+        OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    std::wstring initial_dir_storage;
+    if (initial_dir && !initial_dir->empty()) {
+        initial_dir_storage = initial_dir->wstring();
+        ofn.lpstrInitialDir = initial_dir_storage.c_str();
+    }
+
+    if (GetSaveFileNameW(&ofn)) {
+        return std::wstring(file);
+    }
+    if (CommDlgExtendedError() != 0) {
+        throw std::runtime_error("cannot open the save dialog");
+    }
+    return std::nullopt;
+}
+
+std::optional<ComputerSaveChoice> PromptComputerSaveChoice()
+{
+    for (;;) {
+        const auto standard_path = token_issuer::StandardComputerTokenPath();
+
+        WriteOut(L"\nWhere should the computer token be saved?\n");
+        WriteOut(L"  1 - Standard system location\n      ");
+        if (standard_path) {
+            WriteOut(standard_path->wstring());
+        } else {
+            WriteOut(L"(unavailable)");
+        }
+        WriteOut(L"\n  2 - Choose location manually\n  0 - Cancel\n");
+        WriteOut(L"Select save location: ");
+
+        const std::wstring answer = ReadLine();
+        if (answer == L"0") {
+            return ComputerSaveChoice::Cancel;
+        }
+        if (answer == L"1") {
+            return ComputerSaveChoice::Standard;
+        }
+        if (answer == L"2") {
+            return ComputerSaveChoice::Manual;
+        }
+        WriteErr(L"Enter 1, 2, or 0.\n");
+    }
+}
+
+std::optional<fs::path> PromptManualComputerTokenPath()
+{
+    const auto initial_dir = token_issuer::StandardComputerTokenDirectory();
+    WriteOut(
+        L"Opening file dialog "
+        L"(check behind other windows if it is not visible)...\n");
+    const auto picked = BrowseSaveTokenPath(initial_dir);
+    if (!picked) {
+        return std::nullopt;
+    }
+    return fs::path(*picked);
+}
+
+std::optional<fs::path> ResolveInteractiveComputerTokenPath(
+    ComputerSaveChoice choice)
+{
+    if (choice == ComputerSaveChoice::Manual) {
+        return PromptManualComputerTokenPath();
+    }
+
+    const auto standard_path = token_issuer::StandardComputerTokenPath();
+    if (!standard_path) {
+        WriteErr(
+            L"Standard ProgramData location is unavailable.\n"
+            L"Please choose another location manually.\n");
+        return PromptManualComputerTokenPath();
+    }
+
+    const auto directory = token_issuer::StandardComputerTokenDirectory();
+    std::string error;
+    if (!directory ||
+        !token_issuer::EnsureComputerTokenDirectory(*directory, &error))
     {
-        fs::path root(program_data);
-        free(program_data);
-        return root / L"SearchEngine";
+        WriteErr(L"Could not save token to:\n");
+        WriteErr(standard_path->wstring());
+        WriteErr(L"\n");
+        if (!error.empty()) {
+            WriteErr(Wide(error));
+            WriteErr(L"\n");
+        }
+        WriteErr(L"Please choose another location.\n");
+        return PromptManualComputerTokenPath();
     }
-    return fs::path(L"SearchEngine");
+
+    return *standard_path;
 }
 
-fs::path StandardComputerTokenPath()
+bool EnsureTokenParentDirectory(const fs::path& token_path, std::string* error)
 {
-    return StandardComputerTokenDirectory() / token_issuer::kTokenFileName;
-}
-
-void EnsureStandardComputerTokenDirectory()
-{
-    const fs::path directory = StandardComputerTokenDirectory();
-    if (directory.empty()) {
-        return;
+    const auto parent = token_path.parent_path();
+    if (parent.empty()) {
+        return true;
     }
-    std::error_code ec;
-    fs::create_directories(directory, ec);
-    if (ec) {
-        throw std::runtime_error(
-            "cannot create standard token directory: " +
-            directory.string());
-    }
+    return token_issuer::EnsureComputerTokenDirectory(parent, error);
 }
 
 std::string RequireAsciiField(const std::string& label, std::string value)
@@ -299,73 +400,6 @@ std::string PromptAsciiField(
             continue;
         }
         return value;
-    }
-}
-
-std::optional<std::wstring> BrowseSaveTokenPath()
-{
-    EnsureStandardComputerTokenDirectory();
-    const fs::path default_path = StandardComputerTokenPath();
-
-    wchar_t file[32768]{};
-    wcsncpy_s(file, default_path.wstring().c_str(), _TRUNCATE);
-
-    const std::wstring initial_dir = default_path.parent_path().wstring();
-
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = GetConsoleWindow();
-    ofn.lpstrFilter =
-        L"Auth token (searchclient-auth-token.json)\0"
-        L"searchclient-auth-token.json\0"
-        L"JSON (*.json)\0*.json\0"
-        L"All files (*.*)\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrFile = file;
-    ofn.nMaxFile = static_cast<DWORD>(sizeof(file) / sizeof(file[0]));
-    ofn.lpstrTitle = L"Save searchclient-auth-token.json";
-    ofn.lpstrDefExt = L"json";
-    ofn.Flags =
-        OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (!initial_dir.empty()) {
-        ofn.lpstrInitialDir = initial_dir.c_str();
-    }
-
-    if (GetSaveFileNameW(&ofn)) {
-        return std::wstring(file);
-    }
-    if (CommDlgExtendedError() != 0) {
-        throw std::runtime_error("cannot open the save dialog");
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string> PromptOutputPath()
-{
-    const std::wstring default_path = StandardComputerTokenPath().wstring();
-
-    for (;;) {
-        WriteOut(
-            L"Enter the output path for searchclient-auth-token.json,\n"
-            L"or press Enter to open a file dialog.\n");
-        WriteOut(L"Default: ");
-        WriteOut(default_path);
-        WriteOut(L"\n");
-        WriteOut(L"output path: ");
-        const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
-        if (!answer.empty()) {
-            return answer;
-        }
-
-        WriteOut(
-            L"Opening file dialog "
-            L"(check behind other windows if it is not visible)...\n");
-        const auto picked = BrowseSaveTokenPath();
-        if (!picked) {
-            WriteErr(L"File selection was cancelled.\n");
-            continue;
-        }
-        return Utf8(*picked);
     }
 }
 
@@ -581,7 +615,9 @@ int WriteWithConfirm(
     const TokenFields& fields,
     bool yes,
     std::string_view private_pem,
-    const token_issuer::KeystorePaths& keystore)
+    const token_issuer::KeystorePaths& keystore,
+    OverwriteDeclineAction on_overwrite_decline =
+        OverwriteDeclineAction::CancelIssuance)
 {
     const auto signature = SignFields(fields, private_pem, keystore);
 
@@ -591,7 +627,10 @@ int WriteWithConfirm(
 
     if (fs::exists(token_path) && !yes) {
         if (!PromptYesNo(L"Token file exists. Overwrite?", false)) {
-            return kExitCancelled;
+            return on_overwrite_decline ==
+                       OverwriteDeclineAction::RetrySaveLocation
+                ? kExitRetrySaveLocation
+                : kExitCancelled;
         }
     }
 
@@ -728,17 +767,67 @@ int RunInteractiveComputer(
     fields.device_id = uuid;
     PromptCommonFields(fields);
 
-    const auto output = PromptOutputPath();
-    if (!output) {
-        return kExitCancelled;
-    }
-    const fs::path token_path = ResolveOutputPath(Wide(*output));
-    if (const auto parent = token_path.parent_path(); !parent.empty()) {
-        fs::create_directories(parent);
-    }
     const bool yes = HasFlag(args, L"--yes");
-    return WriteWithConfirm(
-        token_path, fields, yes, private_pem, keystore);
+
+    for (;;) {
+        const auto choice = PromptComputerSaveChoice();
+        if (!choice || *choice == ComputerSaveChoice::Cancel) {
+            return kExitCancelled;
+        }
+
+        auto token_path_opt = ResolveInteractiveComputerTokenPath(*choice);
+        if (!token_path_opt) {
+            return kExitCancelled;
+        }
+
+        fs::path token_path = *token_path_opt;
+        if (*choice == ComputerSaveChoice::Manual) {
+            std::string parent_error;
+            if (!EnsureTokenParentDirectory(token_path, &parent_error)) {
+                WriteErr(L"Could not create directory for:\n");
+                WriteErr(token_path.wstring());
+                WriteErr(L"\n");
+                if (!parent_error.empty()) {
+                    WriteErr(Wide(parent_error));
+                    WriteErr(L"\n");
+                }
+                WriteErr(L"Please choose another location.\n");
+                token_path_opt = PromptManualComputerTokenPath();
+                if (!token_path_opt) {
+                    return kExitCancelled;
+                }
+                token_path = *token_path_opt;
+            }
+        }
+
+        for (;;) {
+            try {
+                const int result = WriteWithConfirm(
+                    token_path,
+                    fields,
+                    yes,
+                    private_pem,
+                    keystore,
+                    OverwriteDeclineAction::RetrySaveLocation);
+                if (result == kExitRetrySaveLocation) {
+                    WriteOut(L"Choose a different save location.\n");
+                    break;
+                }
+                return result;
+            } catch (const std::exception& ex) {
+                WriteErr(L"Could not save token to:\n");
+                WriteErr(token_path.wstring());
+                WriteErr(L"\n");
+                WriteErr(Wide(ex.what()));
+                WriteErr(L"\nPlease choose another location.\n");
+                token_path_opt = PromptManualComputerTokenPath();
+                if (!token_path_opt) {
+                    return kExitCancelled;
+                }
+                token_path = *token_path_opt;
+            }
+        }
+    }
 }
 
 int RunInteractive(
