@@ -210,9 +210,19 @@ Token type:
 - show the UUID to the operator before issuance;
 - set `device_type=computer`;
 - set `device_id=<UUID>`;
-- allow an explicit output path for the PC token.
+- use `%ProgramData%\SearchEngine\searchclient-auth-token.json` as the standard PC-token location;
+- in interactive mode, propose `%ProgramData%\SearchEngine\searchclient-auth-token.json` as the default output path and create the `SearchEngine` directory when needed;
+- allow an explicit output path to override the default location;
+- keep `searchclient-auth-token.json` next to `SearchEngine-client.exe` as the defined client-side fallback location for a later client synchronization task.
 
-Do **not** decide here where SearchClient will automatically search for the PC token. That is a client-side product decision.
+The client-side lookup contract is therefore fixed now, even though `SearchEngine-client` is not modified in this server/admin task:
+
+```text
+1. %ProgramData%\SearchEngine\searchclient-auth-token.json
+2. <SearchEngine-client.exe directory>\searchclient-auth-token.json
+```
+
+The subsequent `SearchEngine-client` task must search PC tokens in exactly that order. USB-token discovery remains separate and must have priority over a PC token.
 
 CLI should support roughly:
 
@@ -220,6 +230,8 @@ CLI should support roughly:
 --device-type usb --drive E: --name ... --id ...
 --device-type computer --name ... --id ... --output <path>
 ```
+
+For non-interactive Computer issuance, `--output` remains available as an explicit override. If no explicit output is supplied in a mode where prompting is possible, use/propose the standard `%ProgramData%\SearchEngine\searchclient-auth-token.json` path.
 
 Add a diagnostic mode such as:
 
@@ -530,6 +542,13 @@ ZagEditor
 PRM/PRD/search functionality
 ```
 
+The PC-token lookup locations are nevertheless part of the agreed cross-repository contract for the later client task:
+
+```text
+1. %ProgramData%\SearchEngine\searchclient-auth-token.json
+2. <SearchEngine-client.exe directory>\searchclient-auth-token.json
+```
+
 Do not:
 
 - add TPM support;
@@ -596,8 +615,9 @@ Report:
 9. exact final ErrorCode mapping;
 10. how USB `device_id` is obtained;
 11. how computer `device_id` is obtained;
-12. Register-AuthClientFromToken behavior;
-13. build/test/package results;
-14. exact client-side changes still required in `SearchEngine-client` to synchronize with the committed server wire contract.
+12. exact PC-token output/default location behavior in `SearchClientTokenIssuer`;
+13. Register-AuthClientFromToken behavior;
+14. build/test/package results;
+15. exact client-side changes still required in `SearchEngine-client` to synchronize with the committed server wire contract, including PC-token lookup order, USB priority, and fallback to a valid PC token after USB removal.
 
 After that implementation commit, the server becomes the source of truth for the subsequent SearchEngine-client synchronization task.
