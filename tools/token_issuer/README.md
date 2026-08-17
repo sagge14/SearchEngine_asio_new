@@ -27,11 +27,29 @@ device authentication (`device_type` = `usb` or `computer`).
 
 ## Register after issue
 
+Interactive registration (portable package or repo):
+
 ```powershell
-.\AuthDbTool.exe --db <data>\auth_clients.sqlite add-from-token --token E:\searchclient-auth-token.json
-# or
-.\scripts\Register-AuthClientFromToken.ps1 -TokenPath E:\searchclient-auth-token.json
+.\Register-AuthClient-FromToken.bat
 ```
+
+After selecting the service instance, the helper offers:
+
+```text
+1 - Computer token   (%ProgramData%\SearchEngine\searchclient-auth-token.json)
+2 - USB token        (searchclient-auth-token.json on removable drives)
+3 - Select token file manually
+```
+
+Non-interactive:
+
+```powershell
+.\AuthDbTool.exe --db <data>\auth_clients.sqlite add-from-token --token <path>
+# or
+.\scripts\Register-AuthClientFromToken.ps1 -TokenPath <path>
+```
+
+When `-TokenPath` or BAT `/token <path>` is supplied, the source menu is skipped.
 
 ## Build
 

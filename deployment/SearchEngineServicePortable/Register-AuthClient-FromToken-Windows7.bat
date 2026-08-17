@@ -98,17 +98,23 @@ if "%TOKEN_PATH%"=="" (
     powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "%SCRIPT%" -AuthDbToolPath "%AUTH_TOOL%" -SearchEngineConfigPath "%CONFIG_TOOL%" -InstanceId "%SERVICE_INSTANCE%" -TokenPath "%TOKEN_PATH%"
 )
 set "EXIT_CODE=%ERRORLEVEL%"
-if not "%EXIT_CODE%"=="0" (
+if "%EXIT_CODE%"=="0" (
     echo.
-    echo ERROR: Registration failed with exit code %EXIT_CODE%.
+    echo Registration completed.
     call :WAIT_BEFORE_CLOSE
-    exit /b %EXIT_CODE%
+    exit /b 0
+)
+if "%EXIT_CODE%"=="2" (
+    echo.
+    echo Registration cancelled.
+    call :WAIT_BEFORE_CLOSE
+    exit /b 2
 )
 
 echo.
-echo Registration completed.
+echo ERROR: Registration failed with exit code %EXIT_CODE%.
 call :WAIT_BEFORE_CLOSE
-exit /b 0
+exit /b %EXIT_CODE%
 
 :NO_INSTALLED_SERVICES
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
