@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
 . (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
+. (Join-Path $PSScriptRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.searchengine-portable-package'
@@ -162,6 +163,9 @@ $binaryPath = Resolve-RequiredFile `
 $configToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
     'SearchEngineConfig Release helper'
+Assert-SearchEngineConfigSourceFreshness `
+    -ConfigToolPath $configToolPath `
+    -ProjectRoot $projectRoot
 $authDbToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'AuthDbTool.exe') `
     'AuthDbTool Release helper'
@@ -218,6 +222,9 @@ if ($tokenIssuerMachine -ne $expectedMachine) {
 if ($LASTEXITCODE -ne 0) {
     throw "SearchEngineConfig rejected portable Settings.json: $SettingsPath"
 }
+Assert-SearchEngineConfigAutoPadContract `
+    -ConfigToolPath $configToolPath `
+    -TemplatePath $SettingsPath
 
 $cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {

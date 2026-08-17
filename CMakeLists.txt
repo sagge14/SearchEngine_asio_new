@@ -1148,5 +1148,15 @@ if(BUILD_TESTS)
                 -P
                 "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigDocumentCatalog.cmake"
         )
+        add_test(
+                NAME SearchEngineConfigAutoPadPaths_test
+                COMMAND
+                "${CMAKE_COMMAND}"
+                "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+                "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+                "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-autopad-paths-test"
+                -P
+                "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigAutoPadPaths.cmake"
+        )
     endif()
 endif()
