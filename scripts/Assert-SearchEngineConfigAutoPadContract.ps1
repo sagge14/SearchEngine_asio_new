@@ -46,7 +46,6 @@ function Assert-SearchEngineConfigAutoPadContract {
     try {
         foreach ($case in $cases) {
             $settings = [pscustomobject]@{
-                Files = @($settingsTemplate.Files)
                 config = [pscustomobject]@{}
             }
             foreach ($property in $settingsTemplate.config.PSObject.Properties) {

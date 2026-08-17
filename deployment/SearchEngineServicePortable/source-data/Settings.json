@@ -1,11 +1,4 @@
 {
-  "Files": [
-    "test_files\\7voysinb.txt",
-    "test_files\\1\\be0er.txt",
-    "test_files\\1\\grendel2.txt",
-    "test_files\\1\\hackrfoe.txt",
-    "test_files\\1\\musijoke.txt"
-  ],
   "config": {
     "Name": "mySearchEngine_S",
     "Version": "1.1",
@@ -14,7 +7,7 @@
     "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1,
     "compact_threshold_percent": 5.0,
-    "dir": "D:\\ЯНВАРЬ",
+    "dir": "D:\\",
     "dirs": [
       "D:\\ЯНВАРЬ",
       "D:\\ФЕВРАЛЬ",
