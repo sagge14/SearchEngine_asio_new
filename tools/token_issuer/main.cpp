@@ -4,6 +4,8 @@
 #include "TokenDocument.hpp"
 #include "IdentitySigning.hpp"
 #include "VolumeSerial.hpp"
+#include "ComputerIdentity.hpp"
+#include "Auth/DeviceIdentity.h"
 
 #include <Windows.h>
 
@@ -14,6 +16,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -156,21 +159,28 @@ void PrintUsage()
         L"\n"
         L"Interactive (default):\n"
         L"  SearchClientTokenIssuer\n"
+        L"    Token type: 1 USB, 2 Computer\n"
         L"\n"
         L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
         L"[--password-env NAME]\n"
         L"  SearchClientTokenIssuer --export-public <file-or-dir> "
         L"[--keystore path]\n"
+        L"  SearchClientTokenIssuer --show-computer-id\n"
         L"\n"
         L"Non-interactive issue:\n"
-        L"  SearchClientTokenIssuer --drive E: --name \"Ivanov I.I.\" "
-        L"--id C-001 [--defaults path] [--yes]\n"
+        L"  SearchClientTokenIssuer --device-type usb --drive E: "
+        L"--name \"Ivanov I.I.\" --id C-001 [--defaults path] [--yes]\n"
         L"    [--keystore path] [--password-env TOKEN_ISSUER_PASSWORD]\n"
         L"    [--allow-manual-serial SERIAL] [--issuer ...] [--notes ...]\n"
+        L"  SearchClientTokenIssuer --device-type computer "
+        L"--name \"Ivanov I.I.\" --id C-001 --output <path>\n"
+        L"    [--defaults path] [--yes] [--keystore path] "
+        L"[--password-env TOKEN_ISSUER_PASSWORD]\n"
+        L"    [--issuer ...] [--notes ...]\n"
         L"\n"
         L"Token string fields must be printable ASCII only (no Cyrillic).\n"
         L"Keystore: RSA-2048; private key encrypted PKCS#8 AES-256-CBC.\n"
-        L"Tokens: format_version 2, signature.alg RS256 (server verifies).\n"
+        L"Tokens: format_version 1, signature.alg RS256 (server verifies).\n"
         L"\n"
         L"Exit codes: 0 ok, 1 error, 2 cancelled, 3 no eligible volume/serial\n");
 }
@@ -253,6 +263,20 @@ std::string PromptAsciiField(
             continue;
         }
         return value;
+    }
+}
+
+std::string PromptPath(const std::wstring& prompt)
+{
+    for (;;) {
+        WriteOut(prompt);
+        WriteOut(L": ");
+        const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
+        if (answer.empty()) {
+            WriteErr(L"Value must be non-empty.\n");
+            continue;
+        }
+        return answer;
     }
 }
 
@@ -385,6 +409,8 @@ TokenFields FieldsFromDefaults(const nlohmann::json& defaults)
     TokenFields fields;
     fields.client_id = defaults.value("client_id", std::string());
     fields.client_name = defaults.value("client_name", std::string());
+    fields.device_type = defaults.value("device_type", std::string("usb"));
+    fields.device_id = defaults.value("device_id", std::string());
     fields.issuer = defaults.value("issuer", std::string("auth-server"));
     fields.notes = defaults.value("notes", std::string());
     fields.issued_at = defaults.value("issued_at", std::string());
@@ -422,11 +448,25 @@ token_issuer::TokenSignature SignFields(
     const token_issuer::KeystorePaths& keystore)
 {
     using token_issuer::TrimCopy;
-    using token_issuer::NormalizeFlashSerial;
+    const auto device_type = TrimCopy(fields.device_type);
+    std::string device_id = TrimCopy(fields.device_id);
+    if (device_type == auth::kDeviceTypeUsb) {
+        device_id = auth::NormalizeUsbDeviceId(device_id);
+    } else if (device_type == auth::kDeviceTypeComputer) {
+        auto uuid = auth::NormalizeComputerUuid(device_id);
+        if (!uuid) {
+            throw std::runtime_error(
+                "computer device_id must be a usable SMBIOS UUID");
+        }
+        device_id = *uuid;
+    } else {
+        throw std::runtime_error("device_type must be usb or computer");
+    }
     const auto message = token_issuer::BuildIdentitySigningMessage(
         TrimCopy(fields.client_id),
         TrimCopy(fields.client_name),
-        NormalizeFlashSerial(fields.flash_serial));
+        device_type,
+        device_id);
     auto signature =
         token_issuer::SignTokenPayload(message, private_pem);
 
@@ -471,13 +511,62 @@ int WriteWithConfirm(
     return kExitOk;
 }
 
-int RunInteractive(
+void PromptCommonFields(TokenFields& fields)
+{
+    std::string default_id = fields.client_id;
+    if (default_id.empty()) {
+        default_id = token_issuer::GenerateClientId();
+    }
+
+    fields.client_name = PromptAsciiField(L"client_name", fields.client_name);
+    fields.client_id = PromptAsciiField(L"client_id", default_id);
+    fields.issuer = PromptAsciiField(L"issuer", fields.issuer, true);
+    fields.notes = PromptAsciiField(L"notes", fields.notes, true);
+
+    WriteOut(L"issued_at default is now UTC; expires_at stays null unless "
+             L"set in defaults.\n");
+    if (fields.issued_at.empty()) {
+        fields.issued_at = token_issuer::NowUtcIso8601();
+    }
+}
+
+void ApplyOptionalIssuerNotes(
+    TokenFields& fields,
+    const std::vector<std::wstring>& args)
+{
+    if (const auto issuer = Option(args, L"--issuer")) {
+        fields.issuer = RequireAsciiField("issuer", Utf8(*issuer));
+    }
+    if (const auto notes = Option(args, L"--notes")) {
+        fields.notes = token_issuer::TrimCopy(Utf8(*notes));
+        if (!token_issuer::IsAsciiTokenField(fields.notes)) {
+            throw std::runtime_error(
+                "notes must be printable ASCII only (no Cyrillic)");
+        }
+    }
+}
+
+fs::path ResolveOutputPath(const std::wstring& output)
+{
+    fs::path path(output);
+    if (path.empty()) {
+        throw std::runtime_error("--output path must be non-empty");
+    }
+    if (fs::is_directory(path) ||
+        (!path.has_filename() || path.filename() == "." ||
+         path.filename() == ".."))
+    {
+        path /= token_issuer::kTokenFileName;
+    }
+    return path;
+}
+
+int RunInteractiveUsb(
     const std::vector<std::wstring>& args,
-    const nlohmann::json& defaults,
+    TokenFields fields,
+    std::string_view private_pem,
     const token_issuer::KeystorePaths& keystore)
 {
-    const std::string private_pem = EnsureKeystore(keystore, args);
-
     const auto volumes = token_issuer::ListEligibleRemovableVolumes();
     if (volumes.empty()) {
         WriteErr(
@@ -519,25 +608,9 @@ int RunInteractive(
     }
 
     const auto& volume = volumes[static_cast<std::size_t>(selected - 1)];
-    TokenFields fields = FieldsFromDefaults(defaults);
-    fields.flash_serial = volume.serial;
-
-    std::string default_id = fields.client_id;
-    if (default_id.empty()) {
-        default_id = token_issuer::GenerateClientId();
-    }
-
-    fields.client_name = PromptAsciiField(
-        L"client_name", fields.client_name);
-    fields.client_id = PromptAsciiField(L"client_id", default_id);
-    fields.issuer = PromptAsciiField(L"issuer", fields.issuer, true);
-    fields.notes = PromptAsciiField(L"notes", fields.notes, true);
-
-    WriteOut(L"issued_at default is now UTC; expires_at stays null unless "
-             L"set in defaults.\n");
-    if (fields.issued_at.empty()) {
-        fields.issued_at = token_issuer::NowUtcIso8601();
-    }
+    fields.device_type = std::string(auth::kDeviceTypeUsb);
+    fields.device_id = volume.serial;
+    PromptCommonFields(fields);
 
     if (!PromptYesNo(L"Write token to volume root?", true)) {
         return kExitCancelled;
@@ -551,43 +624,75 @@ int RunInteractive(
         token_path, fields, yes, private_pem, keystore);
 }
 
-int RunNonInteractive(
+int RunInteractiveComputer(
+    const std::vector<std::wstring>& args,
+    TokenFields fields,
+    std::string_view private_pem,
+    const token_issuer::KeystorePaths& keystore)
+{
+    const std::string uuid = token_issuer::RequireComputerDeviceId();
+    WriteOut(L"Computer device_id (Win32_ComputerSystemProduct.UUID): ");
+    WriteOut(Wide(uuid));
+    WriteOut(L"\n");
+
+    fields.device_type = std::string(auth::kDeviceTypeComputer);
+    fields.device_id = uuid;
+    PromptCommonFields(fields);
+
+    std::string output = PromptPath(L"output path");
+    const fs::path token_path = ResolveOutputPath(Wide(output));
+    if (const auto parent = token_path.parent_path(); !parent.empty()) {
+        fs::create_directories(parent);
+    }
+    const bool yes = HasFlag(args, L"--yes");
+    return WriteWithConfirm(
+        token_path, fields, yes, private_pem, keystore);
+}
+
+int RunInteractive(
     const std::vector<std::wstring>& args,
     const nlohmann::json& defaults,
     const token_issuer::KeystorePaths& keystore)
 {
-    const auto drive_opt = Option(args, L"--drive");
-    const auto name_opt = Option(args, L"--name");
-    const auto id_opt = Option(args, L"--id");
-    if (!drive_opt || !name_opt || !id_opt) {
-        throw std::runtime_error(
-            "non-interactive mode requires --drive --name --id");
-    }
-
     const std::string private_pem = EnsureKeystore(keystore, args);
-
     TokenFields fields = FieldsFromDefaults(defaults);
-    fields.client_name = RequireAsciiField("client_name", Utf8(*name_opt));
-    fields.client_id = RequireAsciiField("client_id", Utf8(*id_opt));
 
-    if (const auto issuer = Option(args, L"--issuer")) {
-        fields.issuer = RequireAsciiField("issuer", Utf8(*issuer));
-    }
-    if (const auto notes = Option(args, L"--notes")) {
-        fields.notes = token_issuer::TrimCopy(Utf8(*notes));
-        if (!token_issuer::IsAsciiTokenField(fields.notes)) {
-            throw std::runtime_error(
-                "notes must be printable ASCII only (no Cyrillic)");
+    WriteOut(L"\nToken type:\n  1 - USB\n  2 - Computer\n  0 - Cancel\n");
+    for (;;) {
+        WriteOut(L"Select token type: ");
+        const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
+        if (answer == "0") {
+            return kExitCancelled;
         }
+        if (answer == "1") {
+            return RunInteractiveUsb(args, std::move(fields), private_pem, keystore);
+        }
+        if (answer == "2") {
+            return RunInteractiveComputer(
+                args, std::move(fields), private_pem, keystore);
+        }
+        WriteErr(L"Enter 1, 2, or 0.\n");
+    }
+}
+
+int RunNonInteractiveUsb(
+    const std::vector<std::wstring>& args,
+    TokenFields fields,
+    std::string_view private_pem,
+    const token_issuer::KeystorePaths& keystore)
+{
+    const auto drive_opt = Option(args, L"--drive");
+    if (!drive_opt) {
+        throw std::runtime_error("USB token requires --drive");
     }
 
     if (const auto manual = Option(args, L"--allow-manual-serial")) {
         WriteErr(
-            L"WARNING: using manual flash_serial override; "
+            L"WARNING: using manual USB device_id override; "
             L"prefer hardware serial from the volume.\n");
-        fields.flash_serial = RequireAsciiField(
-            "flash_serial",
-            token_issuer::NormalizeFlashSerial(Utf8(*manual)));
+        fields.device_id = RequireAsciiField(
+            "device_id",
+            auth::NormalizeUsbDeviceId(Utf8(*manual)));
     } else {
         const std::string drive = token_issuer::NormalizeDriveLetter(
             Utf8(*drive_opt));
@@ -597,36 +702,131 @@ int RunNonInteractive(
         const std::string serial =
             token_issuer::GetSerialForDriveLetter(drive);
         if (serial.empty() || serial == "(UNKNOWN)") {
-            WriteErr(
-                L"Cannot read hardware serial for drive ");
+            WriteErr(L"Cannot read hardware serial for drive ");
             WriteErr(Wide(drive));
             WriteErr(L"\n");
             return kExitNoVolume;
         }
-        fields.flash_serial = token_issuer::NormalizeFlashSerial(serial);
+        fields.device_id = auth::NormalizeUsbDeviceId(serial);
     }
 
+    fields.device_type = std::string(auth::kDeviceTypeUsb);
     if (fields.issued_at.empty()) {
         fields.issued_at = token_issuer::NowUtcIso8601();
     }
 
-    const std::string drive = token_issuer::NormalizeDriveLetter(
-        Utf8(*drive_opt));
-    const fs::path token_path =
-        fs::path(Wide(drive + "\\")) / token_issuer::kTokenFileName;
+    fs::path token_path;
+    if (const auto output = Option(args, L"--output")) {
+        token_path = ResolveOutputPath(*output);
+    } else {
+        const std::string drive = token_issuer::NormalizeDriveLetter(
+            Utf8(*drive_opt));
+        token_path = fs::path(Wide(drive + "\\")) / token_issuer::kTokenFileName;
+    }
+
     const bool yes = HasFlag(args, L"--yes");
     if (!yes && fs::exists(token_path)) {
         if (!PromptYesNo(L"Token file exists. Overwrite?", false)) {
             return kExitCancelled;
         }
     } else if (!yes) {
-        if (!PromptYesNo(L"Write token to volume root?", true)) {
+        if (!PromptYesNo(L"Write USB token?", true)) {
             return kExitCancelled;
         }
     }
 
     return WriteWithConfirm(
         token_path, fields, true, private_pem, keystore);
+}
+
+int RunNonInteractiveComputer(
+    const std::vector<std::wstring>& args,
+    TokenFields fields,
+    std::string_view private_pem,
+    const token_issuer::KeystorePaths& keystore)
+{
+    const auto output = Option(args, L"--output");
+    if (!output) {
+        throw std::runtime_error("computer token requires --output <path>");
+    }
+
+    const std::string uuid = token_issuer::RequireComputerDeviceId();
+    WriteOut(L"Computer device_id: ");
+    WriteOut(Wide(uuid));
+    WriteOut(L"\n");
+
+    fields.device_type = std::string(auth::kDeviceTypeComputer);
+    fields.device_id = uuid;
+    if (fields.issued_at.empty()) {
+        fields.issued_at = token_issuer::NowUtcIso8601();
+    }
+
+    const fs::path token_path = ResolveOutputPath(*output);
+    if (const auto parent = token_path.parent_path(); !parent.empty()) {
+        fs::create_directories(parent);
+    }
+    const bool yes = HasFlag(args, L"--yes");
+    if (!yes && fs::exists(token_path)) {
+        if (!PromptYesNo(L"Token file exists. Overwrite?", false)) {
+            return kExitCancelled;
+        }
+    } else if (!yes) {
+        if (!PromptYesNo(L"Write computer token?", true)) {
+            return kExitCancelled;
+        }
+    }
+
+    return WriteWithConfirm(
+        token_path, fields, true, private_pem, keystore);
+}
+
+int RunNonInteractive(
+    const std::vector<std::wstring>& args,
+    const nlohmann::json& defaults,
+    const token_issuer::KeystorePaths& keystore)
+{
+    const auto name_opt = Option(args, L"--name");
+    const auto id_opt = Option(args, L"--id");
+    if (!name_opt || !id_opt) {
+        throw std::runtime_error(
+            "non-interactive mode requires --name --id");
+    }
+
+    std::string device_type;
+    if (const auto type = Option(args, L"--device-type")) {
+        device_type = token_issuer::TrimCopy(Utf8(*type));
+    } else if (Option(args, L"--drive")) {
+        device_type = std::string(auth::kDeviceTypeUsb);
+    } else if (Option(args, L"--output")) {
+        device_type = std::string(auth::kDeviceTypeComputer);
+    } else {
+        throw std::runtime_error(
+            "non-interactive mode requires --device-type usb|computer");
+    }
+    if (!auth::IsSupportedDeviceType(device_type)) {
+        throw std::runtime_error("device_type must be usb or computer");
+    }
+
+    const std::string private_pem = EnsureKeystore(keystore, args);
+    TokenFields fields = FieldsFromDefaults(defaults);
+    fields.client_name = RequireAsciiField("client_name", Utf8(*name_opt));
+    fields.client_id = RequireAsciiField("client_id", Utf8(*id_opt));
+    fields.device_type = device_type;
+    ApplyOptionalIssuerNotes(fields, args);
+
+    if (device_type == auth::kDeviceTypeUsb) {
+        return RunNonInteractiveUsb(args, std::move(fields), private_pem, keystore);
+    }
+    return RunNonInteractiveComputer(
+        args, std::move(fields), private_pem, keystore);
+}
+
+int RunShowComputerId()
+{
+    const std::string uuid = token_issuer::RequireComputerDeviceId();
+    WriteOut(Wide(uuid));
+    WriteOut(L"\n");
+    return kExitOk;
 }
 
 } // namespace
@@ -677,6 +877,9 @@ int wmain(int argc, wchar_t* argv[])
         if (const auto export_to = Option(args, L"--export-public")) {
             return RunExportPublic(keystore, *export_to);
         }
+        if (HasFlag(args, L"--show-computer-id")) {
+            return RunShowComputerId();
+        }
 
         const auto defaults = token_issuer::LoadTokenDefaults(
             ExeDirectory(), defaults_path);
@@ -684,7 +887,9 @@ int wmain(int argc, wchar_t* argv[])
         const bool non_interactive =
             Option(args, L"--drive").has_value() ||
             Option(args, L"--name").has_value() ||
-            Option(args, L"--id").has_value();
+            Option(args, L"--id").has_value() ||
+            Option(args, L"--device-type").has_value() ||
+            Option(args, L"--output").has_value();
 
         if (non_interactive) {
             return RunNonInteractive(args, defaults, keystore);

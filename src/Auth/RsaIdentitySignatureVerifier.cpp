@@ -158,7 +158,10 @@ bool RsaIdentitySignatureVerifier::verify(
 
     auto* pkey = static_cast<EVP_PKEY*>(key_holder.get());
     const std::string message = BuildIdentitySigningMessage(
-        identity.client_id, identity.client_name, identity.flash_serial);
+        identity.client_id,
+        identity.client_name,
+        identity.device_type,
+        identity.device_id);
     const auto signature = Base64Decode(signature_base64);
     if (signature.empty()) {
         return false;

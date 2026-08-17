@@ -1,4 +1,4 @@
-# Register a USB auth token into auth_clients.sqlite for an installed
+# Register an auth token into auth_clients.sqlite for an installed
 # SearchEngineService instance (or an explicit -DataDir).
 # Compatible with Windows PowerShell 2.0 (Windows 7 SP1).
 #
@@ -162,7 +162,7 @@ function Select-InstalledInstanceFallback {
 function Select-TokenPathInteractive {
     $defaultToken = 'E:\searchclient-auth-token.json'
     Write-Host ''
-    Write-Host 'Select the USB auth token file (searchclient-auth-token.json).'
+    Write-Host 'Select the auth token file (searchclient-auth-token.json).'
     if (Test-Path -LiteralPath $defaultToken -PathType Leaf) {
         Write-Host "Default token found: $defaultToken"
         $useDefault = Read-Host 'Use this token? [Y/n]'

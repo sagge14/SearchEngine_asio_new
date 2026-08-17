@@ -9,7 +9,8 @@ namespace auth
     {
         std::string client_id;
         std::string client_name;
-        std::string flash_serial;
+        std::string device_type;
+        std::string device_id;
     };
 
     class IAuthSignatureVerifier
@@ -17,7 +18,6 @@ namespace auth
     public:
         virtual ~IAuthSignatureVerifier() = default;
 
-        // Stage 1: stub implementations accept any signature payload.
         [[nodiscard]] virtual bool verify(
             const AuthIdentity& identity,
             std::string_view signature) const = 0;

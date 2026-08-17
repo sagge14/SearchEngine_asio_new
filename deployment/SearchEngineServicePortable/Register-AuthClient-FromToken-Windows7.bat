@@ -33,7 +33,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Register auth client from USB token into auth_clients.sqlite
+echo Register auth client from auth token into auth_clients.sqlite
 echo Architecture: %TARGET_ARCH%
 echo.
 

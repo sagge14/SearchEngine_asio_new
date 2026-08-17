@@ -8,7 +8,7 @@ SearchEngineService {{ARCHITECTURE}} — переносимый комплект
 остановка, запуск, перезапуск и полное удаление выполняются BAT-файлами.
 Нативный помощник tools\SearchEngineConfig.exe имеет ту же архитектуру, что
 SearchEngine.exe. В tools\ также лежат AuthDbTool.exe (регистрация клиентов),
-SearchClientTokenIssuer.exe (выпуск USB-токена searchclient-auth-token.json) и
+SearchClientTokenIssuer.exe (выпуск USB/computer-токена searchclient-auth-token.json) и
 Register-AuthClientFromToken.ps1.
 
 Перед установкой:

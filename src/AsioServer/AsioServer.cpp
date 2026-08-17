@@ -633,23 +633,31 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                         response.at("client_name").get<std::string>();
                     const auto client_id =
                         response.at("client_id").get<std::string>();
-                    std::string flash_serial;
+                    std::string device_type;
+                    std::string device_id;
                     try {
                         const nlohmann::json request = nlohmann::json::parse(
                             requestData.begin(),
                             requestData.end());
-                        if (request.contains("flash_serial") &&
-                            request.at("flash_serial").is_string())
+                        if (request.contains("device_type") &&
+                            request.at("device_type").is_string())
                         {
-                            flash_serial =
-                                request.at("flash_serial").get<std::string>();
+                            device_type =
+                                request.at("device_type").get<std::string>();
+                        }
+                        if (request.contains("device_id") &&
+                            request.at("device_id").is_string())
+                        {
+                            device_id =
+                                request.at("device_id").get<std::string>();
                         }
                     } catch (...) {
                     }
                     std::lock_guard<std::mutex> lock(user_name_mutex_);
                     userName_ = client_name;
                     clientId_ = client_id;
-                    flashSerial_ = std::move(flash_serial);
+                    deviceType_ = std::move(device_type);
+                    deviceId_ = std::move(device_id);
                     authenticated_ = true;
                 } catch (const std::exception& ex) {
                     authSessionError = command_execution::CommandResult::failure(

@@ -50,7 +50,7 @@ option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
 option(BUILD_BACKUP_RESTORE "Build the BackupRestore CLI and core library" ON)
 option(BUILD_AUTH_DB_TOOL "Build the AuthDbTool SQLite client admin CLI" ON)
-option(BUILD_TOKEN_ISSUER "Build the SearchClientTokenIssuer USB token CLI" ${WIN32})
+option(BUILD_TOKEN_ISSUER "Build the SearchClientTokenIssuer USB/computer token CLI" ${WIN32})
 option(
         SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD
         "After Release build of SearchEngine/BackupService/ZagEditor/BackupRestore in packagable presets (windows-x64, windows-x86, windows7-x86), run New-*Package and cloud-publish when configured"
@@ -634,7 +634,7 @@ if(BUILD_AUTH_DB_TOOL)
 endif()
 
 # ---------------------------------------------------------------------------
-# SearchClientTokenIssuer (USB auth token issuance; Windows-only)
+# SearchClientTokenIssuer (USB/computer auth token issuance; Windows-only)
 # ---------------------------------------------------------------------------
 if(BUILD_TOKEN_ISSUER)
     if(NOT WIN32)
@@ -645,6 +645,7 @@ if(BUILD_TOKEN_ISSUER)
             SearchClientTokenIssuer
             tools/token_issuer/main.cpp
             tools/token_issuer/VolumeSerial.cpp
+            tools/token_issuer/ComputerIdentity.cpp
             tools/token_issuer/TokenAscii.cpp
             tools/token_issuer/TokenDefaults.cpp
             tools/token_issuer/TokenDocument.cpp
@@ -654,6 +655,7 @@ if(BUILD_TOKEN_ISSUER)
             SearchClientTokenIssuer
             PRIVATE
             "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+            "${PROJECT_SOURCE_DIR}/src"
     )
     target_link_libraries(
             SearchClientTokenIssuer
@@ -1025,6 +1027,8 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/GetAttachmentsCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/Auth/AuthenticateCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Auth/AuthClientStore.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenAscii.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenDocument.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"
@@ -1057,6 +1061,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
             "${PROJECT_SOURCE_DIR}/src"
             "${PROJECT_SOURCE_DIR}/tools/backup"
+            "${PROJECT_SOURCE_DIR}/tools/token_issuer"
     )
     target_link_libraries(
             SearchEngine_test

@@ -73,11 +73,18 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
             "AUTHENTICATE_V1 client_name is missing or empty");
     }
 
-    const auto flash_serial = readRequiredString("flash_serial");
-    if (!flash_serial) {
+    const auto device_type = readRequiredString("device_type");
+    if (!device_type) {
         return CommandResult::failure(
-            ErrorCode::AuthFlashSerialMissing,
-            "AUTHENTICATE_V1 flash_serial is missing or empty");
+            ErrorCode::AuthDeviceTypeMissing,
+            "AUTHENTICATE_V1 device_type is missing or empty");
+    }
+
+    const auto device_id = readRequiredString("device_id");
+    if (!device_id) {
+        return CommandResult::failure(
+            ErrorCode::AuthDeviceIdMissing,
+            "AUTHENTICATE_V1 device_id is missing or empty");
     }
 
     if (!document.contains("signature")) {
@@ -115,10 +122,15 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
                 ErrorCode::AuthClientNameMismatch,
                 "auth client_name mismatch for client_id: " + *client_id);
         }
-        if (match->flash_serial != *flash_serial) {
+        if (match->device_type != *device_type) {
             return CommandResult::failure(
-                ErrorCode::AuthFlashSerialMismatch,
-                "auth flash_serial mismatch for client_id: " + *client_id);
+                ErrorCode::AuthDeviceTypeMismatch,
+                "auth device_type mismatch for client_id: " + *client_id);
+        }
+        if (match->device_id != *device_id) {
+            return CommandResult::failure(
+                ErrorCode::AuthDeviceIdMismatch,
+                "auth device_id mismatch for client_id: " + *client_id);
         }
     } catch (const std::exception& ex) {
         return CommandResult::failure(
@@ -129,7 +141,8 @@ command_execution::CommandResult AuthenticateCmd::executeResult(
     auth::AuthIdentity identity{
         *client_id,
         *client_name,
-        *flash_serial};
+        *device_type,
+        *device_id};
     if (!verifier_.verify(identity, signature)) {
         return CommandResult::failure(
             ErrorCode::AuthSignatureInvalid,

@@ -1,4 +1,5 @@
 #include "Auth/AuthClientStore.h"
+#include "Auth/DeviceIdentity.h"
 
 #include <nlohmann/json.hpp>
 
@@ -18,8 +19,10 @@ void printUsage()
     std::cerr
         << "AuthDbTool --db <path> <command> [options]\n"
         << "Commands:\n"
-        << "  add --id <id> --name <name> --flash <serial> [--disabled]\n"
-        << "  update --id <id> --name <name> --flash <serial> [--disabled|--enabled]\n"
+        << "  add --id <id> --name <name> --device-type usb|computer "
+           "--device-id <id> [--disabled]\n"
+        << "  update --id <id> --name <name> --device-type usb|computer "
+           "--device-id <id> [--disabled|--enabled]\n"
         << "  add-from-token --token <path> [--disabled]\n"
         << "  enable --id <id>\n"
         << "  disable --id <id>\n"
@@ -41,27 +44,33 @@ std::string requireArg(
 
 std::string trimCopy(std::string value)
 {
-    auto notSpace = [](unsigned char c) { return !std::isspace(c); };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
-    value.erase(
-        std::find_if(value.rbegin(), value.rend(), notSpace).base(),
-        value.end());
-    return value;
+    return auth::TrimCopy(std::move(value));
 }
 
-std::string normalizeFlashSerial(std::string value)
+std::string normalizeDeviceId(
+    const std::string& device_type,
+    std::string device_id)
 {
-    value = trimCopy(std::move(value));
-    std::transform(value.begin(), value.end(), value.begin(),
-        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    return value;
+    if (device_type == auth::kDeviceTypeUsb) {
+        return auth::NormalizeUsbDeviceId(std::move(device_id));
+    }
+    if (device_type == auth::kDeviceTypeComputer) {
+        auto uuid = auth::NormalizeComputerUuid(std::move(device_id));
+        if (!uuid) {
+            throw std::runtime_error(
+                "computer device_id must be a usable SMBIOS UUID");
+        }
+        return *uuid;
+    }
+    throw std::runtime_error("device_type must be usb or computer");
 }
 
 struct TokenFields
 {
     std::string client_id;
     std::string client_name;
-    std::string flash_serial;
+    std::string device_type;
+    std::string device_id;
     std::string signature_meta;
 };
 
@@ -87,57 +96,51 @@ TokenFields loadTokenFields(const std::string& token_path)
         throw std::runtime_error(
             "token format must be searchclient-auth-token");
     }
-    if (document.value("format_version", 0) != 1 &&
-        document.value("format_version", 0) != 2)
-    {
-        throw std::runtime_error("token format_version must be 1 or 2");
+    if (document.value("format_version", 0) != 1) {
+        throw std::runtime_error("token format_version must be 1");
+    }
+    if (document.contains("flash_serial")) {
+        throw std::runtime_error(
+            "legacy flash_serial tokens are not supported; re-issue a "
+            "device_type/device_id token");
     }
 
     TokenFields fields;
     fields.client_id = trimCopy(document.value("client_id", std::string()));
     fields.client_name = trimCopy(document.value("client_name", std::string()));
-    fields.flash_serial = normalizeFlashSerial(
-        document.value("flash_serial", std::string()));
+    fields.device_type = trimCopy(document.value("device_type", std::string()));
+    fields.device_id = document.value("device_id", std::string());
 
     if (fields.client_id.empty() || fields.client_name.empty() ||
-        fields.flash_serial.empty())
+        fields.device_type.empty() ||
+        trimCopy(fields.device_id).empty())
     {
         throw std::runtime_error(
-            "token requires non-empty client_id, client_name, flash_serial");
+            "token requires non-empty client_id, client_name, device_type, "
+            "device_id");
     }
+    fields.device_id = normalizeDeviceId(fields.device_type, fields.device_id);
 
-    const int format_version = document.value("format_version", 0);
-    if (document.contains("signature")) {
-        if (!document.at("signature").is_object()) {
-            throw std::runtime_error("token signature must be a JSON object");
-        }
-        const auto alg = document.at("signature").value("alg", std::string());
-        if (format_version == 1) {
-            if (!alg.empty() && alg != "none") {
-                throw std::runtime_error(
-                    "token signature.alg must be empty or \"none\" for "
-                    "format_version 1");
-            }
-        } else if (format_version == 2) {
-            if (alg != "RS256") {
-                throw std::runtime_error(
-                    "token signature.alg must be \"RS256\" for format_version 2");
-            }
-            const auto value =
-                document.at("signature").value("value", std::string());
-            if (value.empty()) {
-                throw std::runtime_error(
-                    "token signature.value must be non-empty for "
-                    "format_version 2");
-            }
-        }
-        fields.signature_meta = document.at("signature").dump();
-    } else if (format_version == 2) {
-        throw std::runtime_error(
-            "format_version 2 token requires a signature object");
+    if (!document.contains("signature") || !document.at("signature").is_object()) {
+        throw std::runtime_error("token requires a signature object");
     }
-
+    const auto alg = document.at("signature").value("alg", std::string());
+    if (alg != "RS256") {
+        throw std::runtime_error("token signature.alg must be \"RS256\"");
+    }
+    const auto value = document.at("signature").value("value", std::string());
+    if (value.empty()) {
+        throw std::runtime_error("token signature.value must be non-empty");
+    }
+    fields.signature_meta = document.at("signature").dump();
     return fields;
+}
+
+void printClientRow(const auth::AuthClientRecord& row)
+{
+    std::cout << row.client_id << '\t' << row.client_name << '\t'
+              << row.device_type << '\t' << row.device_id << '\t'
+              << (row.enabled ? "enabled" : "disabled") << '\n';
 }
 
 } // namespace
@@ -160,7 +163,8 @@ int main(int argc, char** argv)
         std::string command;
         std::string client_id;
         std::string client_name;
-        std::string flash_serial;
+        std::string device_type;
+        std::string device_id;
         std::string token_path;
         bool have_enabled = false;
         bool enabled = true;
@@ -173,8 +177,10 @@ int main(int argc, char** argv)
                 client_id = requireArg(args, i, "--id");
             } else if (arg == "--name") {
                 client_name = requireArg(args, i, "--name");
-            } else if (arg == "--flash") {
-                flash_serial = requireArg(args, i, "--flash");
+            } else if (arg == "--device-type") {
+                device_type = requireArg(args, i, "--device-type");
+            } else if (arg == "--device-id") {
+                device_id = requireArg(args, i, "--device-id");
             } else if (arg == "--token") {
                 token_path = requireArg(args, i, "--token");
             } else if (arg == "--disabled") {
@@ -204,15 +210,21 @@ int main(int argc, char** argv)
         store.open(db_path);
 
         if (command == "add" || command == "update") {
-            if (client_id.empty() || client_name.empty() || flash_serial.empty()) {
+            device_type = trimCopy(device_type);
+            if (client_id.empty() || client_name.empty() ||
+                device_type.empty() || device_id.empty())
+            {
                 throw std::runtime_error(
-                    command + " requires --id --name --flash");
+                    command +
+                    " requires --id --name --device-type --device-id");
             }
+            const auto normalized_id = normalizeDeviceId(device_type, device_id);
             const bool row_enabled = have_enabled ? enabled : true;
             store.upsertClient(
                 client_id,
                 client_name,
-                normalizeFlashSerial(flash_serial),
+                device_type,
+                normalized_id,
                 row_enabled);
             std::cout << command << " ok: " << client_id << '\n';
             return 0;
@@ -227,12 +239,14 @@ int main(int argc, char** argv)
             store.upsertClient(
                 fields.client_id,
                 fields.client_name,
-                fields.flash_serial,
+                fields.device_type,
+                fields.device_id,
                 row_enabled,
                 fields.signature_meta);
             std::cout << "add-from-token ok: " << fields.client_id << '\t'
-                      << fields.client_name << '\t' << fields.flash_serial
-                      << '\t' << (row_enabled ? "enabled" : "disabled") << '\n';
+                      << fields.client_name << '\t' << fields.device_type
+                      << '\t' << fields.device_id << '\t'
+                      << (row_enabled ? "enabled" : "disabled") << '\n';
             return 0;
         }
 
@@ -263,18 +277,14 @@ int main(int argc, char** argv)
                 std::cerr << "not found: " << client_id << '\n';
                 return 2;
             }
-            std::cout << row->client_id << '\t' << row->client_name << '\t'
-                      << row->flash_serial << '\t'
-                      << (row->enabled ? "enabled" : "disabled") << '\n';
+            printClientRow(*row);
             return 0;
         }
 
         if (command == "list") {
             const auto rows = store.listClients();
             for (const auto& row : rows) {
-                std::cout << row.client_id << '\t' << row.client_name << '\t'
-                          << row.flash_serial << '\t'
-                          << (row.enabled ? "enabled" : "disabled") << '\n';
+                printClientRow(row);
             }
             std::cout << rows.size() << " client(s)\n";
             return 0;

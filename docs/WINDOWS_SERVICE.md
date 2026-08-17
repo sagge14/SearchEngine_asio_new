@@ -86,7 +86,7 @@ cmake --build --preset windows7-x86-release `
   --target SearchEngine SearchEngineConfig AuthDbTool SearchClientTokenIssuer
 ```
 
-USB flash tokens (`format_version` 2) are signed RS256 by `SearchClientTokenIssuer`.
+USB and computer tokens (`format_version` 1) are signed RS256 by `SearchClientTokenIssuer`.
 Place `issuer-public.pem` in the service data directory (next to
 `auth_clients.sqlite`), for example:
 
@@ -94,8 +94,8 @@ Place `issuer-public.pem` in the service data directory (next to
 .\SearchClientTokenIssuer.exe --export-public "$env:ProgramData\SearchEngineService"
 ```
 
-The client checks only the USB hardware serial locally; the server verifies the
-signature on `AUTHENTICATE_V1`.
+The client checks the local device identity (`usb` hardware serial or
+`computer` SMBIOS UUID); the server verifies the signature on `AUTHENTICATE_V1`.
 
 Executable остаётся обычным console-subsystem приложением с `wmain`; custom
 ENTRY и Windows GUI subsystem не используются.
