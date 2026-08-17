@@ -19,7 +19,8 @@ $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.searchengine-portable-package'
-$expectedOemHash = 'EA765FC534362C43EAFA65F4B004F60FF5DE11865E39CC67DCC2042A7F71B0D2'
+# Two CP866 lines of 33 letters (lowercase then uppercase, CRLF), including ц/Ц.
+$expectedOemHash = '42E5905CB86ACE474F11B11F5A9DF49E4A25F6FF8E0D2FFB7A7BFC8A7ED29260'
 $productName = 'SearchEngineService'
 $versionInfo = Get-SearchEngineAppVersionNames `
     -ProjectRoot $projectRoot `
@@ -98,6 +99,29 @@ function Find-VCRedist([string]$FileName, [string]$VersionRange) {
         throw "$FileName was not found below $redistRoot"
     }
     return $candidate.FullName
+}
+
+function Assert-Oem866Table([byte[]]$Bytes) {
+    $splitAt = -1
+    for ($i = 0; $i -lt ($Bytes.Length - 1); $i++) {
+        if ($Bytes[$i] -eq 0x0D -and $Bytes[$i + 1] -eq 0x0A) {
+            $splitAt = $i
+            break
+        }
+    }
+    if ($splitAt -lt 0) {
+        throw 'OEM866.INI must contain two CRLF-separated CP866 alphabet lines.'
+    }
+    $lowerLength = $splitAt
+    $upperLength = $Bytes.Length - $splitAt - 2
+    if ($lowerLength -ne 33 -or $upperLength -ne 33) {
+        throw ("OEM866.INI must contain two 33-byte CP866 alphabet lines; got {0} and {1}." `
+            -f $lowerLength, $upperLength)
+    }
+    # Alphabet order places ц/Ц immediately after х/Х (index 23).
+    if ($Bytes[23] -ne 0xE6 -or $Bytes[$splitAt + 2 + 23] -ne 0x96) {
+        throw 'OEM866.INI is missing CP866 letters ц/Ц after х/Х.'
+    }
 }
 
 function Get-Sha256FromBytes([byte[]]$Bytes) {
@@ -325,6 +349,7 @@ try {
 
     $oemBase64 = (Get-Content -LiteralPath $oemBase64Path -Raw).Trim()
     $oemBytes = [Convert]::FromBase64String($oemBase64)
+    Assert-Oem866Table $oemBytes
     $actualOemHash = Get-Sha256FromBytes $oemBytes
     if ($actualOemHash -ne $expectedOemHash) {
         throw 'The embedded OEM866 table failed its SHA-256 check.'
