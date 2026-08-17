@@ -9,7 +9,9 @@ SearchEngineService {{ARCHITECTURE}} — переносимый комплект
 Нативный помощник tools\SearchEngineConfig.exe имеет ту же архитектуру, что
 SearchEngine.exe. В tools\ также лежат AuthDbTool.exe (регистрация клиентов),
 SearchClientTokenIssuer.exe (выпуск USB/computer-токена searchclient-auth-token.json) и
-Register-AuthClientFromToken.ps1.
+Register-AuthClientFromToken.ps1. Выпуск токена: Issue-SearchClientToken.bat
+(не нужно запускать EXE вручную). Регистрация готового токена в базе:
+Register-AuthClient-FromToken.bat.
 
 Перед установкой:
 
@@ -63,6 +65,8 @@ ServiceInstance.cmd или передать первым аргументом, �
   Start-SearchEngineService.bat
   Restart-SearchEngineService.bat
   Uninstall-SearchEngineService.bat
+  Issue-SearchClientToken.bat
+  Register-AuthClient-FromToken.bat
   sc query SearchEngineService
 
 Stop и Start — штатная остановка и последующий запуск службы (новый процесс),

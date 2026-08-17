@@ -360,6 +360,10 @@ try {
             Destination = 'Register-AuthClient-FromToken.bat'
         },
         @{
+            Source = 'Issue-SearchClientToken-Windows7.bat'
+            Destination = 'Issue-SearchClientToken.bat'
+        },
+        @{
             Source = 'Verify-Package-Windows7.bat'
             Destination = 'Verify-Package.bat'
         }
@@ -430,6 +434,7 @@ try {
         'Restart-SearchEngineService.bat',
         'Uninstall-SearchEngineService.bat',
         'Register-AuthClient-FromToken.bat',
+        'Issue-SearchClientToken.bat',
         'Verify-Package.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `

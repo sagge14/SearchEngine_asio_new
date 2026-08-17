@@ -8,6 +8,7 @@
 #include "Auth/DeviceIdentity.h"
 
 #include <Windows.h>
+#include <commdlg.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -160,6 +161,7 @@ void PrintUsage()
         L"Interactive (default):\n"
         L"  SearchClientTokenIssuer\n"
         L"    Token type: 1 USB, 2 Computer\n"
+        L"    Computer output: type a path, or Enter for a Save dialog\n"
         L"\n"
         L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
         L"[--password-env NAME]\n"
@@ -266,17 +268,61 @@ std::string PromptAsciiField(
     }
 }
 
-std::string PromptPath(const std::wstring& prompt)
+std::optional<std::wstring> BrowseSaveTokenPath()
+{
+    wchar_t file[32768]{};
+    const wchar_t* const default_name = L"searchclient-auth-token.json";
+    wcsncpy_s(file, default_name, _TRUNCATE);
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetConsoleWindow();
+    ofn.lpstrFilter =
+        L"Auth token (searchclient-auth-token.json)\0"
+        L"searchclient-auth-token.json\0"
+        L"JSON (*.json)\0*.json\0"
+        L"All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = static_cast<DWORD>(sizeof(file) / sizeof(file[0]));
+    ofn.lpstrTitle = L"Save searchclient-auth-token.json";
+    ofn.lpstrDefExt = L"json";
+    ofn.Flags =
+        OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (GetFileAttributesW(L"E:\\") != INVALID_FILE_ATTRIBUTES) {
+        ofn.lpstrInitialDir = L"E:\\";
+    }
+
+    if (GetSaveFileNameW(&ofn)) {
+        return std::wstring(file);
+    }
+    if (CommDlgExtendedError() != 0) {
+        throw std::runtime_error("cannot open the save dialog");
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> PromptOutputPath()
 {
     for (;;) {
-        WriteOut(prompt);
-        WriteOut(L": ");
+        WriteOut(
+            L"Enter the output path for searchclient-auth-token.json,\n"
+            L"or press Enter to open a file dialog.\n");
+        WriteOut(L"output path: ");
         const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
-        if (answer.empty()) {
-            WriteErr(L"Value must be non-empty.\n");
+        if (!answer.empty()) {
+            return answer;
+        }
+
+        WriteOut(
+            L"Opening file dialog "
+            L"(check behind other windows if it is not visible)...\n");
+        const auto picked = BrowseSaveTokenPath();
+        if (!picked) {
+            WriteErr(L"File selection was cancelled.\n");
             continue;
         }
-        return answer;
+        return Utf8(*picked);
     }
 }
 
@@ -639,8 +685,11 @@ int RunInteractiveComputer(
     fields.device_id = uuid;
     PromptCommonFields(fields);
 
-    std::string output = PromptPath(L"output path");
-    const fs::path token_path = ResolveOutputPath(Wide(output));
+    const auto output = PromptOutputPath();
+    if (!output) {
+        return kExitCancelled;
+    }
+    const fs::path token_path = ResolveOutputPath(Wide(*output));
     if (const auto parent = token_path.parent_path(); !parent.empty()) {
         fs::create_directories(parent);
     }

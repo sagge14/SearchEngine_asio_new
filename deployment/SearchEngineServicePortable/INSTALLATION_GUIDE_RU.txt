@@ -20,6 +20,8 @@
 |-- Start-SearchEngineService.bat       запуск и проверка PING/PONG
 |-- Restart-SearchEngineService.bat     перезапуск и проверка ответа
 |-- Uninstall-SearchEngineService.bat   резервирование и полное удаление
+|-- Issue-SearchClientToken.bat         выпуск USB/computer-токена
+|-- Register-AuthClient-FromToken.bat   регистрация токена в auth_clients.sqlite
 |-- ServiceInstance.cmd                уникальный экземпляр службы
 |-- Verify-Package.bat                  проверка SHA-256
 |-- README.txt
@@ -41,7 +43,10 @@
 |   `-- {{VC_REDIST_FILE}}              автономный Microsoft VC++ Runtime
 |
 `-- tools
-    `-- SearchEngineConfig.exe          нативный помощник {{ARCHITECTURE}}
+    |-- SearchEngineConfig.exe          нативный помощник {{ARCHITECTURE}}
+    |-- AuthDbTool.exe                  регистрация клиентов в SQLite
+    |-- SearchClientTokenIssuer.exe     выпуск searchclient-auth-token.json
+    `-- Register-AuthClientFromToken.ps1
 
 SearchEngineConfig.exe не является сервером и не устанавливает службу сам.
 BAT-файлы вызывают его для безопасной работы с UTF-8 JSON, определения числа

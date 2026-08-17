@@ -664,6 +664,7 @@ if(BUILD_TOKEN_ISSUER)
             ole32
             oleaut32
             wbemuuid
+            comdlg32
     )
     # Prefer arch-matched OpenSSL VC MD libs. Stock FindOpenSSL may cache a
     # mismatched Release import lib (e.g. arm64) from another OpenSSL prefix.
