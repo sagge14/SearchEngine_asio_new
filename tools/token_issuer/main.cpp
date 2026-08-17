@@ -223,6 +223,40 @@ fs::path ExeDirectory()
     return fs::path(buffer).parent_path();
 }
 
+fs::path StandardComputerTokenDirectory()
+{
+    wchar_t* program_data = nullptr;
+    std::size_t length = 0;
+    if (_wdupenv_s(&program_data, &length, L"ProgramData") == 0 &&
+        program_data != nullptr)
+    {
+        fs::path root(program_data);
+        free(program_data);
+        return root / L"SearchEngine";
+    }
+    return fs::path(L"SearchEngine");
+}
+
+fs::path StandardComputerTokenPath()
+{
+    return StandardComputerTokenDirectory() / token_issuer::kTokenFileName;
+}
+
+void EnsureStandardComputerTokenDirectory()
+{
+    const fs::path directory = StandardComputerTokenDirectory();
+    if (directory.empty()) {
+        return;
+    }
+    std::error_code ec;
+    fs::create_directories(directory, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "cannot create standard token directory: " +
+            directory.string());
+    }
+}
+
 std::string RequireAsciiField(const std::string& label, std::string value)
 {
     value = token_issuer::TrimCopy(std::move(value));
@@ -270,9 +304,13 @@ std::string PromptAsciiField(
 
 std::optional<std::wstring> BrowseSaveTokenPath()
 {
+    EnsureStandardComputerTokenDirectory();
+    const fs::path default_path = StandardComputerTokenPath();
+
     wchar_t file[32768]{};
-    const wchar_t* const default_name = L"searchclient-auth-token.json";
-    wcsncpy_s(file, default_name, _TRUNCATE);
+    wcsncpy_s(file, default_path.wstring().c_str(), _TRUNCATE);
+
+    const std::wstring initial_dir = default_path.parent_path().wstring();
 
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
@@ -289,8 +327,8 @@ std::optional<std::wstring> BrowseSaveTokenPath()
     ofn.lpstrDefExt = L"json";
     ofn.Flags =
         OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (GetFileAttributesW(L"E:\\") != INVALID_FILE_ATTRIBUTES) {
-        ofn.lpstrInitialDir = L"E:\\";
+    if (!initial_dir.empty()) {
+        ofn.lpstrInitialDir = initial_dir.c_str();
     }
 
     if (GetSaveFileNameW(&ofn)) {
@@ -304,10 +342,15 @@ std::optional<std::wstring> BrowseSaveTokenPath()
 
 std::optional<std::string> PromptOutputPath()
 {
+    const std::wstring default_path = StandardComputerTokenPath().wstring();
+
     for (;;) {
         WriteOut(
             L"Enter the output path for searchclient-auth-token.json,\n"
             L"or press Enter to open a file dialog.\n");
+        WriteOut(L"Default: ");
+        WriteOut(default_path);
+        WriteOut(L"\n");
         WriteOut(L"output path: ");
         const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
         if (!answer.empty()) {

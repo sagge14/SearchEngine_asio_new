@@ -1,15 +1,10 @@
 #include "Auth/AuthClientStore.h"
 #include "Auth/DeviceIdentity.h"
+#include "TokenLoader.hpp"
 
-#include <nlohmann/json.hpp>
-
-#include <algorithm>
-#include <cctype>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace {
@@ -63,77 +58,6 @@ std::string normalizeDeviceId(
         return *uuid;
     }
     throw std::runtime_error("device_type must be usb or computer");
-}
-
-struct TokenFields
-{
-    std::string client_id;
-    std::string client_name;
-    std::string device_type;
-    std::string device_id;
-    std::string signature_meta;
-};
-
-TokenFields loadTokenFields(const std::string& token_path)
-{
-    std::ifstream input(token_path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("cannot open token file: " + token_path);
-    }
-
-    nlohmann::json document;
-    try {
-        input >> document;
-    } catch (const std::exception& ex) {
-        throw std::runtime_error(
-            std::string("token JSON parse failed: ") + ex.what());
-    }
-
-    if (!document.is_object()) {
-        throw std::runtime_error("token payload must be a JSON object");
-    }
-    if (document.value("format", std::string()) != "searchclient-auth-token") {
-        throw std::runtime_error(
-            "token format must be searchclient-auth-token");
-    }
-    if (document.value("format_version", 0) != 1) {
-        throw std::runtime_error("token format_version must be 1");
-    }
-    if (document.contains("flash_serial")) {
-        throw std::runtime_error(
-            "legacy flash_serial tokens are not supported; re-issue a "
-            "device_type/device_id token");
-    }
-
-    TokenFields fields;
-    fields.client_id = trimCopy(document.value("client_id", std::string()));
-    fields.client_name = trimCopy(document.value("client_name", std::string()));
-    fields.device_type = trimCopy(document.value("device_type", std::string()));
-    fields.device_id = document.value("device_id", std::string());
-
-    if (fields.client_id.empty() || fields.client_name.empty() ||
-        fields.device_type.empty() ||
-        trimCopy(fields.device_id).empty())
-    {
-        throw std::runtime_error(
-            "token requires non-empty client_id, client_name, device_type, "
-            "device_id");
-    }
-    fields.device_id = normalizeDeviceId(fields.device_type, fields.device_id);
-
-    if (!document.contains("signature") || !document.at("signature").is_object()) {
-        throw std::runtime_error("token requires a signature object");
-    }
-    const auto alg = document.at("signature").value("alg", std::string());
-    if (alg != "RS256") {
-        throw std::runtime_error("token signature.alg must be \"RS256\"");
-    }
-    const auto value = document.at("signature").value("value", std::string());
-    if (value.empty()) {
-        throw std::runtime_error("token signature.value must be non-empty");
-    }
-    fields.signature_meta = document.at("signature").dump();
-    return fields;
 }
 
 void printClientRow(const auth::AuthClientRecord& row)
@@ -234,7 +158,7 @@ int main(int argc, char** argv)
             if (token_path.empty()) {
                 throw std::runtime_error("add-from-token requires --token");
             }
-            const auto fields = loadTokenFields(token_path);
+            const auto fields = auth_db::loadTokenFields(token_path);
             const bool row_enabled = have_enabled ? enabled : true;
             store.upsertClient(
                 fields.client_id,

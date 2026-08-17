@@ -610,6 +610,7 @@ if(BUILD_AUTH_DB_TOOL)
     add_executable(
             AuthDbTool
             tools/auth/main.cpp
+            tools/auth/TokenLoader.cpp
             src/Auth/AuthClientStore.cpp
             src/SQLite/sqlite3.c
     )
@@ -617,6 +618,7 @@ if(BUILD_AUTH_DB_TOOL)
             AuthDbTool
             PRIVATE
             "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/auth"
     )
     target_link_libraries(
             AuthDbTool
@@ -1029,6 +1031,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/Auth/AuthenticateCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Auth/AuthClientStore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Auth/IssuerPublicKeyPath.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/auth/TokenLoader.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenAscii.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenDocument.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
@@ -1067,6 +1070,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
             "${PROJECT_SOURCE_DIR}/src"
             "${PROJECT_SOURCE_DIR}/tools/backup"
+            "${PROJECT_SOURCE_DIR}/tools/auth"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer"
     )
     target_link_libraries(
