@@ -56,7 +56,7 @@ static std::string escapeSqlLiteral(const std::string& value) {
     const std::string sql_num = "'" + escapeSqlLiteral(num) + "'";
     auto condition = "where type = " + type_str + " and number = " + sql_num;
 
-    auto db_way = SQLiteConnectionManager::instance().getConnection(base_way_dir);
+    auto db_way = SQLiteConnectionManager::instance().getReadOnlyConnection(base_way_dir);
     db_way->execSql("select * from way " +  condition);
 
     if (!db_way->empty())
@@ -72,7 +72,7 @@ static std::string escapeSqlLiteral(const std::string& value) {
         " or trim(number) = trim(coalesce(Sr, '') || ' ' || " + sql_num + "))"
         " order by ind desc limit 1";
 
-    auto db_f12 = SQLiteConnectionManager::instance().getConnection(base_f12_dir);
+    auto db_f12 = SQLiteConnectionManager::instance().getReadOnlyConnection(base_f12_dir);
     db_f12->execSql( "select * from tab " +  condition);
 
     if (db_f12->empty())

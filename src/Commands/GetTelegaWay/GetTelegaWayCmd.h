@@ -9,7 +9,12 @@
 
 class GetTelegaWayCmd : public Command {
 protected:
-    std::vector<uint8_t>  GetTelegaWay(const std::vector<uint8_t> & _data, Telega::TYPE _type);
+    [[nodiscard]] static std::vector<uint8_t> GetTelegaWay(
+        const std::vector<uint8_t>& _data,
+        Telega::TYPE _type);
+    [[nodiscard]] static command_execution::CommandResult GetTelegaWayResult(
+        const std::vector<uint8_t>& data,
+        Telega::TYPE type);
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override = 0;
 };
@@ -17,11 +22,15 @@ public:
 class GetTelegaWayVhCmd : public GetTelegaWayCmd {
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
+    [[nodiscard]] command_execution::CommandResult executeResult(
+        const std::vector<uint8_t>& data) override;
 };
 
 class GetTelegaWayIshCmd : public GetTelegaWayCmd {
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
+    [[nodiscard]] command_execution::CommandResult executeResult(
+        const std::vector<uint8_t>& data) override;
 };
 
 #endif //SEARCHENGINE_GETTELEGAWAYCMD_H

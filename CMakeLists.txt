@@ -1046,6 +1046,8 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetJsonTelega/AutoPadSource.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetJsonTelega/GetJsonTelegaCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaWay/TelegaWay.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaWay/GetTelegaWayCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
