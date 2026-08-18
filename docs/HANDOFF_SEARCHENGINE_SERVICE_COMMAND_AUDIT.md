@@ -52,7 +52,7 @@ VERIFIED    — реализовано и проверено
 | SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
 | SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
 | SVC-005 | P0 | Update/reinstall теряет runtime-state | DECIDED |
-| SVC-006 | P0/P1 | `PING/PONG` как единственный health-check | OPEN |
+| SVC-006 | P0/P1 | `PING/PONG` как core health-check | REJECTED |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | OPEN |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
@@ -387,6 +387,51 @@ configuration/import/validation. При update старые значения с�
 
 ---
 
+## SVC-006 — `PING/PONG` остаётся core readiness-check installer
+
+**Статус:** REJECTED
+
+Текущее `SCM RUNNING + PING/PONG` считается достаточным core readiness-check для
+install/update/rollback.
+
+Причина: SearchEngine начинает принимать TCP/PING только после успешного прохождения
+основного startup-пути. К этому моменту уже должны быть загружены и провалидированы
+`Settings.json`, инициализирован runtime/OEM, открыт auth store, создан SearchServer
+и индекс, запущены watcher/scheduler, после чего создаётся `AsioServer`. Если core
+startup ломается раньше, получить `PONG` нельзя.
+
+Глобальный health **не должен** требовать доступности всех feature-specific
+источников и каталогов. В частности его не должны ломать:
+
+- отключённые/optional PRM/PRD sources;
+- `prefix_map.json`, если `GET_ATTACHMENTS` не используется;
+- F12/OPIS, если соответствующая функция сейчас не вызывается;
+- `tlg_send_root` / `razn_output_dir`, если upload-функция не используется;
+- отсутствующие будущие monthly roots из `dirs`.
+
+Feature-specific path/source ошибки проверяются при вызове соответствующей функции
+и возвращаются как typed error.
+
+### Будущая диагностика — отдельная feature
+
+В будущем можно добавить отдельную информационную диагностическую команду/tool,
+которая показывает состояние компонентов, например:
+
+```text
+Core: OK
+PRM: OK
+PRD: disabled
+F12: unavailable
+OPIS: OK
+GET_ATTACHMENTS: not configured
+```
+
+Такая диагностика предназначена для оператора и troubleshooting. Она **не должна**
+становиться обязательным критерием успешной установки/rollback и не должна
+превращать optional/будущие monthly roots в startup failure.
+
+---
+
 # Открытые пункты
 
 ## SVC-001 — runtime-root службы и управление настройками
@@ -400,28 +445,6 @@ Service mode использует `%ProgramData%\SearchEngineService[-instance]`
 
 Нужно позже решить UX безопасного редактирования/валидации/reload config без
 выдачи Modify на весь data-dir, где лежат auth DB и индекс.
-
----
-
-## SVC-006 — `PING/PONG` недостаточен как readiness-check
-
-**Приоритет:** P0/P1  
-**Статус:** OPEN
-
-Installer считает службу здоровой по SCM `RUNNING` + `PING/PONG`.
-
-`PING` подтверждает liveness, но не проверяет:
-
-- auth store;
-- index;
-- обязательную runtime config;
-- feature-specific roots;
-- optional `prefix_map.json`;
-- PRM/PRD/F12/OPIS доступность;
-- права для upload/download функций.
-
-Нужно определить отдельный readiness/diagnostic contract с учётом того, что
-optional функции и будущие monthly roots не должны блокировать установку.
 
 ---
 
@@ -486,8 +509,8 @@ GETDOC
 | Команда | Основная зависимость/решение |
 |---|---|
 | `NEGOTIATE_PROTOCOL_V1` | файловых зависимостей нет |
-| `PING` | liveness only; SVC-006 |
-| `AUTHENTICATE_V1` | persistent auth state; SVC-005/006 |
+| `PING` | core installer readiness; SVC-006 |
+| `AUTHENTICATE_V1` | persistent auth state; SVC-005 |
 | `USER_REGISTRY` | legacy localhost-admin path |
 | `SOLOREQUEST` | index + configured `dirs` |
 | `GETSQLJSONANSWEAR` | index + configured `dirs` |
@@ -524,14 +547,14 @@ SVC-010 -> DECIDED
 SVC-012 -> DECIDED
 SVC-002 -> DECIDED
 SVC-011 -> DECIDED
+SVC-006 -> REJECTED
 ```
 
 Дальше:
 
-1. **SVC-006** — readiness/health с учётом обязательных и optional функций.
-2. **SVC-008** — формально закрыть watcher edge-case, если решение принято.
-3. **SVC-001** — runtime config UX.
-4. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
+1. **SVC-008** — формально закрыть watcher edge-case, если решение принято.
+2. **SVC-001** — runtime config UX.
+3. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
 
 ---
 
