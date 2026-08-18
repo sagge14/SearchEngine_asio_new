@@ -215,6 +215,17 @@ if ($rollbackStart -ge 0) {
         $posRollback -ge 0 -and $posOldHealth -ge 0 -and $posCommit -ge 0 -and
         $posRollback -lt $posOldHealth -and $posOldHealth -lt $posCommit
     ) '5. Rollback order is rollback then old-port health then commit'
+    Assert-True (
+        -not $rollbackSlice.Contains('if exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_RUNTIME_FAILED')
+    ) '5. TX directory existence does not jump to ROLLBACK_RUNTIME_FAILED'
+    $posFirewall = $rollbackSlice.IndexOf("`n:ROLLBACK_FIREWALL")
+    $posFailedLabel = $rollbackSlice.IndexOf("`n:ROLLBACK_RUNTIME_FAILED")
+    Assert-True (
+        $posFirewall -ge 0 -and $posFailedLabel -ge 0 -and $posFirewall -lt $posFailedLabel -and
+        $rollbackSlice.Substring($posFirewall, $posFailedLabel - $posFirewall).Contains(
+            'sc.exe start "%SERVICE_NAME%"'
+        )
+    ) '5. Pre-mutation leftover TX still reaches old-service start'
 }
 
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.

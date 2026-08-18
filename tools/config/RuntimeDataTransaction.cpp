@@ -21,7 +21,11 @@ using json = nlohmann::json;
 constexpr int kFormatVersion = 1;
 constexpr DWORD kCopyChunkBytes = 64 * 1024;
 constexpr wchar_t kMarkerName[] = L".searchengine-runtime-update-marker";
+constexpr wchar_t kPhaseName[] = L".searchengine-runtime-update-phase";
 constexpr wchar_t kManifestName[] = L"manifest.json";
+constexpr char kPhasePrepared[] = "prepared";
+constexpr char kPhaseMutationStarted[] = "mutation_started";
+constexpr char kPhaseRestored[] = "restored";
 constexpr wchar_t kRuntimeUpdatePrefix[] = L".runtime-update-";
 constexpr wchar_t kSettingsName[] = L"Settings.json";
 constexpr wchar_t kOemName[] = L"OEM866.INI";
@@ -39,6 +43,14 @@ enum class PathKind {
     Directory,
     Reparse,
     Other
+};
+
+enum class TransactionPhase {
+    Absent,
+    Prepared,
+    MutationStarted,
+    Restored,
+    Unknown
 };
 
 struct ManagedFileState {
@@ -430,21 +442,47 @@ void copyHandleToHandle(HANDLE source, HANDLE destination)
     }
 }
 
-void copyFileCreateNew(const std::wstring& source, const std::wstring& destination)
+void recordOwned(std::vector<std::wstring>& owned, const std::wstring& name)
+{
+    for (const auto& item : owned) {
+        if (equalPath(item, name)) {
+            return;
+        }
+    }
+    owned.push_back(name);
+}
+
+UniqueHandle createOwnedFile(
+    const std::wstring& path,
+    std::vector<std::wstring>& owned)
+{
+    UniqueHandle handle = createNewFile(path);
+    recordOwned(owned, fileName(path));
+    return handle;
+}
+
+void writeAll(HANDLE handle, const char* data, DWORD size)
+{
+    DWORD written = 0;
+    if (!WriteFile(handle, data, size, &written, nullptr) || written != size) {
+        throw std::runtime_error(
+            "cannot write file; Win32 error " + std::to_string(GetLastError()));
+    }
+    if (!FlushFileBuffers(handle)) {
+        throw std::runtime_error(
+            "cannot flush file; Win32 error " + std::to_string(GetLastError()));
+    }
+}
+
+void copyFileCreateNew(
+    const std::wstring& source,
+    const std::wstring& destination,
+    std::vector<std::wstring>& owned)
 {
     requireRegularFile(source, "copy source");
-    if (classifyPath(destination) != PathKind::Missing) {
-        throw std::runtime_error("copy destination already exists");
-    }
     UniqueHandle in = openExistingFile(source, GENERIC_READ, FILE_SHARE_READ);
-    UniqueHandle out = createNewFile(destination);
-    try {
-        copyHandleToHandle(in.get(), out.get());
-    } catch (...) {
-        out.reset();
-        DeleteFileW(destination.c_str());
-        throw;
-    }
+    UniqueHandle out = createOwnedFile(destination, owned);
+    copyHandleToHandle(in.get(), out.get());
 }
 
 std::string sha256File(const std::wstring& path)
@@ -640,30 +678,43 @@ void createDirectoryExclusive(const std::wstring& path)
     }
 }
 
-void writeMarker(const std::wstring& rollbackDir)
+void writeMarker(
+    const std::wstring& rollbackDir,
+    std::vector<std::wstring>& owned)
 {
     const std::wstring markerPath = joinPath(rollbackDir, kMarkerName);
-    UniqueHandle handle = createNewFile(markerPath);
+    UniqueHandle handle = createOwnedFile(markerPath, owned);
     const char text[] = "SearchEngineService runtime-update\r\n";
-    DWORD written = 0;
-    if (!WriteFile(
-            handle.get(), text, static_cast<DWORD>(sizeof(text) - 1),
-            &written, nullptr) ||
-        written != sizeof(text) - 1)
+    writeAll(handle.get(), text, static_cast<DWORD>(sizeof(text) - 1));
+}
+
+void writePhase(
+    const std::wstring& rollbackDir,
+    const char* phase,
+    std::vector<std::wstring>& owned)
+{
+    const std::string body = std::string(phase) + "\n";
+    const std::wstring phasePath = joinPath(rollbackDir, kPhaseName);
+    if (classifyPath(phasePath) == PathKind::Missing) {
+        UniqueHandle handle = createOwnedFile(phasePath, owned);
+        writeAll(handle.get(), body.data(), static_cast<DWORD>(body.size()));
+        return;
+    }
+
+    const std::wstring staging = uniqueStagingPath(rollbackDir);
+    UniqueHandle handle = createOwnedFile(staging, owned);
+    writeAll(handle.get(), body.data(), static_cast<DWORD>(body.size()));
+    handle.reset();
+    if (!MoveFileExW(
+            staging.c_str(),
+            phasePath.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
     {
-        const DWORD error = GetLastError();
-        handle.reset();
-        DeleteFileW(markerPath.c_str());
         throw std::runtime_error(
-            "cannot write rollback marker; Win32 error " + std::to_string(error));
+            "cannot publish transaction phase; Win32 error " +
+            std::to_string(GetLastError()));
     }
-    if (!FlushFileBuffers(handle.get())) {
-        const DWORD error = GetLastError();
-        handle.reset();
-        DeleteFileW(markerPath.c_str());
-        throw std::runtime_error(
-            "cannot flush rollback marker; Win32 error " + std::to_string(error));
-    }
+    recordOwned(owned, kPhaseName);
 }
 
 json managedFileToJson(const ManagedFileState& file)
@@ -695,29 +746,8 @@ void writeManifest(
 
     const std::string body = root.dump(2) + "\n";
     const std::wstring staging = uniqueStagingPath(rollbackDir);
-    ownedRollbackNames.push_back(fileName(staging));
-    UniqueHandle handle = createNewFile(staging);
-    DWORD written = 0;
-    if (!WriteFile(
-            handle.get(), body.data(), static_cast<DWORD>(body.size()),
-            &written, nullptr) ||
-        written != body.size())
-    {
-        const DWORD error = GetLastError();
-        handle.reset();
-        DeleteFileW(staging.c_str());
-        throw std::runtime_error(
-            "cannot write transaction manifest; Win32 error " +
-            std::to_string(error));
-    }
-    if (!FlushFileBuffers(handle.get())) {
-        const DWORD error = GetLastError();
-        handle.reset();
-        DeleteFileW(staging.c_str());
-        throw std::runtime_error(
-            "cannot flush transaction manifest; Win32 error " +
-            std::to_string(error));
-    }
+    UniqueHandle handle = createOwnedFile(staging, ownedRollbackNames);
+    writeAll(handle.get(), body.data(), static_cast<DWORD>(body.size()));
     handle.reset();
     const std::wstring manifestPath = joinPath(rollbackDir, kManifestName);
     if (!MoveFileExW(
@@ -725,12 +755,11 @@ void writeManifest(
             manifestPath.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
     {
-        const DWORD error = GetLastError();
-        DeleteFileW(staging.c_str());
         throw std::runtime_error(
             "cannot publish transaction manifest; Win32 error " +
-            std::to_string(error));
+            std::to_string(GetLastError()));
     }
+    recordOwned(ownedRollbackNames, kManifestName);
 }
 
 ManagedFileState managedFileFromJson(const json& files, const wchar_t* name, const wchar_t* snapshotName)
@@ -788,6 +817,53 @@ std::string readAllUtf8(const std::wstring& path)
     }
     body.resize(total);
     return body;
+}
+
+std::string trimAscii(std::string text)
+{
+    while (!text.empty() &&
+           (text.back() == '\n' || text.back() == '\r' || text.back() == ' ' ||
+            text.back() == '\t'))
+    {
+        text.pop_back();
+    }
+    std::size_t start = 0;
+    while (start < text.size() &&
+           (text[start] == '\n' || text[start] == '\r' || text[start] == ' ' ||
+            text[start] == '\t'))
+    {
+        ++start;
+    }
+    return text.substr(start);
+}
+
+TransactionPhase readPhase(const std::wstring& rollbackDir)
+{
+    const std::wstring phasePath = joinPath(rollbackDir, kPhaseName);
+    switch (classifyPath(phasePath)) {
+    case PathKind::Missing:
+        return TransactionPhase::Absent;
+    case PathKind::File:
+        break;
+    default:
+        return TransactionPhase::Unknown;
+    }
+    std::string body;
+    try {
+        body = trimAscii(readAllUtf8(phasePath));
+    } catch (...) {
+        return TransactionPhase::Unknown;
+    }
+    if (body == kPhasePrepared) {
+        return TransactionPhase::Prepared;
+    }
+    if (body == kPhaseMutationStarted) {
+        return TransactionPhase::MutationStarted;
+    }
+    if (body == kPhaseRestored) {
+        return TransactionPhase::Restored;
+    }
+    return TransactionPhase::Unknown;
 }
 
 TransactionManifest loadManifest(const std::wstring& rollbackDir)
@@ -848,7 +924,8 @@ TransactionManifest loadManifest(const std::wstring& rollbackDir)
 void snapshotManagedFile(
     const std::wstring& dataDir,
     const std::wstring& rollbackDir,
-    ManagedFileState& file)
+    ManagedFileState& file,
+    std::vector<std::wstring>& owned)
 {
     const std::wstring source = joinPath(dataDir, file.name);
     switch (classifyPath(source)) {
@@ -857,7 +934,7 @@ void snapshotManagedFile(
         return;
     case PathKind::File:
         file.existed = true;
-        copyFileCreateNew(source, joinPath(rollbackDir, file.snapshotName));
+        copyFileCreateNew(source, joinPath(rollbackDir, file.snapshotName), owned);
         return;
     case PathKind::Directory:
         throw std::runtime_error(std::string("managed path is a directory: ") + utf8(file.name));
@@ -1081,6 +1158,7 @@ std::vector<std::wstring> expectedTransactionFiles(const TransactionManifest& ma
 {
     std::vector<std::wstring> names;
     names.emplace_back(kMarkerName);
+    names.emplace_back(kPhaseName);
     names.emplace_back(kManifestName);
     if (manifest.settings.existed) {
         names.emplace_back(kSettingsSnapshot);
@@ -1094,6 +1172,14 @@ std::vector<std::wstring> expectedTransactionFiles(const TransactionManifest& ma
     return names;
 }
 
+std::vector<std::wstring> preparedSchemaFiles()
+{
+    return {
+        kMarkerName,
+        kPhaseName
+    };
+}
+
 bool isExpectedName(const std::vector<std::wstring>& expected, const std::wstring& name)
 {
     for (const auto& item : expected) {
@@ -1104,12 +1190,11 @@ bool isExpectedName(const std::vector<std::wstring>& expected, const std::wstrin
     return false;
 }
 
-void deleteTransactionDirectory(
+void deleteTransactionFiles(
     const std::wstring& rollbackDir,
-    const TransactionManifest& manifest)
+    const std::vector<std::wstring>& expected)
 {
     requireDirectory(rollbackDir, "rollback-dir");
-    const auto expected = expectedTransactionFiles(manifest);
     const auto entries = listDirectory(rollbackDir);
     for (const auto& entry : entries) {
         if (entry.kind != PathKind::File || !isExpectedName(expected, entry.name)) {
@@ -1132,6 +1217,18 @@ void deleteTransactionDirectory(
     }
 }
 
+void deleteTransactionDirectory(
+    const std::wstring& rollbackDir,
+    const TransactionManifest& manifest)
+{
+    deleteTransactionFiles(rollbackDir, expectedTransactionFiles(manifest));
+}
+
+bool isDurablePhaseName(const std::wstring& name)
+{
+    return equalPath(name, kMarkerName) || equalPath(name, kPhaseName);
+}
+
 void bestEffortDeleteCreatedDirectory(
     const std::wstring& rollbackDir,
     const std::vector<std::wstring>& ownedNames)
@@ -1147,9 +1244,15 @@ void bestEffortDeleteCreatedDirectory(
             }
         }
         for (const auto& name : ownedNames) {
+            if (isDurablePhaseName(name)) {
+                continue;
+            }
             deleteIfRegularFile(joinPath(rollbackDir, name.c_str()));
         }
-        RemoveDirectoryW(rollbackDir.c_str());
+        const auto remaining = listDirectory(rollbackDir);
+        if (remaining.empty()) {
+            RemoveDirectoryW(rollbackDir.c_str());
+        }
     } catch (...) {
     }
 }
@@ -1190,26 +1293,21 @@ int applyCommand(const std::vector<std::wstring>& args)
     validateRollbackPath(dataDir, rollbackDir, false);
 
     bool createdRollback = false;
-    bool mutated = false;
+    bool mutationStarted = false;
     TransactionManifest manifest;
-    std::vector<std::wstring> ownedRollbackNames{
-        kMarkerName,
-        kManifestName,
-        kSettingsSnapshot,
-        kOemSnapshot,
-        kEndpointSnapshot
-    };
+    std::vector<std::wstring> ownedRollbackNames;
     try {
         createDirectoryExclusive(rollbackDir);
         createdRollback = true;
-        writeMarker(rollbackDir);
+        writeMarker(rollbackDir, ownedRollbackNames);
+        writePhase(rollbackDir, kPhasePrepared, ownedRollbackNames);
 
         manifest.formatVersion = kFormatVersion;
         manifest.transactionId = makeTransactionId();
         manifest.dataDir = dataDir;
-        snapshotManagedFile(dataDir, rollbackDir, manifest.settings);
-        snapshotManagedFile(dataDir, rollbackDir, manifest.oem);
-        snapshotManagedFile(dataDir, rollbackDir, manifest.endpoint);
+        snapshotManagedFile(dataDir, rollbackDir, manifest.settings, ownedRollbackNames);
+        snapshotManagedFile(dataDir, rollbackDir, manifest.oem, ownedRollbackNames);
+        snapshotManagedFile(dataDir, rollbackDir, manifest.endpoint, ownedRollbackNames);
 
         const std::wstring ignorePath = joinPath(dataDir, kIgnoreName);
         switch (classifyPath(ignorePath)) {
@@ -1228,9 +1326,10 @@ int applyCommand(const std::vector<std::wstring>& args)
             throw std::runtime_error("ignore.txt is invalid");
         }
         writeManifest(rollbackDir, manifest, ownedRollbackNames);
+        writePhase(rollbackDir, kPhaseMutationStarted, ownedRollbackNames);
+        mutationStarted = true;
 
         stageAndAtomicallyReplace(generatedSettings, joinPath(dataDir, kSettingsName), dataDir);
-        mutated = true;
         stageAndAtomicallyReplace(packageOem, joinPath(dataDir, kOemName), dataDir);
         stageAndAtomicallyReplace(generatedEndpoint, joinPath(dataDir, kEndpointName), dataDir);
         installIgnoreIfMissing(dataDir, packageIgnore);
@@ -1238,10 +1337,10 @@ int applyCommand(const std::vector<std::wstring>& args)
         ensureDirectory(joinPath(dataDir, kMessagesName), "messages");
         return 0;
     } catch (const std::exception& exception) {
-        if (mutated) {
+        if (mutationStarted) {
             try {
                 restoreAllManaged(dataDir, rollbackDir, manifest);
-                deleteTransactionDirectory(rollbackDir, manifest);
+                writePhase(rollbackDir, kPhaseRestored, ownedRollbackNames);
                 std::cerr << "ERROR: " << exception.what() << '\n';
                 std::cerr << "runtime-update apply failed; managed files were rolled back\n";
                 return 1;
@@ -1257,6 +1356,7 @@ int applyCommand(const std::vector<std::wstring>& args)
             bestEffortDeleteCreatedDirectory(rollbackDir, ownedRollbackNames);
         }
         std::cerr << "ERROR: " << exception.what() << '\n';
+        std::cerr << "runtime-update apply failed before managed mutation\n";
         return 1;
     }
 }
@@ -1267,9 +1367,17 @@ int rollbackCommand(const std::vector<std::wstring>& args)
         const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
         const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
         requireDirectory(dataDir, "data-dir");
+        validateRollbackPath(dataDir, rollbackDir, true);
+        const TransactionPhase phase = readPhase(rollbackDir);
+        if (phase != TransactionPhase::MutationStarted) {
+            std::cerr << "runtime-update rollback not required\n";
+            return 0;
+        }
         TransactionManifest manifest;
         validateExistingTransaction(dataDir, rollbackDir, manifest);
         restoreAllManaged(dataDir, rollbackDir, manifest);
+        std::vector<std::wstring> owned;
+        writePhase(rollbackDir, kPhaseRestored, owned);
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "ERROR: " << exception.what() << '\n';
@@ -1284,15 +1392,37 @@ int rollbackCommand(const std::vector<std::wstring>& args)
     }
 }
 
+void commitExistingTransaction(
+    const std::wstring& dataDir,
+    const std::wstring& rollbackDir)
+{
+    const TransactionPhase phase = readPhase(rollbackDir);
+    const std::wstring manifestPath = joinPath(rollbackDir, kManifestName);
+    if (phase == TransactionPhase::MutationStarted ||
+        phase == TransactionPhase::Restored)
+    {
+        TransactionManifest manifest;
+        validateExistingTransaction(dataDir, rollbackDir, manifest);
+        deleteTransactionDirectory(rollbackDir, manifest);
+        return;
+    }
+    if (classifyPath(manifestPath) == PathKind::File) {
+        TransactionManifest manifest;
+        validateExistingTransaction(dataDir, rollbackDir, manifest);
+        deleteTransactionDirectory(rollbackDir, manifest);
+        return;
+    }
+    deleteTransactionFiles(rollbackDir, preparedSchemaFiles());
+}
+
 int commitCommand(const std::vector<std::wstring>& args)
 {
     try {
         const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
         const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
         requireDirectory(dataDir, "data-dir");
-        TransactionManifest manifest;
-        validateExistingTransaction(dataDir, rollbackDir, manifest);
-        deleteTransactionDirectory(rollbackDir, manifest);
+        validateRollbackPath(dataDir, rollbackDir, true);
+        commitExistingTransaction(dataDir, rollbackDir);
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "ERROR: " << exception.what() << '\n';

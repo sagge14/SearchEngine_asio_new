@@ -603,6 +603,8 @@ netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 goto :FAILED_WITH_FILES
 
 :RUNTIME_APPLY_FAILED
+rem A leftover TX directory is diagnostic state. It does not prove that
+rem managed files were mutated or that runtime-update-rollback is required.
 if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_OR_FAIL
 set "RUNTIME_TX_READY=1"
 goto :ROLLBACK_OR_FAIL
@@ -634,6 +636,9 @@ set "ROLLBACK_RUNTIME_OK=1"
 goto :ROLLBACK_FIREWALL
 
 :ROLLBACK_RUNTIME_DO
+rem Consult the helper even when the TX directory exists. prepared/restored is a
+rem no-op; only mutation_started performs managed restore. A missing directory
+rem means there is nothing to consult.
 if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_RUNTIME_ALREADY_CLEARED
 "%HELPER%" runtime-update-rollback --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
 if errorlevel 1 goto :ROLLBACK_RUNTIME_FAILED
