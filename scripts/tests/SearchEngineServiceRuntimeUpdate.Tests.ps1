@@ -348,8 +348,16 @@ try {
         '10.2 existing ignore.txt unchanged after rollback'
     )
     Assert-PersistentUnchanged -DataDir $data2 -Before $before2 -Prefix '10.2'
+    Assert-True (Test-Path -LiteralPath $rb2) (
+        '10.2 transaction directory remains after rollback'
+    )
+    $commit2 = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $data2,
+        '--rollback-dir', $rb2
+    )
+    Assert-True ($commit2.ExitCode -eq 0) '10.2 commit after rollback succeeded'
     Assert-True (-not (Test-Path -LiteralPath $rb2)) (
-        '10.2 transaction directory removed after complete rollback'
+        '10.2 transaction directory removed after explicit commit'
     )
 
     # 10.3 Missing managed files
@@ -403,6 +411,11 @@ try {
     )
     Assert-True (Test-Path -LiteralPath (Join-Path $data3 'messages\new-during-update.bin')) (
         '10.3 rollback kept new messages'
+    )
+    Assert-True (Test-Path -LiteralPath $rb3) '10.3 transaction remains after rollback'
+    $null = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $data3,
+        '--rollback-dir', $rb3
     )
 
     $case3b = Join-Path $script:tempRoot 'case-ignore-changed'
@@ -750,7 +763,13 @@ try {
     Assert-True ((Get-Content -LiteralPath (Join-Path $data8 'OEM866.INI') -Raw) -eq $oldOem) (
         '10.8 OEM866.INI restored after retry'
     )
-    Assert-True (-not (Test-Path -LiteralPath $rb8)) '10.8 TX dir removed after successful retry'
+    Assert-True (Test-Path -LiteralPath $rb8) '10.8 TX dir remains after successful rollback'
+    $commit8 = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $data8,
+        '--rollback-dir', $rb8
+    )
+    Assert-True ($commit8.ExitCode -eq 0) '10.8 explicit commit after rollback succeeded'
+    Assert-True (-not (Test-Path -LiteralPath $rb8)) '10.8 TX dir removed after explicit commit'
 
     # 10.9 Commit ownership
     $case9 = Join-Path $script:tempRoot 'case-commit'
@@ -848,6 +867,177 @@ try {
     } else {
         Assert-True ($true) '10.9 reparse point creation not available; skipped'
     }
+
+    # Path validation for rollback/commit: wrong prefix and non-sibling.
+    $casePath = Join-Path $script:tempRoot 'case-path-commands'
+    New-Item -ItemType Directory -Path $casePath | Out-Null
+    $dataPath = Join-Path $casePath 'SearchEngineService'
+    New-SentinelDataDir -DataDir $dataPath
+    $packagePath = New-PackageData -Root $casePath -Oem $newOem -Ignore $packageIgnore
+    $genSettingsPath = Join-Path $casePath 'generated-settings.json'
+    $genEndpointPath = Join-Path $casePath 'generated-endpoint.txt'
+    New-TextFile -Path $genSettingsPath -Text $newSettings
+    New-TextFile -Path $genEndpointPath -Text $newEndpoint
+    $rbPath = New-RollbackDir -DataDir $dataPath
+    $applyPath = Invoke-RuntimeCommand -Command 'runtime-update-apply' -Arguments @(
+        '--data-dir', $dataPath,
+        '--package-data', $packagePath,
+        '--generated-settings', $genSettingsPath,
+        '--generated-endpoint', $genEndpointPath,
+        '--rollback-dir', $rbPath
+    )
+    Assert-True ($applyPath.ExitCode -eq 0) 'path-validation apply succeeded'
+    $settingsAfterApply = Get-FileRecord -Path (Join-Path $dataPath 'Settings.json')
+    $beforePath = Get-PersistentRecords -DataDir $dataPath
+
+    function Copy-TransactionFiles {
+        param([string]$Source, [string]$Destination)
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+        Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name)
+        }
+    }
+
+    $badPrefixDir = Join-Path $casePath 'wrong-prefix-1-2'
+    Copy-TransactionFiles -Source $rbPath -Destination $badPrefixDir
+    $rollbackBadPrefix = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $badPrefixDir
+    )
+    $commitBadPrefix = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $badPrefixDir
+    )
+    Assert-True ($rollbackBadPrefix.ExitCode -ne 0) 'rollback with wrong prefix fails'
+    Assert-True ($commitBadPrefix.ExitCode -ne 0) 'commit with wrong prefix fails'
+    Assert-True (Test-Path -LiteralPath $badPrefixDir) 'wrong-prefix directory was not deleted'
+    Assert-True (Test-Path -LiteralPath $rbPath) 'real transaction was not deleted by wrong prefix'
+    Assert-FileUnchanged -Path (Join-Path $dataPath 'Settings.json') -Before $settingsAfterApply (
+        'wrong-prefix rollback/commit left Settings.json unchanged'
+    )
+    Assert-PersistentUnchanged -DataDir $dataPath -Before $beforePath -Prefix 'wrong-prefix'
+
+    $otherParent = Join-Path $casePath 'other-parent'
+    New-Item -ItemType Directory -Path $otherParent | Out-Null
+    $nonSibling = Join-Path $otherParent 'SearchEngineService.runtime-update-1-2'
+    Copy-TransactionFiles -Source $rbPath -Destination $nonSibling
+    $rollbackNonSibling = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $nonSibling
+    )
+    $commitNonSibling = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $nonSibling
+    )
+    Assert-True ($rollbackNonSibling.ExitCode -ne 0) 'rollback with non-sibling TX fails'
+    Assert-True ($commitNonSibling.ExitCode -ne 0) 'commit with non-sibling TX fails'
+    Assert-True (Test-Path -LiteralPath $nonSibling) 'non-sibling directory was not deleted'
+    Assert-FileUnchanged -Path (Join-Path $dataPath 'Settings.json') -Before $settingsAfterApply (
+        'non-sibling rollback/commit left Settings.json unchanged'
+    )
+    Assert-PersistentUnchanged -DataDir $dataPath -Before $beforePath -Prefix 'non-sibling'
+
+    $rollbackKeep = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $rbPath
+    )
+    Assert-True ($rollbackKeep.ExitCode -eq 0) 'helper rollback restores files'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dataPath 'Settings.json') -Raw) -eq $oldSettings) (
+        'helper rollback restored Settings.json'
+    )
+    Assert-True (Test-Path -LiteralPath $rbPath) 'helper rollback keeps transaction until commit'
+    $commitKeep = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dataPath,
+        '--rollback-dir', $rbPath
+    )
+    Assert-True ($commitKeep.ExitCode -eq 0) 'helper commit deletes transaction after rollback'
+    Assert-True (-not (Test-Path -LiteralPath $rbPath)) 'transaction removed only after commit'
+
+    # Pre-mutation cleanup must not delete unexpected files.
+    $caseIntruder = Join-Path $script:tempRoot 'case-intruder'
+    New-Item -ItemType Directory -Path $caseIntruder | Out-Null
+    $dataIntruder = Join-Path $caseIntruder 'SearchEngineService'
+    New-SentinelDataDir -DataDir $dataIntruder
+    Remove-Item -LiteralPath (Join-Path $dataIntruder 'ignore.txt') -Force
+    New-Item -ItemType Directory -Path (Join-Path $dataIntruder 'ignore.txt') | Out-Null
+    $bigSettings = Join-Path $dataIntruder 'Settings.json'
+    $payload = New-Object byte[] (8MB)
+    [IO.File]::WriteAllBytes($bigSettings, $payload)
+    $packageIntruder = New-PackageData -Root $caseIntruder -Oem $newOem -Ignore $packageIgnore
+    $genSettingsIntruder = Join-Path $caseIntruder 'generated-settings.json'
+    $genEndpointIntruder = Join-Path $caseIntruder 'generated-endpoint.txt'
+    New-TextFile -Path $genSettingsIntruder -Text $newSettings
+    New-TextFile -Path $genEndpointIntruder -Text $newEndpoint
+    $rbIntruder = New-RollbackDir -DataDir $dataIntruder
+    $intruderFile = Join-Path $rbIntruder 'intruder.txt'
+    if (-not ('NativeProc' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeProc {
+    [DllImport("ntdll.dll")]
+    public static extern int NtSuspendProcess(IntPtr processHandle);
+    [DllImport("ntdll.dll")]
+    public static extern int NtResumeProcess(IntPtr processHandle);
+}
+'@
+    }
+    $helperFull = (Resolve-Path -LiteralPath $HelperPath).Path
+    $stdoutFile = Join-Path $caseIntruder 'apply.out'
+    $stderrFile = Join-Path $caseIntruder 'apply.err'
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $helperFull
+    $psi.Arguments = @(
+        'runtime-update-apply',
+        '--data-dir', ('"{0}"' -f $dataIntruder),
+        '--package-data', ('"{0}"' -f $packageIntruder),
+        '--generated-settings', ('"{0}"' -f $genSettingsIntruder),
+        '--generated-endpoint', ('"{0}"' -f $genEndpointIntruder),
+        '--rollback-dir', ('"{0}"' -f $rbIntruder)
+    ) -join ' '
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $suspended = $false
+    $applyIntruderExit = -1
+    try {
+        $deadline = (Get-Date).AddSeconds(20)
+        while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
+            if (Test-Path -LiteralPath $rbIntruder) {
+                [void][NativeProc]::NtSuspendProcess($proc.Handle)
+                $suspended = $true
+                Set-Content -LiteralPath $intruderFile -Value 'intruder' -Encoding ASCII
+                break
+            }
+            Start-Sleep -Milliseconds 1
+        }
+        if ($suspended) {
+            [void][NativeProc]::NtResumeProcess($proc.Handle)
+            $suspended = $false
+        }
+        if (-not $proc.WaitForExit(30000)) {
+            $proc.Kill()
+            [void]$proc.WaitForExit(5000)
+        }
+        $applyIntruderExit = $proc.ExitCode
+        $proc.StandardOutput.ReadToEnd() | Set-Content -LiteralPath $stdoutFile -Encoding ASCII
+        $proc.StandardError.ReadToEnd() | Set-Content -LiteralPath $stderrFile -Encoding ASCII
+    } finally {
+        if ($suspended -and -not $proc.HasExited) {
+            [void][NativeProc]::NtResumeProcess($proc.Handle)
+        }
+        if (-not $proc.HasExited) {
+            $proc.Kill()
+        }
+        $proc.Dispose()
+    }
+    Assert-True ($applyIntruderExit -ne 0) 'intruder apply failed before mutation'
+    Assert-True (Test-Path -LiteralPath $rbIntruder) 'intruder TX directory was preserved'
+    Assert-True (Test-Path -LiteralPath $intruderFile) 'unexpected TX file was not deleted'
 } finally {
     if (Test-Path -LiteralPath $script:tempRoot) {
         Remove-Item -LiteralPath $script:tempRoot -Recurse -Force -ErrorAction SilentlyContinue

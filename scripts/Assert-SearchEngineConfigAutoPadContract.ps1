@@ -4,16 +4,29 @@ function Assert-SearchEngineConfigSourceFreshness {
         [Parameter(Mandatory)][string]$ProjectRoot
     )
 
-    $configSourcePath = Join-Path $ProjectRoot 'tools\config\main.cpp'
-    if (-not (Test-Path -LiteralPath $configSourcePath -PathType Leaf)) {
-        throw "SearchEngineConfig source was not found: $configSourcePath"
+    $relativeSources = @(
+        'tools\config\main.cpp',
+        'tools\config\RuntimeDataTransaction.cpp',
+        'tools\config\RuntimeDataTransaction.h'
+    )
+    $newest = $null
+    $newestRelative = $null
+    foreach ($relative in $relativeSources) {
+        $sourcePath = Join-Path $ProjectRoot $relative
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "SearchEngineConfig source was not found: $sourcePath"
+        }
+        $item = Get-Item -LiteralPath $sourcePath
+        if ($null -eq $newest -or $item.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc) {
+            $newest = $item
+            $newestRelative = $relative
+        }
     }
 
     $exeTime = (Get-Item -LiteralPath $ConfigToolPath).LastWriteTimeUtc
-    $sourceTime = (Get-Item -LiteralPath $configSourcePath).LastWriteTimeUtc
-    if ($exeTime -lt $sourceTime) {
+    if ($exeTime -lt $newest.LastWriteTimeUtc) {
         throw (
-            'SearchEngineConfig.exe is older than tools/config/main.cpp. ' +
+            "SearchEngineConfig.exe is older than $newestRelative. " +
             'Rebuild the Release target before packaging.'
         )
     }

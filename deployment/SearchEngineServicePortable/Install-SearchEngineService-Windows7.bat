@@ -638,7 +638,6 @@ if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_RUNTIME_ALREADY_CLEARED
 "%HELPER%" runtime-update-rollback --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
 if errorlevel 1 goto :ROLLBACK_RUNTIME_FAILED
 :ROLLBACK_RUNTIME_ALREADY_CLEARED
-set "RUNTIME_TX_READY=0"
 set "RUNTIME_TX_APPLIED=0"
 set "ROLLBACK_RUNTIME_OK=1"
 
@@ -654,6 +653,11 @@ if errorlevel 1 goto :ROLLBACK_HEALTH_FAILED
 set "ROLLBACK_HEALTH_OK=1"
 if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
+if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_OLD_SERVICE_OK
+"%HELPER%" runtime-update-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
+if errorlevel 1 echo WARNING: runtime transaction directory was left for diagnostics: %ROLLBACK_RUNTIME%
+:ROLLBACK_OLD_SERVICE_OK
+set "RUNTIME_TX_READY=0"
 echo Previous application, managed files and old-port PING/PONG were restored.
 goto :FAILED
 
@@ -662,6 +666,7 @@ if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 echo Previous application and managed files were restored.
 echo Old service port is unknown, so PING/PONG was not verified.
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
 goto :FAILED
 
 :ROLLBACK_STOP_FAILED

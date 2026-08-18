@@ -201,6 +201,70 @@ Assert-True ($installText.Contains('Skipping the optional export does not delete
     '5. no-backup text says ProgramData is preserved'
 )
 
+$rollbackStart = $installText.IndexOf("`n:ROLLBACK_REINSTALL")
+Assert-True ($rollbackStart -ge 0) '5. ROLLBACK_REINSTALL label found'
+if ($rollbackStart -ge 0) {
+    $rollbackSlice = $installText.Substring($rollbackStart)
+    $posRollback = $rollbackSlice.IndexOf('runtime-update-rollback')
+    $posOldHealth = $rollbackSlice.IndexOf('call :WAIT_FOR_HEALTH_PORT %OLD_port%')
+    $posCommit = $rollbackSlice.IndexOf('runtime-update-commit')
+    Assert-True ($posRollback -ge 0) '5. Rollback path calls runtime-update-rollback'
+    Assert-True ($posOldHealth -ge 0) '5. Rollback path checks old-port health'
+    Assert-True ($posCommit -ge 0) '5. Rollback path calls runtime-update-commit after restore'
+    Assert-True (
+        $posRollback -ge 0 -and $posOldHealth -ge 0 -and $posCommit -ge 0 -and
+        $posRollback -lt $posOldHealth -and $posOldHealth -lt $posCommit
+    ) '5. Rollback order is rollback then old-port health then commit'
+}
+
+# 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
+. (Join-Path $scriptsRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
+$freshRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'SearchEngineConfigFreshness-' + [Guid]::NewGuid().ToString('N')
+)
+New-Item -ItemType Directory -Path (Join-Path $freshRoot 'tools\config') | Out-Null
+$fakeExe = Join-Path $freshRoot 'SearchEngineConfig.exe'
+$fakeMain = Join-Path $freshRoot 'tools\config\main.cpp'
+$fakeCpp = Join-Path $freshRoot 'tools\config\RuntimeDataTransaction.cpp'
+$fakeH = Join-Path $freshRoot 'tools\config\RuntimeDataTransaction.h'
+try {
+    'exe' | Set-Content -LiteralPath $fakeExe -Encoding ASCII
+    'main' | Set-Content -LiteralPath $fakeMain -Encoding ASCII
+    'cpp' | Set-Content -LiteralPath $fakeCpp -Encoding ASCII
+    'hdr' | Set-Content -LiteralPath $fakeH -Encoding ASCII
+    $old = [DateTime]::UtcNow.AddHours(-2)
+    $mid = [DateTime]::UtcNow.AddHours(-1)
+    (Get-Item -LiteralPath $fakeExe).LastWriteTimeUtc = $mid
+    (Get-Item -LiteralPath $fakeMain).LastWriteTimeUtc = $old
+    (Get-Item -LiteralPath $fakeH).LastWriteTimeUtc = $old
+    (Get-Item -LiteralPath $fakeCpp).LastWriteTimeUtc = $old
+    try {
+        Assert-SearchEngineConfigSourceFreshness -ConfigToolPath $fakeExe -ProjectRoot $freshRoot
+        $script:passed++
+        Write-Host 'PASS: 6. Fresh EXE newer than all config sources is accepted'
+    } catch {
+        $script:failures.Add("6. Fresh EXE newer than all config sources is accepted ($($_.Exception.Message))") | Out-Null
+        Write-Host "FAIL: 6. Fresh EXE newer than all config sources is accepted"
+    }
+
+    (Get-Item -LiteralPath $fakeCpp).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(5)
+    $threw = $false
+    $errorText = ''
+    try {
+        Assert-SearchEngineConfigSourceFreshness -ConfigToolPath $fakeExe -ProjectRoot $freshRoot
+    } catch {
+        $threw = $true
+        $errorText = [string]$_.Exception.Message
+    }
+    Assert-True (
+        $threw -and $errorText.Contains('RuntimeDataTransaction.cpp')
+    ) '6. Newer RuntimeDataTransaction.cpp makes SearchEngineConfig.exe stale'
+} finally {
+    if (Test-Path -LiteralPath $freshRoot) {
+        Remove-Item -LiteralPath $freshRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host ''
 Write-Host "Passed: $script:passed  Failed: $($script:failures.Count)"
 if ($script:failures.Count -gt 0) {

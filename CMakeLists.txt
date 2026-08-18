@@ -223,6 +223,7 @@ if(BUILD_CONFIG_TOOL)
             PRIVATE
             nlohmann_json::nlohmann_json
             ws2_32
+            advapi32
     )
     target_compile_definitions(
             SearchEngineConfig

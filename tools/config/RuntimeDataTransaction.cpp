@@ -579,10 +579,17 @@ std::wstring makeTransactionId()
     return text;
 }
 
-void validateRollbackLocation(
+void validateRollbackPath(
     const std::wstring& dataDir,
-    const std::wstring& rollbackDir)
+    const std::wstring& rollbackDir,
+    bool rollbackMustExist)
 {
+    if (classifyPath(dataDir) == PathKind::Reparse) {
+        throw std::runtime_error("data-dir is a reparse point");
+    }
+    if (classifyPath(rollbackDir) == PathKind::Reparse) {
+        throw std::runtime_error("rollback-dir is a reparse point");
+    }
     if (isDriveRoot(dataDir) || isDriveRoot(rollbackDir)) {
         throw std::runtime_error("data-dir and rollback-dir must not be a drive root");
     }
@@ -609,7 +616,14 @@ void validateRollbackLocation(
     {
         throw std::runtime_error("rollback-dir basename has an unexpected prefix");
     }
-    if (classifyPath(rollbackDir) != PathKind::Missing) {
+    const PathKind rollbackKind = classifyPath(rollbackDir);
+    if (rollbackMustExist) {
+        if (rollbackKind != PathKind::Directory) {
+            throw std::runtime_error("rollback-dir must be an existing regular directory");
+        }
+        return;
+    }
+    if (rollbackKind != PathKind::Missing) {
         throw std::runtime_error("rollback-dir already exists");
     }
 }
@@ -662,7 +676,10 @@ json managedFileToJson(const ManagedFileState& file)
     return value;
 }
 
-void writeManifest(const std::wstring& rollbackDir, const TransactionManifest& manifest)
+void writeManifest(
+    const std::wstring& rollbackDir,
+    const TransactionManifest& manifest,
+    std::vector<std::wstring>& ownedRollbackNames)
 {
     json root = json::object();
     root["format_version"] = manifest.formatVersion;
@@ -678,6 +695,7 @@ void writeManifest(const std::wstring& rollbackDir, const TransactionManifest& m
 
     const std::string body = root.dump(2) + "\n";
     const std::wstring staging = uniqueStagingPath(rollbackDir);
+    ownedRollbackNames.push_back(fileName(staging));
     UniqueHandle handle = createNewFile(staging);
     DWORD written = 0;
     if (!WriteFile(
@@ -1114,7 +1132,9 @@ void deleteTransactionDirectory(
     }
 }
 
-void bestEffortDeleteCreatedDirectory(const std::wstring& rollbackDir)
+void bestEffortDeleteCreatedDirectory(
+    const std::wstring& rollbackDir,
+    const std::vector<std::wstring>& ownedNames)
 {
     if (classifyPath(rollbackDir) != PathKind::Directory) {
         return;
@@ -1122,10 +1142,12 @@ void bestEffortDeleteCreatedDirectory(const std::wstring& rollbackDir)
     try {
         const auto entries = listDirectory(rollbackDir);
         for (const auto& entry : entries) {
-            if (entry.kind != PathKind::File) {
+            if (entry.kind != PathKind::File || !isExpectedName(ownedNames, entry.name)) {
                 return;
             }
-            DeleteFileW(joinPath(rollbackDir, entry.name.c_str()).c_str());
+        }
+        for (const auto& name : ownedNames) {
+            deleteIfRegularFile(joinPath(rollbackDir, name.c_str()));
         }
         RemoveDirectoryW(rollbackDir.c_str());
     } catch (...) {
@@ -1137,7 +1159,7 @@ void validateExistingTransaction(
     const std::wstring& rollbackDir,
     TransactionManifest& manifest)
 {
-    requireDirectory(rollbackDir, "rollback-dir");
+    validateRollbackPath(dataDir, rollbackDir, true);
     manifest = loadManifest(rollbackDir);
     const std::wstring manifestDir = canonicalPath(manifest.dataDir);
     if (!equalPath(manifestDir, dataDir)) {
@@ -1165,11 +1187,18 @@ int applyCommand(const std::vector<std::wstring>& args)
     const std::wstring packageIgnore = joinPath(packageData, kIgnoreName);
     requireRegularFile(packageOem, "package OEM866.INI");
     requireRegularFile(packageIgnore, "package ignore.txt");
-    validateRollbackLocation(dataDir, rollbackDir);
+    validateRollbackPath(dataDir, rollbackDir, false);
 
     bool createdRollback = false;
     bool mutated = false;
     TransactionManifest manifest;
+    std::vector<std::wstring> ownedRollbackNames{
+        kMarkerName,
+        kManifestName,
+        kSettingsSnapshot,
+        kOemSnapshot,
+        kEndpointSnapshot
+    };
     try {
         createDirectoryExclusive(rollbackDir);
         createdRollback = true;
@@ -1198,7 +1227,7 @@ int applyCommand(const std::vector<std::wstring>& args)
         default:
             throw std::runtime_error("ignore.txt is invalid");
         }
-        writeManifest(rollbackDir, manifest);
+        writeManifest(rollbackDir, manifest, ownedRollbackNames);
 
         stageAndAtomicallyReplace(generatedSettings, joinPath(dataDir, kSettingsName), dataDir);
         mutated = true;
@@ -1225,7 +1254,7 @@ int applyCommand(const std::vector<std::wstring>& args)
             }
         }
         if (createdRollback) {
-            bestEffortDeleteCreatedDirectory(rollbackDir);
+            bestEffortDeleteCreatedDirectory(rollbackDir, ownedRollbackNames);
         }
         std::cerr << "ERROR: " << exception.what() << '\n';
         return 1;
@@ -1238,13 +1267,9 @@ int rollbackCommand(const std::vector<std::wstring>& args)
         const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
         const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
         requireDirectory(dataDir, "data-dir");
-        if (isDriveRoot(dataDir) || isDriveRoot(rollbackDir)) {
-            throw std::runtime_error("data-dir and rollback-dir must not be a drive root");
-        }
         TransactionManifest manifest;
         validateExistingTransaction(dataDir, rollbackDir, manifest);
         restoreAllManaged(dataDir, rollbackDir, manifest);
-        deleteTransactionDirectory(rollbackDir, manifest);
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "ERROR: " << exception.what() << '\n';
@@ -1265,9 +1290,6 @@ int commitCommand(const std::vector<std::wstring>& args)
         const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
         const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
         requireDirectory(dataDir, "data-dir");
-        if (isDriveRoot(dataDir) || isDriveRoot(rollbackDir)) {
-            throw std::runtime_error("data-dir and rollback-dir must not be a drive root");
-        }
         TransactionManifest manifest;
         validateExistingTransaction(dataDir, rollbackDir, manifest);
         deleteTransactionDirectory(rollbackDir, manifest);
