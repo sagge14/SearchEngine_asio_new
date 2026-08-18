@@ -19,6 +19,7 @@ namespace {
 using json = nlohmann::json;
 
 constexpr int kFormatVersion = 1;
+constexpr int kApplyFailedBeforeMutation = 2;
 constexpr DWORD kCopyChunkBytes = 64 * 1024;
 constexpr wchar_t kMarkerName[] = L".searchengine-runtime-update-marker";
 constexpr wchar_t kPhaseName[] = L".searchengine-runtime-update-phase";
@@ -1357,7 +1358,7 @@ int applyCommand(const std::vector<std::wstring>& args)
         }
         std::cerr << "ERROR: " << exception.what() << '\n';
         std::cerr << "runtime-update apply failed before managed mutation\n";
-        return 1;
+        return kApplyFailedBeforeMutation;
     }
 }
 
@@ -1369,9 +1370,17 @@ int rollbackCommand(const std::vector<std::wstring>& args)
         requireDirectory(dataDir, "data-dir");
         validateRollbackPath(dataDir, rollbackDir, true);
         const TransactionPhase phase = readPhase(rollbackDir);
-        if (phase != TransactionPhase::MutationStarted) {
+        if (phase == TransactionPhase::Prepared ||
+            phase == TransactionPhase::Restored)
+        {
             std::cerr << "runtime-update rollback not required\n";
             return 0;
+        }
+        if (phase != TransactionPhase::MutationStarted) {
+            if (phase == TransactionPhase::Absent) {
+                throw std::runtime_error("transaction phase is missing");
+            }
+            throw std::runtime_error("transaction phase is invalid");
         }
         TransactionManifest manifest;
         validateExistingTransaction(dataDir, rollbackDir, manifest);
@@ -1397,7 +1406,10 @@ void commitExistingTransaction(
     const std::wstring& rollbackDir)
 {
     const TransactionPhase phase = readPhase(rollbackDir);
-    const std::wstring manifestPath = joinPath(rollbackDir, kManifestName);
+    if (phase == TransactionPhase::Prepared) {
+        deleteTransactionFiles(rollbackDir, preparedSchemaFiles());
+        return;
+    }
     if (phase == TransactionPhase::MutationStarted ||
         phase == TransactionPhase::Restored)
     {
@@ -1406,13 +1418,10 @@ void commitExistingTransaction(
         deleteTransactionDirectory(rollbackDir, manifest);
         return;
     }
-    if (classifyPath(manifestPath) == PathKind::File) {
-        TransactionManifest manifest;
-        validateExistingTransaction(dataDir, rollbackDir, manifest);
-        deleteTransactionDirectory(rollbackDir, manifest);
-        return;
+    if (phase == TransactionPhase::Absent) {
+        throw std::runtime_error("transaction phase is missing");
     }
-    deleteTransactionFiles(rollbackDir, preparedSchemaFiles());
+    throw std::runtime_error("transaction phase is invalid");
 }
 
 int commitCommand(const std::vector<std::wstring>& args)

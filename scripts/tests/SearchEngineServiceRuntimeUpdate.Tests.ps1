@@ -1012,7 +1012,7 @@ public static class NativeProc {
         '--generated-endpoint', $genEndpointA,
         '--rollback-dir', $rbA
     )
-    Assert-True ($applyA.ExitCode -ne 0) 'TEST A apply failed before mutation'
+    Assert-True ($applyA.ExitCode -eq 2) 'TEST A apply failed before mutation'
     Assert-True ($applyA.Output -match 'before managed mutation') (
         'TEST A reports pre-mutation failure'
     )
@@ -1068,7 +1068,7 @@ public static class NativeProc {
         '--generated-endpoint', $genEndpointB,
         '--rollback-dir', $rbB
     )
-    Assert-True ($applyB.ExitCode -ne 0) 'TEST B apply failed after mutation'
+    Assert-True ($applyB.ExitCode -eq 1) 'TEST B apply failed after mutation'
     Assert-True ($applyB.Output -match 'managed files were rolled back') (
         'TEST B internal rollback succeeded'
     )
@@ -1107,6 +1107,8 @@ public static class NativeProc {
     New-Item -ItemType Directory -Path $caseOwn | Out-Null
     $dataOwn = Join-Path $caseOwn 'SearchEngineService'
     New-SentinelDataDir -DataDir $dataOwn
+    $payloadOwn = New-Object byte[] (8MB)
+    [IO.File]::WriteAllBytes((Join-Path $dataOwn 'Settings.json'), $payloadOwn)
     $settingsOwn = Get-FileRecord -Path (Join-Path $dataOwn 'Settings.json')
     $beforeOwn = Get-PersistentRecords -DataDir $dataOwn
     $packageOwn = New-PackageData -Root $caseOwn -Oem $newOem -Ignore $packageIgnore
@@ -1115,7 +1117,7 @@ public static class NativeProc {
     New-TextFile -Path $genSettingsOwn -Text $newSettings
     New-TextFile -Path $genEndpointOwn -Text $newEndpoint
     $rbOwn = New-RollbackDir -DataDir $dataOwn
-    $foreignSnapshot = Join-Path $rbOwn 'Settings.json.snapshot'
+    $foreignSnapshot = Join-Path $rbOwn 'OEM866.INI.snapshot'
     $foreignBytes = [Text.Encoding]::ASCII.GetBytes(
         'FOREIGN-SNAPSHOT-' + [Guid]::NewGuid().ToString('N')
     )
@@ -1147,7 +1149,9 @@ public static class NativeProc {
             if (Test-Path -LiteralPath $rbOwn) {
                 [void][NativeProc]::NtSuspendProcess($procOwn.Handle)
                 $suspendedOwn = $true
-                [IO.File]::WriteAllBytes($foreignSnapshot, $foreignBytes)
+                if (-not (Test-Path -LiteralPath $foreignSnapshot)) {
+                    [IO.File]::WriteAllBytes($foreignSnapshot, $foreignBytes)
+                }
                 break
             }
             Start-Sleep -Milliseconds 1
@@ -1172,7 +1176,7 @@ public static class NativeProc {
         }
         $procOwn.Dispose()
     }
-    Assert-True ($applyOwnExit -ne 0) 'ownership race apply failed'
+    Assert-True ($applyOwnExit -eq 2) 'ownership race apply failed'
     Assert-True (Test-Path -LiteralPath $foreignSnapshot) 'ownership race foreign snapshot remains'
     $afterForeign = [IO.File]::ReadAllBytes($foreignSnapshot)
     Assert-True (
@@ -1194,6 +1198,120 @@ public static class NativeProc {
     Assert-True (
         [Convert]::ToBase64String($afterForeign2) -eq [Convert]::ToBase64String($foreignBytes)
     ) 'ownership race foreign snapshot survived rollback'
+
+    function Invoke-InvalidPhaseCase {
+        param(
+            [string]$Name,
+            [scriptblock]$MutatePhase
+        )
+        $root = Join-Path $script:tempRoot $Name
+        New-Item -ItemType Directory -Path $root | Out-Null
+        $dataDir = Join-Path $root 'SearchEngineService'
+        New-SentinelDataDir -DataDir $dataDir
+        $package = New-PackageData -Root $root -Oem $newOem -Ignore $packageIgnore
+        $genSettings = Join-Path $root 'generated-settings.json'
+        $genEndpoint = Join-Path $root 'generated-endpoint.txt'
+        New-TextFile -Path $genSettings -Text $newSettings
+        New-TextFile -Path $genEndpoint -Text $newEndpoint
+        $rb = New-RollbackDir -DataDir $dataDir
+        $apply = Invoke-RuntimeCommand -Command 'runtime-update-apply' -Arguments @(
+            '--data-dir', $dataDir,
+            '--package-data', $package,
+            '--generated-settings', $genSettings,
+            '--generated-endpoint', $genEndpoint,
+            '--rollback-dir', $rb
+        )
+        Assert-True ($apply.ExitCode -eq 0) "$Name apply succeeded"
+        Assert-True ((Get-Content -LiteralPath (Join-Path $dataDir 'Settings.json') -Raw) -eq $newSettings) (
+            "$Name Settings.json updated"
+        )
+        $manifestBefore = Test-Path -LiteralPath (Join-Path $rb 'manifest.json')
+        $settingsSnap = Join-Path $rb 'Settings.json.snapshot'
+        $snapBefore = $null
+        if (Test-Path -LiteralPath $settingsSnap) {
+            $snapBefore = Get-FileRecord -Path $settingsSnap
+        }
+        & $MutatePhase $rb
+        $rollback = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+            '--data-dir', $dataDir,
+            '--rollback-dir', $rb
+        )
+        Assert-True ($rollback.ExitCode -ne 0) "$Name rollback fails closed"
+        Assert-True ($rollback.Output -notmatch 'rollback not required') (
+            "$Name rollback does not claim not required"
+        )
+        Assert-True (Test-Path -LiteralPath $rb) "$Name TX directory remains after rollback"
+        Assert-True ($manifestBefore -eq (Test-Path -LiteralPath (Join-Path $rb 'manifest.json'))) (
+            "$Name manifest remains after rollback"
+        )
+        if ($null -ne $snapBefore) {
+            Assert-FileUnchanged -Path $settingsSnap -Before $snapBefore (
+                "$Name snapshot remains after rollback"
+            )
+        }
+        $commit = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+            '--data-dir', $dataDir,
+            '--rollback-dir', $rb
+        )
+        Assert-True ($commit.ExitCode -ne 0) "$Name commit fails closed"
+        Assert-True (Test-Path -LiteralPath $rb) "$Name TX directory remains after commit"
+        if ($null -ne $snapBefore) {
+            Assert-FileUnchanged -Path $settingsSnap -Before $snapBefore (
+                "$Name snapshot remains after commit"
+            )
+        }
+        return [pscustomobject]@{ DataDir = $dataDir; RollbackDir = $rb }
+    }
+
+    $broken = Invoke-InvalidPhaseCase -Name 'case-phase-broken' -MutatePhase {
+        param($RollbackDir)
+        New-TextFile -Path (Join-Path $RollbackDir '.searchengine-runtime-update-phase') -Text "BROKEN_PHASE`n"
+    }
+    New-TextFile -Path (Join-Path $broken.RollbackDir '.searchengine-runtime-update-phase') -Text "mutation_started`n"
+    $cleanupBroken = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $broken.DataDir,
+        '--rollback-dir', $broken.RollbackDir
+    )
+    Assert-True ($cleanupBroken.ExitCode -eq 0) 'broken phase cleanup rollback succeeded'
+    $commitBroken = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $broken.DataDir,
+        '--rollback-dir', $broken.RollbackDir
+    )
+    Assert-True ($commitBroken.ExitCode -eq 0) 'broken phase cleanup commit succeeded'
+
+    $missing = Invoke-InvalidPhaseCase -Name 'case-phase-missing' -MutatePhase {
+        param($RollbackDir)
+        Remove-Item -LiteralPath (Join-Path $RollbackDir '.searchengine-runtime-update-phase') -Force
+    }
+    New-TextFile -Path (Join-Path $missing.RollbackDir '.searchengine-runtime-update-phase') -Text "mutation_started`n"
+    $cleanupMissing = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $missing.DataDir,
+        '--rollback-dir', $missing.RollbackDir
+    )
+    Assert-True ($cleanupMissing.ExitCode -eq 0) 'missing phase cleanup rollback succeeded'
+    $commitMissing = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $missing.DataDir,
+        '--rollback-dir', $missing.RollbackDir
+    )
+    Assert-True ($commitMissing.ExitCode -eq 0) 'missing phase cleanup commit succeeded'
+
+    $dirPhase = Invoke-InvalidPhaseCase -Name 'case-phase-directory' -MutatePhase {
+        param($RollbackDir)
+        Remove-Item -LiteralPath (Join-Path $RollbackDir '.searchengine-runtime-update-phase') -Force
+        New-Item -ItemType Directory -Path (Join-Path $RollbackDir '.searchengine-runtime-update-phase') | Out-Null
+    }
+    Remove-Item -LiteralPath (Join-Path $dirPhase.RollbackDir '.searchengine-runtime-update-phase') -Recurse -Force
+    New-TextFile -Path (Join-Path $dirPhase.RollbackDir '.searchengine-runtime-update-phase') -Text "mutation_started`n"
+    $cleanupDir = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $dirPhase.DataDir,
+        '--rollback-dir', $dirPhase.RollbackDir
+    )
+    Assert-True ($cleanupDir.ExitCode -eq 0) 'directory phase cleanup rollback succeeded'
+    $commitDir = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dirPhase.DataDir,
+        '--rollback-dir', $dirPhase.RollbackDir
+    )
+    Assert-True ($commitDir.ExitCode -eq 0) 'directory phase cleanup commit succeeded'
 
     # Pre-mutation cleanup must not delete unexpected files.
     $caseIntruder = Join-Path $script:tempRoot 'case-intruder'

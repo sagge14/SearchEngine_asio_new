@@ -84,6 +84,7 @@ set "HELPER_OUTPUT=%TEMP%\%SERVICE_NAME%-Helper-%RANDOM%-%RANDOM%.txt"
 set "APP_ROLLBACK_READY=0"
 set "RUNTIME_TX_READY=0"
 set "RUNTIME_TX_APPLIED=0"
+set "RUNTIME_APPLY_BEFORE_MUTATION=0"
 set "REINSTALL=0"
 set "BACKUP_MODE=none"
 
@@ -324,6 +325,7 @@ goto :REGISTER_SERVICE
 :UPDATE_DATA
 echo [5/8] Updating managed runtime files...
 "%HELPER%" runtime-update-apply --data-dir "%DATA_DIR%" --package-data "%PACKAGE_ROOT%data" --generated-settings "%CONFIG_TEMP%" --generated-endpoint "%ENDPOINT_TEMP%" --rollback-dir "%ROLLBACK_RUNTIME%"
+if errorlevel 2 goto :RUNTIME_APPLY_FAILED_BEFORE_MUTATION
 if errorlevel 1 goto :RUNTIME_APPLY_FAILED
 set "RUNTIME_TX_READY=1"
 set "RUNTIME_TX_APPLIED=1"
@@ -602,11 +604,18 @@ sc.exe delete "%SERVICE_NAME%" >nul 2>&1
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 goto :FAILED_WITH_FILES
 
+:RUNTIME_APPLY_FAILED_BEFORE_MUTATION
+rem Exit 2: helper never started managed mutation. Restore the old application
+rem and service even if a diagnostic TX directory remains.
+set "RUNTIME_APPLY_BEFORE_MUTATION=1"
+if exist "%ROLLBACK_RUNTIME%\" set "RUNTIME_TX_READY=1"
+goto :ROLLBACK_OR_FAIL
+
 :RUNTIME_APPLY_FAILED
-rem A leftover TX directory is diagnostic state. It does not prove that
-rem managed files were mutated or that runtime-update-rollback is required.
+rem Exit 1: mutation may have started. Helper rollback is required.
 if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_OR_FAIL
 set "RUNTIME_TX_READY=1"
+set "RUNTIME_TX_APPLIED=1"
 goto :ROLLBACK_OR_FAIL
 
 :ROLLBACK_REINSTALL
@@ -630,8 +639,15 @@ set "APP_ROLLBACK_READY=0"
 set "ROLLBACK_APP_OK=1"
 
 :ROLLBACK_RUNTIME_FILES
+if "%RUNTIME_APPLY_BEFORE_MUTATION%"=="1" goto :ROLLBACK_SKIP_HELPER
 if "%RUNTIME_TX_READY%"=="1" goto :ROLLBACK_RUNTIME_DO
 if "%RUNTIME_TX_APPLIED%"=="1" goto :ROLLBACK_RUNTIME_DO
+set "ROLLBACK_RUNTIME_OK=1"
+goto :ROLLBACK_FIREWALL
+
+:ROLLBACK_SKIP_HELPER
+rem Mutation never started. Do not consult rollback; Absent leftover TX must
+rem not stop restoration of the old service. Prepared TX is committed later.
 set "ROLLBACK_RUNTIME_OK=1"
 goto :ROLLBACK_FIREWALL
 

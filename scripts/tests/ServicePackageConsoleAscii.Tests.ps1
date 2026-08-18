@@ -193,6 +193,11 @@ if ($updateStart -ge 0) {
     Assert-True (-not $updateOnly.ToLower().Contains('ignore.txt')) (
         '5. Update BAT path does not overwrite ignore.txt'
     )
+    $posExit2 = $updateOnly.IndexOf('if errorlevel 2 goto :RUNTIME_APPLY_FAILED_BEFORE_MUTATION')
+    $posExit1 = $updateOnly.IndexOf('if errorlevel 1 goto :RUNTIME_APPLY_FAILED')
+    Assert-True (
+        $posExit2 -ge 0 -and $posExit1 -ge 0 -and $posExit2 -lt $posExit1
+    ) '5. Apply exit 2 is classified as pre-mutation before exit 1'
 }
 Assert-True (-not $installText.Contains(
     'old settings, indexes and logs will be deleted'
@@ -226,6 +231,13 @@ if ($rollbackStart -ge 0) {
             'sc.exe start "%SERVICE_NAME%"'
         )
     ) '5. Pre-mutation leftover TX still reaches old-service start'
+    Assert-True ($rollbackSlice.Contains(':ROLLBACK_SKIP_HELPER')) (
+        '5. Pre-mutation apply failure skips helper rollback'
+    )
+    $posSkip = $rollbackSlice.IndexOf("`n:ROLLBACK_SKIP_HELPER")
+    Assert-True (
+        $posSkip -ge 0 -and $posFirewall -ge 0 -and $posSkip -lt $posFirewall
+    ) '5. Skip-helper path still reaches old-service firewall/start'
 }
 
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
