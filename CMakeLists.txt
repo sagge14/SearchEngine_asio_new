@@ -1051,7 +1051,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/JSON/ConverterJSON.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/ServiceCommands/PingCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaAttachments/GetTelegaAttachments.cpp"
-            "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/TelegramFiles/TelegramFileResolver.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetJsonTelega/Telega.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetJsonTelega/AutoPadSource.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetJsonTelega/GetJsonTelegaCmd.cpp"

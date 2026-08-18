@@ -96,14 +96,17 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
 {
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::SOMEERROR), 0u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::SOLOREQUEST), 1u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::FILETEXT), 2u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GETBINFILE), 11u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::PING), 18u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_TELEGA_ATACHMENTS), 25u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT), 26u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::SERVER_BUSY_ERROR), 27u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::END_COMMAND), 28u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::ERROR_RESPONSE), 29u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1), 30u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::AUTHENTICATE_V1), 31u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_TELEGA_TEXT), 32u);
     EXPECT_EQ(
         static_cast<std::uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO),
         2781032419ULL);
@@ -117,7 +120,10 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
 TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
 {
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::SOLOREQUEST));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::FILETEXT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GETBINFILE));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_SINGLE_ATACHMENT));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_TELEGA_TEXT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::USER_REGISTRY));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::NEGOTIATE_PROTOCOL_V1));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::AUTHENTICATE_V1));

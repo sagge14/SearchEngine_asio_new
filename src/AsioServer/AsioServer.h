@@ -77,6 +77,7 @@ namespace asio_server
         ERROR_RESPONSE = 29,
         NEGOTIATE_PROTOCOL_V1 = 30,
         AUTHENTICATE_V1 = 31,
+        GET_TELEGA_TEXT = 32,
         // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
@@ -90,6 +91,7 @@ namespace asio_server
                     case COMMAND::ERROR_RESPONSE: return "ERROR_RESPONSE";
                     case COMMAND::NEGOTIATE_PROTOCOL_V1: return "NEGOTIATE_PROTOCOL_V1";
                     case COMMAND::AUTHENTICATE_V1: return "AUTHENTICATE_V1";
+                    case COMMAND::GET_TELEGA_TEXT: return "GET_TELEGA_TEXT";
                     default:
                 return "UNKNOWN COMMAND";
         }
@@ -149,6 +151,7 @@ namespace asio_server
             case COMMAND::GET_ISH_PDTV:
             case COMMAND::GET_TELEGA_ATACHMENTS:
             case COMMAND::GET_SINGLE_ATACHMENT:
+            case COMMAND::GET_TELEGA_TEXT:
             case COMMAND::NEGOTIATE_PROTOCOL_V1:
             case COMMAND::AUTHENTICATE_V1:
                 return true;
@@ -248,6 +251,7 @@ namespace asio_server
     static_assert(std::is_trivially_copyable_v<Header>);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SOMEERROR) == 0);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SOLOREQUEST) == 1);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::FILETEXT) == 2);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GETBINFILE) == 11);
     static_assert(static_cast<uint_fast64_t>(COMMAND::PING) == 18);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT) == 26);
@@ -256,6 +260,7 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::ERROR_RESPONSE) == 29);
     static_assert(static_cast<uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1) == 30);
     static_assert(static_cast<uint_fast64_t>(COMMAND::AUTHENTICATE_V1) == 31);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GET_TELEGA_TEXT) == 32);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
     static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
     static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);

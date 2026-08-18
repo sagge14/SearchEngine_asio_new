@@ -19,7 +19,7 @@
 #include "Commands/GetAttachments/GetAttachmentsCmd.h"
 #include "Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.h"
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
-#include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
+#include "Commands/TelegramFiles/TelegramFileResolver.h"
 #include "Commands/Auth/AuthenticateCmd.h"
 #include "Auth/AuthRuntime.h"
 #include "MyUtils/Utf8Path.h"
@@ -552,6 +552,35 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 boost::asio::use_awaitable);
             responseQueued = true;
         }
+        else if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
+                 requestHeader.command == COMMAND::GET_TELEGA_TEXT)
+        {
+            personalRequest.request = std::string(
+                requestData.begin(),
+                requestData.end());
+            auto resolved =
+                requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT
+                    ? TelegramFileResolver::resolveAttachment(requestData)
+                    : TelegramFileResolver::resolveText(requestData);
+            if (resolved.failed()) {
+                co_await queueError(
+                    resolved.error.value_or(
+                        command_execution::ErrorCode::InternalError),
+                    std::move(resolved.diagnostic),
+                    false,
+                    requestHeader.command);
+                co_return;
+            }
+
+            requestHeader.size = resolved.file->size;
+            co_await write_channel_.async_send(
+                ec,
+                WriteItem{FileTransfer{
+                    requestHeader,
+                    std::move(resolved.file->stream)}},
+                boost::asio::use_awaitable);
+            responseQueued = true;
+        }
         else
         {
 
@@ -857,7 +886,6 @@ void asio_server::Interface::setSearchServer(
         std::make_unique<GetAttachmentsCmd>(attachmentsConfigPath);
     cmdMap[COMMAND::GET_ISH_PDTV] = std::make_unique<GetIshTelegaPdtvCommand>();
     cmdMap[COMMAND::GET_TELEGA_ATACHMENTS] = std::make_unique<GetTelegaAttachmentsCmd>();
-    cmdMap[COMMAND::GET_SINGLE_ATACHMENT] = std::make_unique<GetTelegaSingleAttachmentCmd>();
 }
 
 command_execution::CommandResult asio_server::Interface::execCommand(

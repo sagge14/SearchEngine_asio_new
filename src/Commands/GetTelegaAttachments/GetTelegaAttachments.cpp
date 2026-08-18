@@ -5,8 +5,8 @@
 #include "GetTelegaAttachments.h"
 
 #include "Commands/GetJsonTelega/AutoPadSource.h"
+#include "Commands/TelegramFiles/TelegramFileResolver.h"
 #include "MyUtils/Encoding.h"
-#include "SQLite/SQLiteConnectionManager.h"
 #include "nlohmann/json.hpp"
 
 #include <filesystem>
@@ -86,51 +86,18 @@ command_execution::CommandResult GetTelegaAttachmentsCmd::executeResult(
         return mapAutoPadSourceError(error);
     }
 
-    const auto* bases = telegramType == Telega::TYPE::VHOD
-        ? &Telega::b_prm
-        : &Telega::b_prd;
-
-    const std::string sql =
-        "SELECT PrilName, DirectTo FROM archive WHERE `index` = " +
-        std::to_string(telegramId);
+    const auto lookup = lookupTelegramArchive(telegramId, telegramType);
+    if (lookup.failed()) {
+        return command_execution::CommandResult::failure(
+            lookup.error.value_or(command_execution::ErrorCode::InternalError),
+            lookup.diagnostic);
+    }
 
     std::string attachmentNames;
     std::string attachmentDirectory;
-    for (const auto& baseName : *bases) {
-        std::shared_ptr<mySQLite> database;
-        try {
-            database = SQLiteConnectionManager::instance().getConnection(baseName);
-        }
-        catch (const std::exception& error) {
-            return command_execution::CommandResult::failure(
-                command_execution::ErrorCode::DatabaseOpenFailed,
-                error.what());
-        }
-
-        mySQLite::RowList rows;
-        try {
-            rows = database->queryRows(sql);
-        }
-        catch (const std::exception& error) {
-            return command_execution::CommandResult::failure(
-                command_execution::ErrorCode::DatabaseQueryFailed,
-                error.what());
-        }
-
-        if (rows.empty())
-            continue;
-
-        const auto& row = rows.front();
-        const auto names = row.find("PrilName");
-        const auto directory = row.find("DirectTo");
-        if (names == row.end() || directory == row.end()) {
-            return command_execution::CommandResult::failure(
-                command_execution::ErrorCode::DatabaseSchemaFailed,
-                "archive row has no PrilName or DirectTo column");
-        }
-        attachmentNames = names->second;
-        attachmentDirectory = directory->second;
-        break;
+    if (lookup.record) {
+        attachmentNames = lookup.record->prilName;
+        attachmentDirectory = lookup.record->directTo;
     }
 
     nh::json response = nh::json::array();

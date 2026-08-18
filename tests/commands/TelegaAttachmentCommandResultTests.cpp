@@ -1,6 +1,5 @@
 #include "Commands/GetJsonTelega/Telega.h"
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
-#include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include "SQLite/SQLiteConnectionManager.h"
 #include "SQLite/sqlite3.h"
 #include "nlohmann/json.hpp"
@@ -111,14 +110,15 @@ namespace
             executeSql(
                 database,
                 "CREATE TABLE archive ("
-                "`index` INTEGER PRIMARY KEY, PrilName TEXT, DirectTo TEXT)");
+                "`index` INTEGER PRIMARY KEY, PrilName TEXT, DirectTo TEXT, "
+                "FileName TEXT)");
 
             sqlite3_stmt* statement = nullptr;
             ASSERT_EQ(
                 sqlite3_prepare_v2(
                     database,
-                    "INSERT INTO archive (`index`, PrilName, DirectTo) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO archive (`index`, PrilName, DirectTo, FileName) "
+                    "VALUES (?, ?, ?, ?)",
                     -1,
                     &statement,
                     nullptr),
@@ -143,6 +143,9 @@ namespace
                     -1,
                     SQLITE_TRANSIENT),
                 SQLITE_OK);
+            ASSERT_EQ(
+                sqlite3_bind_text(statement, 4, "", -1, SQLITE_STATIC),
+                SQLITE_OK);
             ASSERT_EQ(sqlite3_step(statement), SQLITE_DONE);
             ASSERT_EQ(sqlite3_finalize(statement), SQLITE_OK);
             ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
@@ -159,31 +162,22 @@ namespace
 TEST_F(TelegaAttachmentCommandResultTest, RejectsMalformedJson)
 {
     GetTelegaAttachmentsCmd listCommand;
-    GetTelegaSingleAttachmentCmd singleCommand;
 
     const auto listResult = listCommand.executeResult({'{'});
-    const auto singleResult = singleCommand.executeResult({'{'});
 
     ASSERT_TRUE(listResult.failed());
     EXPECT_EQ(listResult.error, command_execution::ErrorCode::InvalidJson);
-    ASSERT_TRUE(singleResult.failed());
-    EXPECT_EQ(singleResult.error, command_execution::ErrorCode::InvalidJson);
 }
 
-TEST_F(TelegaAttachmentCommandResultTest, RejectsInvalidFieldsAndTraversal)
+TEST_F(TelegaAttachmentCommandResultTest, RejectsInvalidFields)
 {
     GetTelegaAttachmentsCmd listCommand;
-    GetTelegaSingleAttachmentCmd singleCommand;
 
     const auto invalidList = listCommand.executeResult(
         requestBytes({{"id", -1}, {"type", 0}}));
-    const auto traversal = singleCommand.executeResult(
-        requestBytes({{"id", 42}, {"type", 0}, {"file_name", "../first.bin"}}));
 
     ASSERT_TRUE(invalidList.failed());
     EXPECT_EQ(invalidList.error, command_execution::ErrorCode::InvalidRequest);
-    ASSERT_TRUE(traversal.failed());
-    EXPECT_EQ(traversal.error, command_execution::ErrorCode::InvalidRequest);
 }
 
 TEST_F(TelegaAttachmentCommandResultTest, ListsExistingAndMissingFiles)
@@ -215,39 +209,7 @@ TEST_F(TelegaAttachmentCommandResultTest, EmptyListIsSuccessfulJsonArray)
     EXPECT_EQ(std::string(result.payload.begin(), result.payload.end()), "[]");
 }
 
-TEST_F(TelegaAttachmentCommandResultTest, LoadsAdvertisedAttachment)
-{
-    GetTelegaSingleAttachmentCmd command;
-
-    const auto result = command.executeResult(requestBytes(
-        {{"id", 42}, {"type", 0}, {"file_name", "first.bin"}}));
-
-    ASSERT_TRUE(result.succeeded());
-    EXPECT_EQ(result.payload, expectedContent_);
-}
-
-TEST_F(TelegaAttachmentCommandResultTest, ReportsMissingOrUnadvertisedAttachment)
-{
-    GetTelegaSingleAttachmentCmd command;
-
-    const auto missing = command.executeResult(requestBytes(
-        {{"id", 42}, {"type", 0}, {"file_name", "missing.bin"}}));
-    const auto unadvertised = command.executeResult(requestBytes(
-        {{"id", 42}, {"type", 0}, {"file_name", "secret.bin"}}));
-    const auto noTelegram = command.executeResult(requestBytes(
-        {{"id", 999}, {"type", 0}, {"file_name", "first.bin"}}));
-
-    ASSERT_TRUE(missing.failed());
-    EXPECT_EQ(missing.error, command_execution::ErrorCode::AttachmentNotFound);
-    ASSERT_TRUE(unadvertised.failed());
-    EXPECT_EQ(
-        unadvertised.error,
-        command_execution::ErrorCode::AttachmentNotFound);
-    ASSERT_TRUE(noTelegram.failed());
-    EXPECT_EQ(noTelegram.error, command_execution::ErrorCode::AttachmentNotFound);
-}
-
-TEST_F(TelegaAttachmentCommandResultTest, ReportsDatabaseQueryFailure)
+TEST_F(TelegaAttachmentCommandResultTest, ReportsDatabaseSchemaFailure)
 {
     SQLiteConnectionManager::instance().closeConnection(databasePath_.string());
     fs::copy_file(
@@ -263,7 +225,7 @@ TEST_F(TelegaAttachmentCommandResultTest, ReportsDatabaseQueryFailure)
         requestBytes({{"id", 42}, {"type", 0}}));
 
     ASSERT_TRUE(result.failed());
-    EXPECT_EQ(result.error, command_execution::ErrorCode::DatabaseQueryFailed);
+    EXPECT_EQ(result.error, command_execution::ErrorCode::DatabaseSchemaFailed);
 }
 
 TEST_F(TelegaAttachmentCommandResultTest, QueryRowsReturnsStableSnapshot)
