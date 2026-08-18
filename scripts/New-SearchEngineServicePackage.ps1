@@ -220,6 +220,8 @@ $VCRedistPath = Resolve-RequiredFile $VCRedistPath `
     "Microsoft Visual C++ Redistributable $vcRedistArch"
 $oemBase64Path = Resolve-RequiredFile `
     (Join-Path $sourceDataRoot 'OEM866.INI.base64') 'OEM866 table source'
+$PrefixMapPath = Resolve-RequiredFile `
+    (Join-Path $sourceDataRoot 'prefix_map.json') 'Portable prefix_map.json'
 
 $machine = Get-PeMachine $binaryPath
 if ($machine -ne $expectedMachine) {
@@ -245,6 +247,10 @@ if ($tokenIssuerMachine -ne $expectedMachine) {
 & $configToolPath validate --settings $SettingsPath
 if ($LASTEXITCODE -ne 0) {
     throw "SearchEngineConfig rejected portable Settings.json: $SettingsPath"
+}
+& $configToolPath validate-prefix-map --path $PrefixMapPath
+if ($LASTEXITCODE -ne 0) {
+    throw "SearchEngineConfig rejected portable prefix_map.json: $PrefixMapPath"
 }
 Assert-SearchEngineConfigAutoPadContract `
     -ConfigToolPath $configToolPath `
@@ -353,6 +359,8 @@ try {
         -Destination (Join-Path $stagingDirectory 'data\Settings.json')
     Copy-Item -LiteralPath $IgnorePath `
         -Destination (Join-Path $stagingDirectory 'data\ignore.txt')
+    Copy-Item -LiteralPath $PrefixMapPath `
+        -Destination (Join-Path $stagingDirectory 'data\prefix_map.json')
 
     $oemBase64 = (Get-Content -LiteralPath $oemBase64Path -Raw).Trim()
     $oemBytes = [Convert]::FromBase64String($oemBase64)

@@ -244,7 +244,9 @@ bool SearchEngineApplication::start()
         LG("Search index opened");
 
         asio_server::Interface::setYear(pending->settings.year);
-        asio_server::Interface::setSearchServer(pending->search_server.get());
+        asio_server::Interface::setSearchServer(
+            pending->search_server.get(),
+            paths_.prefix_map);
 
         throwIfStopRequested();
         pending->dispatcher = std::make_unique<FileEventDispatcher>(

@@ -306,6 +306,16 @@ copy /Y "%PACKAGE_ROOT%INSTALLATION_GUIDE_RU.txt" "%INSTALL_ROOT%\INSTALLATION_G
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
 if errorlevel 1 goto :COPY_FAILED
+
+echo.
+echo Is GET_ATTACHMENTS / "Save attachments" used on this server instance?
+echo   1 - Yes
+echo   2 - No
+set "GET_ATTACHMENTS_USED=0"
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 goto :AFTER_ATTACHMENTS_CHOICE
+if errorlevel 1 set "GET_ATTACHMENTS_USED=1"
+:AFTER_ATTACHMENTS_CHOICE
 if "%REINSTALL%"=="1" goto :UPDATE_DATA
 
 :FRESH_DATA
@@ -320,6 +330,28 @@ copy /Y "%CONFIG_TEMP%" "%DATA_DIR%\Settings.json" >nul
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%ENDPOINT_TEMP%" "%DATA_DIR%\client-endpoint.txt" >nul
 if errorlevel 1 goto :COPY_FAILED
+if "%GET_ATTACHMENTS_USED%"=="1" goto :FRESH_PREFIX_MAP_YES
+if exist "%DATA_DIR%\prefix_map.json" del /F /Q "%DATA_DIR%\prefix_map.json" >nul 2>&1
+goto :REGISTER_SERVICE
+
+:FRESH_PREFIX_MAP_YES
+if not exist "%PACKAGE_ROOT%data\prefix_map.json" goto :FRESH_PREFIX_MAP_MISSING
+"%HELPER%" validate-prefix-map --path "%PACKAGE_ROOT%data\prefix_map.json"
+if errorlevel 1 goto :FRESH_PREFIX_MAP_INVALID
+copy /Y "%PACKAGE_ROOT%data\prefix_map.json" "%DATA_DIR%\prefix_map.json" >nul
+if errorlevel 1 goto :COPY_FAILED
+goto :REGISTER_SERVICE
+
+:FRESH_PREFIX_MAP_MISSING
+set "PREFIX_MAP_WARN=The package does not contain data\prefix_map.json."
+call :OFFER_PREFIX_MAP_CONTINUE
+if errorlevel 1 goto :ROLLBACK_OR_FAIL
+goto :REGISTER_SERVICE
+
+:FRESH_PREFIX_MAP_INVALID
+set "PREFIX_MAP_WARN=Package data\prefix_map.json is invalid."
+call :OFFER_PREFIX_MAP_CONTINUE
+if errorlevel 1 goto :ROLLBACK_OR_FAIL
 goto :REGISTER_SERVICE
 
 :UPDATE_DATA
@@ -329,6 +361,26 @@ if errorlevel 2 goto :RUNTIME_APPLY_FAILED_BEFORE_MUTATION
 if errorlevel 1 goto :RUNTIME_APPLY_FAILED
 set "RUNTIME_TX_READY=1"
 set "RUNTIME_TX_APPLIED=1"
+if "%GET_ATTACHMENTS_USED%"=="1" goto :UPDATE_PREFIX_MAP
+goto :REGISTER_SERVICE
+
+:UPDATE_PREFIX_MAP
+if not exist "%DATA_DIR%\prefix_map.json" goto :UPDATE_PREFIX_MAP_MISSING
+"%HELPER%" validate-prefix-map --path "%DATA_DIR%\prefix_map.json"
+if errorlevel 1 goto :UPDATE_PREFIX_MAP_INVALID
+goto :REGISTER_SERVICE
+
+:UPDATE_PREFIX_MAP_MISSING
+set "PREFIX_MAP_WARN=This instance has no prefix_map.json."
+call :OFFER_PREFIX_MAP_CONTINUE
+if errorlevel 1 goto :ROLLBACK_OR_FAIL
+goto :REGISTER_SERVICE
+
+:UPDATE_PREFIX_MAP_INVALID
+set "PREFIX_MAP_WARN=Existing prefix_map.json is invalid and was not replaced."
+call :OFFER_PREFIX_MAP_CONTINUE
+if errorlevel 1 goto :ROLLBACK_OR_FAIL
+goto :REGISTER_SERVICE
 
 :REGISTER_SERVICE
 echo [6/8] Registering and configuring the Windows service...
@@ -422,6 +474,17 @@ choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 set "BACKUP_MODE=none"
 if errorlevel 2 exit /b 0
 exit /b 1
+
+:OFFER_PREFIX_MAP_CONTINUE
+echo.
+echo WARNING: GET_ATTACHMENTS will not work until a valid file exists:
+echo   %DATA_DIR%\prefix_map.json
+echo %PREFIX_MAP_WARN%
+echo   1 - Continue
+echo   2 - Cancel
+choice.exe /C 12 /N /M "Select: "
+if errorlevel 2 exit /b 1
+exit /b 0
 
 :PROBE_VC_RUNTIME
 REM Prefer loading the packaged helper: same /MD CRT as SearchEngine.exe.

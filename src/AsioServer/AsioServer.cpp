@@ -820,7 +820,10 @@ bool asio_server::session::trustCommand(
     }
 }
 
-void asio_server::Interface::setSearchServer(search_server::SearchServer *_server) {
+void asio_server::Interface::setSearchServer(
+    search_server::SearchServer *_server,
+    const std::filesystem::path& attachmentsConfigPath)
+{
     searchServer_ = _server;
 
     cmdMap[COMMAND::SOLOREQUEST] = std::make_unique<SoloRequestCmd>(searchServer_);
@@ -839,7 +842,8 @@ void asio_server::Interface::setSearchServer(search_server::SearchServer *_serve
     cmdMap[COMMAND::GET_ISH_TELEGA_WAY] = std::make_unique<GetTelegaWayIshCmd>();
     cmdMap[COMMAND::GET_VH_TELEGA_WAY] = std::make_unique<GetTelegaWayVhCmd>();
     cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){ return GetFileCmd::downloadFileResultByPath("D:\\OPIS_ADMIN\\" + year_ + ".db"); });
-    cmdMap[COMMAND::GET_ATTACHMENTS] = std::make_unique<GetAttachmentsCmd>();
+    cmdMap[COMMAND::GET_ATTACHMENTS] =
+        std::make_unique<GetAttachmentsCmd>(attachmentsConfigPath);
     cmdMap[COMMAND::GET_ISH_PDTV] = std::make_unique<GetIshTelegaPdtvCommand>();
     cmdMap[COMMAND::GET_TELEGA_ATACHMENTS] = std::make_unique<GetTelegaAttachmentsCmd>();
     cmdMap[COMMAND::GET_SINGLE_ATACHMENT] = std::make_unique<GetTelegaSingleAttachmentCmd>();

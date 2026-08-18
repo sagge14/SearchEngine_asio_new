@@ -5,6 +5,7 @@
 #endif
 
 #include "Commands/GetAttachments/GetAttachmentsCmd.h"
+#include "Commands/CommandResult.h"
 
 #include "nlohmann/json.hpp"
 
@@ -283,3 +284,47 @@ TEST(GetAttachmentsCommandResult, ReportsFileOpenFailureWithoutDeletingBuffer)
     EXPECT_TRUE(fs::exists(bufferPath));
 }
 #endif
+
+TEST(GetAttachmentsCommandResult, UsesExplicitConfigPathInsteadOfCwdFile)
+{
+    TemporaryDirectory explicitDirectory;
+    TemporaryDirectory cwdDirectory;
+    const fs::path explicitConfig =
+        explicitDirectory.path() / "prefix_map.json";
+    const fs::path cwdConfig = cwdDirectory.path() / "prefix_map.json";
+    const fs::path explicitBuffer =
+        explicitDirectory.path() / "explicit-buffer";
+    const fs::path cwdBuffer = cwdDirectory.path() / "cwd-buffer";
+    writeBytes(explicitBuffer / "ok.bin", {'e'});
+    writeBytes(cwdBuffer / "cwd.bin", {'c'});
+    writeConfiguration(
+        explicitConfig,
+        explicitDirectory.path(),
+        {{"explicit-op", "explicit-buffer"}});
+    writeConfiguration(
+        cwdConfig,
+        cwdDirectory.path(),
+        {{"cwd-op", "cwd-buffer"}});
+
+    const fs::path previousCwd = fs::current_path();
+    fs::current_path(cwdDirectory.path());
+    command_execution::CommandResult cwdOperator;
+    command_execution::CommandResult explicitOperator;
+    try {
+        GetAttachmentsCmd command(explicitConfig);
+        cwdOperator = command.executeResult(requestFor("cwd-op"));
+        explicitOperator = command.executeResult(requestFor("explicit-op"));
+    } catch (...) {
+        fs::current_path(previousCwd);
+        throw;
+    }
+    fs::current_path(previousCwd);
+
+    ASSERT_TRUE(cwdOperator.failed());
+    EXPECT_EQ(
+        cwdOperator.error,
+        command_execution::ErrorCode::OperatorNotRegistered);
+    ASSERT_TRUE(explicitOperator.succeeded()) << explicitOperator.diagnostic;
+    EXPECT_FALSE(fs::exists(explicitBuffer));
+    EXPECT_TRUE(fs::exists(cwdBuffer));
+}

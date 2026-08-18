@@ -870,6 +870,63 @@ int validateCommand(const std::vector<std::wstring>& args)
     return errors.empty() ? 0 : 2;
 }
 
+int validatePrefixMapCommand(const std::vector<std::wstring>& args)
+{
+    const fs::path path = requiredOption(args, L"--path");
+    std::vector<std::string> errors;
+
+    std::error_code ec;
+    const auto status = fs::status(path, ec);
+    if (ec || !fs::exists(status)) {
+        errors.emplace_back("prefix map file does not exist");
+    } else if (!fs::is_regular_file(status)) {
+        errors.emplace_back("prefix map path is not a regular file");
+    } else {
+        json root;
+        bool parsed = false;
+        try {
+            root = readJson(path);
+            parsed = true;
+        } catch (const json::parse_error&) {
+            errors.emplace_back("prefix map JSON is invalid");
+        } catch (const std::exception& exception) {
+            errors.emplace_back(exception.what());
+        }
+
+        if (parsed) {
+            if (!root.is_object()) {
+                errors.emplace_back("prefix map root must be an object");
+            } else {
+                if (!root.contains("prefix")) {
+                    errors.emplace_back("prefix map is missing prefix");
+                } else if (!root["prefix"].is_string()) {
+                    errors.emplace_back("prefix map prefix must be a string");
+                }
+
+                if (!root.contains("map")) {
+                    errors.emplace_back("prefix map is missing map");
+                } else if (!root["map"].is_object()) {
+                    errors.emplace_back("prefix map map must be an object");
+                } else {
+                    for (const auto& item : root["map"].items()) {
+                        if (!item.value().is_string()) {
+                            errors.emplace_back(
+                                "prefix map map values must be strings");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto& error : errors) {
+        std::cout << "error=" << error << '\n';
+    }
+    std::cout << "prefix_map_valid=" << (errors.empty() ? 1 : 0) << '\n';
+    return errors.empty() ? 0 : 2;
+}
+
 int inspectCommand(const std::vector<std::wstring>& args)
 {
     const json root = readJson(requiredOption(args, L"--settings"));
@@ -1489,6 +1546,7 @@ void printUsage()
         << "  system-info\n"
         << "  inspect --settings FILE\n"
         << "  validate --settings FILE [--check-dirs]\n"
+        << "  validate-prefix-map --path FILE\n"
         << "  configure --template FILE --output FILE --port N --year N\n"
         << "            --threads N --file-timeout N --prm-autodetect 0|1\n"
         << "            [--import-settings FILE] [--parallel-readers N]\n"
@@ -1533,6 +1591,9 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"validate") {
             return validateCommand(args);
+        }
+        if (command == L"validate-prefix-map") {
+            return validatePrefixMapCommand(args);
         }
         if (command == L"configure") {
             return configureCommand(args);

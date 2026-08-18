@@ -240,6 +240,79 @@ if ($rollbackStart -ge 0) {
     ) '5. Skip-helper path still reaches old-service firewall/start'
 }
 
+# 7. SVC-003 GET_ATTACHMENTS prefix_map package/installer/runtime path.
+$prefixMapTemplate = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\source-data\prefix_map.json'
+Assert-True (Test-Path -LiteralPath $prefixMapTemplate -PathType Leaf) (
+    '7. Repository prefix_map.json template exists'
+)
+$packagerPath = Join-Path $projectRoot 'scripts\New-SearchEngineServicePackage.ps1'
+$packagerText = [IO.File]::ReadAllText($packagerPath)
+Assert-True ($packagerText.Contains("data\prefix_map.json")) (
+    '7. Packager copies data\prefix_map.json'
+)
+Assert-True ($packagerText.Contains('validate-prefix-map')) (
+    '7. Packager validates prefix_map.json before publish'
+)
+Assert-True ($packagerText.Contains('Portable prefix_map.json')) (
+    '7. Packager missing-template error names prefix_map.json'
+)
+Assert-True ($installText.Contains('Is GET_ATTACHMENTS / "Save attachments" used on this server instance?')) (
+    '7. Fresh installer has a GET_ATTACHMENTS choice'
+)
+Assert-True ($installText.Contains(':FRESH_PREFIX_MAP_YES')) (
+    '7. Fresh YES path is a separate label'
+)
+$freshYesStart = $installText.IndexOf("`n:FRESH_PREFIX_MAP_YES")
+Assert-True ($freshYesStart -ge 0) '7. FRESH_PREFIX_MAP_YES label found'
+if ($freshYesStart -ge 0) {
+    $freshYesSlice = $installText.Substring($freshYesStart)
+    $freshYesEnd = $freshYesSlice.IndexOf("`n:UPDATE_DATA")
+    if ($freshYesEnd -lt 0) { $freshYesEnd = $freshYesSlice.Length }
+    $freshYesOnly = $freshYesSlice.Substring(0, $freshYesEnd)
+    Assert-True ($freshYesOnly.Contains('validate-prefix-map')) (
+        '7. Fresh YES path calls validate-prefix-map'
+    )
+    Assert-True ($freshYesOnly.Contains(
+        'copy /Y "%PACKAGE_ROOT%data\prefix_map.json" "%DATA_DIR%\prefix_map.json"'
+    )) '7. Fresh YES can copy prefix_map.json'
+}
+if ($updateStart -ge 0) {
+    Assert-True (-not $updateOnly.Contains(
+        'copy /Y "%PACKAGE_ROOT%data\prefix_map.json" "%DATA_DIR%\prefix_map.json"'
+    )) '7. Update path does not copy package prefix_map over existing'
+    Assert-True (-not $updateOnly.Contains('xcopy.exe "%PACKAGE_ROOT%data\*"')) (
+        '7. Update path still does not xcopy package data over DATA_DIR'
+    )
+}
+$txPath = Join-Path $projectRoot 'tools\config\RuntimeDataTransaction.cpp'
+$txText = [IO.File]::ReadAllText($txPath)
+Assert-True (-not $txText.Contains('prefix_map.json')) (
+    '7. RuntimeDataTransaction managed files do not include prefix_map.json'
+)
+$optionsCpp = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot 'src\Application\SearchEngineOptions.cpp')
+)
+Assert-True ($optionsCpp.Contains(
+    'paths.prefix_map = paths.data_dir / L"prefix_map.json"'
+)) '7. Runtime path is data-dir\prefix_map.json'
+$appCpp = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot 'src\Application\SearchEngineApplication.cpp')
+)
+Assert-True ($appCpp.Contains('paths_.prefix_map')) (
+    '7. Production application passes resolved prefix_map path'
+)
+$asioCpp = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot 'src\AsioServer\AsioServer.cpp')
+)
+$explicitCtor = 'std::make_unique<GetAttachmentsCmd>(attachmentsConfigPath)'
+Assert-True ($asioCpp.Contains($explicitCtor)) (
+    '7. Production registry constructs GetAttachmentsCmd with explicit path'
+)
+Assert-True (-not $asioCpp.Contains('make_unique<GetAttachmentsCmd>()')) (
+    '7. Production registry does not use the CWD default GetAttachmentsCmd'
+)
+
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
 . (Join-Path $scriptsRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $freshRoot = Join-Path ([IO.Path]::GetTempPath()) (

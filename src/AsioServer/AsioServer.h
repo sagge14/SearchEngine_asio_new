@@ -406,7 +406,9 @@ namespace asio_server
     public:
         static void setYear(const std::string& year);
         static std::string getYear();
-        static void setSearchServer(search_server::SearchServer* _server);
+        static void setSearchServer(
+            search_server::SearchServer* _server,
+            const std::filesystem::path& attachmentsConfigPath);
         static void shutdown();
         [[nodiscard]] static command_execution::CommandResult execCommand(
             COMMAND _command,
