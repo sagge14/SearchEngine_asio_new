@@ -1,4 +1,4 @@
-# Register a USB auth token into auth_clients.sqlite for an installed
+# Register an auth token into auth_clients.sqlite for an installed
 # SearchEngineService instance (or an explicit -DataDir).
 # Compatible with Windows PowerShell 2.0 (Windows 7 SP1).
 #
@@ -159,20 +159,65 @@ function Select-InstalledInstanceFallback {
     }
 }
 
-function Select-TokenPathInteractive {
-    $defaultToken = 'E:\searchclient-auth-token.json'
-    Write-Host ''
-    Write-Host 'Select the USB auth token file (searchclient-auth-token.json).'
-    if (Test-Path -LiteralPath $defaultToken -PathType Leaf) {
-        Write-Host "Default token found: $defaultToken"
-        $useDefault = Read-Host 'Use this token? [Y/n]'
-        if ((Test-NullOrWhiteSpace $useDefault) -or
-            $useDefault -match '^(y|yes)$')
-        {
-            return (Resolve-Path -LiteralPath $defaultToken).Path
+function Exit-RegistrationCancelled {
+    exit 2
+}
+
+function Get-StandardComputerTokenPath {
+    if (Test-NullOrWhiteSpace $env:ProgramData) {
+        return $null
+    }
+    return Join-Path $env:ProgramData `
+        'SearchEngine\searchclient-auth-token.json'
+}
+
+function Read-YesNoDefaultYes([string]$Prompt) {
+    $answer = Read-Host $Prompt
+    if (Test-NullOrWhiteSpace $answer) {
+        return $true
+    }
+    if ($answer -match '^(y|yes)$') {
+        return $true
+    }
+    return $false
+}
+
+function Find-UsbAuthTokenPaths {
+    $result = @{
+        Paths = @()
+        EnumerationFailed = $false
+    }
+
+    try {
+        $drives = [System.IO.DriveInfo]::GetDrives()
+    } catch {
+        $result.EnumerationFailed = $true
+        return $result
+    }
+
+    foreach ($drive in $drives) {
+        try {
+            if ($drive.DriveType -ne 'Removable') {
+                continue
+            }
+            if (-not $drive.IsReady) {
+                continue
+            }
+            $tokenPath = Join-Path $drive.RootDirectory.FullName `
+                'searchclient-auth-token.json'
+            if (Test-Path -LiteralPath $tokenPath -PathType Leaf) {
+                $result.Paths += (Resolve-Path -LiteralPath $tokenPath).Path
+            }
+        } catch {
+            # Skip inaccessible or not-ready removable drives.
         }
     }
 
+    return $result
+}
+
+function Select-TokenPathManual {
+    Write-Host ''
     Write-Host 'Enter the full path to searchclient-auth-token.json,'
     Write-Host 'or press Enter to open a file dialog.'
     $typed = Read-Host 'Token path'
@@ -187,9 +232,6 @@ function Select-TokenPathInteractive {
     $dialog.Filter =
         'Auth token (searchclient-auth-token.json)|searchclient-auth-token.json|JSON (*.json)|*.json|All files (*.*)|*.*'
     $dialog.FileName = 'searchclient-auth-token.json'
-    if (Test-Path -LiteralPath 'E:\' -PathType Container) {
-        $dialog.InitialDirectory = 'E:\'
-    }
 
     $owner = New-Object System.Windows.Forms.Form
     $owner.TopMost = $true
@@ -197,11 +239,109 @@ function Select-TokenPathInteractive {
     $owner.WindowState = 'Minimized'
     try {
         if ($dialog.ShowDialog($owner) -ne [System.Windows.Forms.DialogResult]::OK) {
-            throw 'Token selection was cancelled.'
+            Exit-RegistrationCancelled
         }
         return $dialog.FileName
     } finally {
         $owner.Dispose()
+    }
+}
+
+function Select-AuthTokenSourceInteractive {
+    for (;;) {
+        Write-Host ''
+        Write-Host 'Select auth token source:'
+        Write-Host ''
+        Write-Host '1 - Computer token'
+        Write-Host '2 - USB token'
+        Write-Host '3 - Select token file manually'
+        Write-Host '0 - Cancel'
+
+        $choice = Read-Host 'Select'
+        if ($choice -eq '0') {
+            Exit-RegistrationCancelled
+        }
+
+        if ($choice -eq '1') {
+            $computerPath = Get-StandardComputerTokenPath
+            if ($null -eq $computerPath) {
+                Write-Host ''
+                Write-Host 'Standard ProgramData location is unavailable.'
+                return Select-TokenPathManual
+            }
+            if (Test-Path -LiteralPath $computerPath -PathType Leaf) {
+                Write-Host ''
+                Write-Host 'Computer token found:'
+                Write-Host ''
+                Write-Host $computerPath
+                Write-Host ''
+                if (Read-YesNoDefaultYes 'Use this token? [Y/n]') {
+                    return (Resolve-Path -LiteralPath $computerPath).Path
+                }
+                continue
+            }
+            Write-Host ''
+            Write-Host 'Computer token was not found:'
+            Write-Host ''
+            Write-Host $computerPath
+            Write-Host ''
+            return Select-TokenPathManual
+        }
+
+        if ($choice -eq '2') {
+            $usbResult = Find-UsbAuthTokenPaths
+            if ($usbResult.EnumerationFailed) {
+                Write-Host ''
+                Write-Host 'Could not enumerate removable drives.'
+                return Select-TokenPathManual
+            }
+
+            $tokens = @($usbResult.Paths)
+            if ($tokens.Count -eq 0) {
+                Write-Host ''
+                Write-Host 'No searchclient-auth-token.json was found on removable drives.'
+                return Select-TokenPathManual
+            }
+            if ($tokens.Count -eq 1) {
+                Write-Host ''
+                Write-Host 'USB token found:'
+                Write-Host ''
+                Write-Host $tokens[0]
+                Write-Host ''
+                if (Read-YesNoDefaultYes 'Use this token? [Y/n]') {
+                    return $tokens[0]
+                }
+                continue
+            }
+
+            Write-Host ''
+            Write-Host 'USB auth tokens found:'
+            Write-Host ''
+            for ($i = 0; $i -lt $tokens.Count; $i++) {
+                Write-Host ("  {0} - {1}" -f ($i + 1), $tokens[$i])
+            }
+            Write-Host '  0 - Cancel'
+
+            for (;;) {
+                $answer = Read-Host 'Select'
+                if ($answer -eq '0') {
+                    Exit-RegistrationCancelled
+                }
+                $parsed = 0
+                if ([int]::TryParse($answer, [ref]$parsed) -and
+                    $parsed -ge 1 -and $parsed -le $tokens.Count)
+                {
+                    return $tokens[$parsed - 1]
+                }
+                Write-Host 'Enter a number from the list.'
+            }
+        }
+
+        if ($choice -eq '3') {
+            return Select-TokenPathManual
+        }
+
+        Write-Host 'Enter a number from the list.'
     }
 }
 
@@ -236,7 +376,7 @@ try {
     $dbPath = Join-Path $DataDir 'auth_clients.sqlite'
 
     if (Test-NullOrWhiteSpace $TokenPath) {
-        $TokenPath = Select-TokenPathInteractive
+        $TokenPath = Select-AuthTokenSourceInteractive
     }
     $TokenPath = Resolve-ExistingFile $TokenPath 'Token file'
 

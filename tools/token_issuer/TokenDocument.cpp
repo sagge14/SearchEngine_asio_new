@@ -1,7 +1,7 @@
 #include "TokenDocument.hpp"
+#include "Auth/DeviceIdentity.h"
 #include "CryptoStub.hpp"
 #include "TokenAscii.hpp"
-#include "VolumeSerial.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -36,14 +36,31 @@ void ValidateTokenFields(const TokenFields& fields)
     if (TrimCopy(fields.client_name).empty()) {
         throw std::runtime_error("client_name must be non-empty");
     }
-    if (NormalizeFlashSerial(fields.flash_serial).empty()) {
-        throw std::runtime_error("flash_serial must be non-empty");
+
+    const auto device_type = TrimCopy(fields.device_type);
+    if (!auth::IsSupportedDeviceType(device_type)) {
+        throw std::runtime_error("device_type must be usb or computer");
+    }
+
+    std::string normalized_device_id;
+    if (device_type == auth::kDeviceTypeUsb) {
+        normalized_device_id = auth::NormalizeUsbDeviceId(fields.device_id);
+        if (normalized_device_id.empty()) {
+            throw std::runtime_error("USB device_id must be non-empty");
+        }
+    } else {
+        auto uuid = auth::NormalizeComputerUuid(fields.device_id);
+        if (!uuid) {
+            throw std::runtime_error(
+                "computer device_id must be a usable SMBIOS UUID");
+        }
+        normalized_device_id = *uuid;
     }
 
     const std::string* strings[] = {
         &fields.client_id,
         &fields.client_name,
-        &fields.flash_serial,
+        &fields.device_type,
         &fields.issued_at,
         &fields.issuer,
         &fields.notes,
@@ -53,6 +70,10 @@ void ValidateTokenFields(const TokenFields& fields)
             throw std::runtime_error(
                 "token fields must be printable ASCII only (no Cyrillic)");
         }
+    }
+    if (!IsAsciiTokenField(normalized_device_id)) {
+        throw std::runtime_error(
+            "token fields must be printable ASCII only (no Cyrillic)");
     }
     if (fields.expires_at.is_string()) {
         const auto expires = fields.expires_at.get<std::string>();
@@ -77,12 +98,21 @@ nlohmann::json BuildTokenDocument(
             "token requires RS256 base64 signature value");
     }
 
+    const auto device_type = TrimCopy(fields.device_type);
+    std::string device_id;
+    if (device_type == auth::kDeviceTypeUsb) {
+        device_id = auth::NormalizeUsbDeviceId(fields.device_id);
+    } else {
+        device_id = *auth::NormalizeComputerUuid(fields.device_id);
+    }
+
     nlohmann::json document = {
         {"format", kTokenFormat},
         {"format_version", kTokenFormatVersion},
         {"client_id", TrimCopy(fields.client_id)},
         {"client_name", TrimCopy(fields.client_name)},
-        {"flash_serial", NormalizeFlashSerial(fields.flash_serial)},
+        {"device_type", device_type},
+        {"device_id", device_id},
         {"issued_at",
          fields.issued_at.empty() ? NowUtcIso8601() : fields.issued_at},
         {"expires_at", fields.expires_at},

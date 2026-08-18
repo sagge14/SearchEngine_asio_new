@@ -1,34 +1,10 @@
 #include "Auth/AuthRuntime.h"
-
-#include "MyUtils/LogFile.h"
+#include "Auth/IssuerPublicKeyPath.h"
 
 #include <stdexcept>
 
 namespace auth
 {
-namespace {
-
-constexpr const char* kProgramDataIssuerPublicPem =
-    R"(C:\ProgramData\SearchClientTokenIssuer\keys\public.pem)";
-
-std::filesystem::path ResolveIssuerPublicPem(
-    const std::filesystem::path& db_path)
-{
-    const auto primary = db_path.parent_path() / "issuer-public.pem";
-    if (std::filesystem::is_regular_file(primary)) {
-        return primary;
-    }
-
-    const std::filesystem::path fallback(kProgramDataIssuerPublicPem);
-    if (std::filesystem::is_regular_file(fallback)) {
-        return fallback;
-    }
-
-    return primary;
-}
-
-} // namespace
-
     AuthRuntime& AuthRuntime::instance()
     {
         static AuthRuntime runtime;
@@ -42,19 +18,9 @@ std::filesystem::path ResolveIssuerPublicPem(
         store->open(db_path);
         store_ = std::move(store);
 
-        const auto primary = db_path.parent_path() / "issuer-public.pem";
-        const auto public_pem = ResolveIssuerPublicPem(db_path);
+        const auto public_pem = ResolveIssuerPublicPemPath(db_path);
         rsa_verifier_ =
             std::make_unique<RsaIdentitySignatureVerifier>(public_pem);
-        if (std::filesystem::is_regular_file(public_pem)) {
-            LG("Auth issuer public key path=", public_pem.string());
-        } else {
-            LG(
-                "Auth issuer public key not found; tried ",
-                primary.string(),
-                " and ",
-                kProgramDataIssuerPublicPem);
-        }
         initialized_ = true;
     }
 

@@ -15,8 +15,8 @@ namespace auth
     public:
         static AuthRuntime& instance();
 
-        // db_path is .../auth_clients.sqlite; public key is sibling issuer-public.pem,
-        // with fallback to ProgramData\SearchClientTokenIssuer\keys\public.pem
+        // db_path is .../auth_clients.sqlite; public key is sibling
+        // issuer-public.pem, or %ProgramData%/SearchClientTokenIssuer/keys/public.pem
         void initialize(const std::filesystem::path& db_path);
         void shutdown() noexcept;
 

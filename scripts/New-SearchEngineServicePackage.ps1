@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
 . (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
+. (Join-Path $PSScriptRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.searchengine-portable-package'
@@ -186,6 +187,9 @@ $binaryPath = Resolve-RequiredFile `
 $configToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
     'SearchEngineConfig Release helper'
+Assert-SearchEngineConfigSourceFreshness `
+    -ConfigToolPath $configToolPath `
+    -ProjectRoot $projectRoot
 $authDbToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'AuthDbTool.exe') `
     'AuthDbTool Release helper'
@@ -242,6 +246,9 @@ if ($tokenIssuerMachine -ne $expectedMachine) {
 if ($LASTEXITCODE -ne 0) {
     throw "SearchEngineConfig rejected portable Settings.json: $SettingsPath"
 }
+Assert-SearchEngineConfigAutoPadContract `
+    -ConfigToolPath $configToolPath `
+    -TemplatePath $SettingsPath
 
 $cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
@@ -385,6 +392,10 @@ try {
             Destination = 'Register-AuthClient-FromToken.bat'
         },
         @{
+            Source = 'Issue-SearchClientToken-Windows7.bat'
+            Destination = 'Issue-SearchClientToken.bat'
+        },
+        @{
             Source = 'Verify-Package-Windows7.bat'
             Destination = 'Verify-Package.bat'
         }
@@ -446,8 +457,6 @@ try {
         $protectedFiles += Get-ChildItem -LiteralPath $absoluteRoot `
             -Recurse -File
     }
-    $protectedFiles += Get-Item -LiteralPath `
-        (Join-Path $stagingDirectory 'data\OEM866.INI')
     foreach ($name in @(
         'Install-SearchEngineService.bat',
         'Stop-SearchEngineService.bat',
@@ -455,6 +464,7 @@ try {
         'Restart-SearchEngineService.bat',
         'Uninstall-SearchEngineService.bat',
         'Register-AuthClient-FromToken.bat',
+        'Issue-SearchClientToken.bat',
         'Verify-Package.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `
@@ -469,8 +479,10 @@ try {
             size = $_.Length
         }
     })
-    if ($manifestEntries.path -contains 'data/Settings.json') {
-        throw 'Mutable data/Settings.json must not be checksum-protected.'
+    $protectedData = @($manifestEntries.path | Where-Object { $_ -like 'data/*' })
+    if ($protectedData.Count -gt 0) {
+        throw ('Mutable data files must not be checksum-protected: ' +
+            ($protectedData -join ', '))
     }
     $checksumLines = @($manifestEntries | ForEach-Object {
         '{0}  {1}' -f `

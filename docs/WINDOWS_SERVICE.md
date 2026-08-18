@@ -86,7 +86,7 @@ cmake --build --preset windows7-x86-release `
   --target SearchEngine SearchEngineConfig AuthDbTool SearchClientTokenIssuer
 ```
 
-USB flash tokens (`format_version` 2) are signed RS256 by `SearchClientTokenIssuer`.
+USB and computer tokens (`format_version` 1) are signed RS256 by `SearchClientTokenIssuer`.
 Place `issuer-public.pem` in the service data directory (next to
 `auth_clients.sqlite`), for example:
 
@@ -94,8 +94,12 @@ Place `issuer-public.pem` in the service data directory (next to
 .\SearchClientTokenIssuer.exe --export-public "$env:ProgramData\SearchEngineService"
 ```
 
-The client checks only the USB hardware serial locally; the server verifies the
-signature on `AUTHENTICATE_V1`.
+If `issuer-public.pem` is absent, the server falls back to
+`%ProgramData%\SearchClientTokenIssuer\keys\public.pem` from the issuer
+keystore (same path `SearchClientTokenIssuer` uses by default).
+
+The client checks the local device identity (`usb` hardware serial or
+`computer` SMBIOS UUID); the server verifies the signature on `AUTHENTICATE_V1`.
 
 Executable остаётся обычным console-subsystem приложением с `wmain`; custom
 ENTRY и Windows GUI subsystem не используются.
@@ -165,9 +169,12 @@ bump-target (он всегда out-of-date), обновляет `.rc` и пер�
 .\scripts\Build-SearchEngineServicePackage.ps1
 ```
 
-Скрипт последовательно собирает `SearchEngine.exe` и архитектурно совпадающий
-`SearchEngineConfig.exe` для каждой конфигурации. Только после успешной
-Release-сборки формируются два комплекта:
+Скрипт последовательно пересобирает `SearchEngineConfig.exe` (`--clean-first`),
+затем собирает `SearchEngine.exe` и остальные helper-цели для каждой
+конфигурации. Перед упаковкой packager проверяет, что helper не старее
+`tools/config/main.cpp`, и прогоняет контракт пустых AutoPad-путей
+(`prm_base_dir` / `prd_base_dir` = `""` отключает источник). Только после
+успешной Release-сборки и этих проверок формируются комплекты:
 
 ```text
 out\package\SearchEngineService-x64\
@@ -193,6 +200,12 @@ out\package\SearchEngineService-x86-Windows7\
 .\scripts\New-SearchEngineServicePackage.ps1 -Architecture x86
 ```
 
+`New-SearchEngineServicePackage.ps1` не вызывает cmake: `SearchEngineConfig.exe`
+в `out/build/<preset>/Release` должен быть свежее `tools/config/main.cpp`.
+Иначе упаковка завершится ошибкой. Пустые `prm_base_dir` / `prd_base_dir`
+должны проходить `SearchEngineConfig validate` — packager проверяет это
+автоматически для четырёх комбинаций до копирования в `tools\`.
+
 В комплект входят:
 
 - `app\SearchEngine.exe`;
@@ -207,8 +220,9 @@ out\package\SearchEngineService-x86-Windows7\
 на новой машине это изменяемые данные, и служба создаёт их в своём data-dir.
 Редактировать `data\Settings.json` в уже собранном комплекте разрешено — это
 целевой конфиг конкретного компьютера.
-Он намеренно исключён из SHA-256-проверки пакета; его JSON-структура и
-обязательные настройки валидируются установщиком отдельно.
+Вся папка `data\` намеренно исключена из SHA-256-проверки пакета, включая
+`OEM866.INI` и `ignore.txt`. JSON сформированных настроек валидируется
+установщиком после диалога, а не по шаблону комплекта до установки.
 
 Скопируйте **всю** выбранную папку комплекта на носитель, затем на целевой
 компьютер. Запустите `Install-SearchEngineService.bat` от имени администратора.

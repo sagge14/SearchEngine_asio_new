@@ -12,7 +12,8 @@ namespace token_issuer {
 struct TokenFields {
     std::string client_id;
     std::string client_name;
-    std::string flash_serial;
+    std::string device_type;
+    std::string device_id;
     std::string issued_at;
     nlohmann::json expires_at = nullptr;
     std::string issuer;
@@ -21,7 +22,7 @@ struct TokenFields {
 
 constexpr const char* kTokenFileName = "searchclient-auth-token.json";
 constexpr const char* kTokenFormat = "searchclient-auth-token";
-constexpr int kTokenFormatVersion = 2;
+constexpr int kTokenFormatVersion = 1;
 
 std::string NowUtcIso8601();
 

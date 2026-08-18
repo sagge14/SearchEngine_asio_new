@@ -102,14 +102,10 @@ echo SearchEngineService portable installer ^(%TARGET_ARCH%^)
 echo Instance: %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
 echo.
 
-"%HELPER%" validate --settings "%SETTINGS_TEMPLATE%" >nul
-if errorlevel 1 goto :SETTINGS_INVALID
-
 "%HELPER%" system-info > "%HELPER_OUTPUT%"
 if errorlevel 1 goto :HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do set "SYS_%%A=%%B"
 "%HELPER%" inspect --settings "%SETTINGS_TEMPLATE%" > "%HELPER_OUTPUT%"
-if errorlevel 1 goto :HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do set "TPL_%%A=%%B"
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 if not defined SYS_recommended_threads goto :HELPER_FAILED
@@ -370,7 +366,7 @@ pause
 exit /b 0
 
 :VALIDATED
-echo Package and Settings.json validation completed successfully.
+echo Package verification completed successfully.
 exit /b 0
 
 :CHOOSE_BACKUP
@@ -627,9 +623,6 @@ echo ERROR: The portable package is incomplete. Copy the entire folder again.
 goto :FAILED
 :PACKAGE_DAMAGED
 echo ERROR: Package verification failed. Copy the entire folder again.
-goto :FAILED
-:SETTINGS_INVALID
-echo ERROR: data\Settings.json is invalid. Run the helper validation or restore the package.
 goto :FAILED
 :HELPER_FAILED
 echo ERROR: SearchEngineConfig could not validate or generate settings.

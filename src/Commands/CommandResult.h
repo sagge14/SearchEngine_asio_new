@@ -10,7 +10,9 @@
 namespace command_execution
 {
     // Wire ErrorResponseV1 codes (CAPABILITY_TYPED_ERRORS_V1). Numeric values
-    // are a stable client/server contract; never renumber existing entries.
+    // are a stable client/server contract; never renumber released entries.
+    // AUTHENTICATE_V1 was unreleased when the auth block moved from flash_serial
+    // names to the device_type/device_id model (codes 38-45).
     enum class ErrorCode : std::uint32_t
     {
         PayloadTooLarge = 1,
@@ -50,14 +52,16 @@ namespace command_execution
         AuthRequired = 35,
         AuthClientIdMissing = 36,
         AuthClientNameMissing = 37,
-        AuthFlashSerialMissing = 38,
-        AuthSignatureMissing = 39,
-        AuthClientIdNotFound = 40,
-        AuthClientNameMismatch = 41,
-        AuthFlashSerialMismatch = 42,
-        AuthSignatureInvalid = 43,
-        DataSourceDisabled = 44,
-        DataSourceUnavailable = 45
+        AuthDeviceTypeMissing = 38,
+        AuthDeviceIdMissing = 39,
+        AuthSignatureMissing = 40,
+        AuthClientIdNotFound = 41,
+        AuthClientNameMismatch = 42,
+        AuthDeviceTypeMismatch = 43,
+        AuthDeviceIdMismatch = 44,
+        AuthSignatureInvalid = 45,
+        DataSourceDisabled = 46,
+        DataSourceUnavailable = 47
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -101,11 +105,13 @@ namespace command_execution
             case ErrorCode::AuthRequired: return "AuthRequired";
             case ErrorCode::AuthClientIdMissing: return "AuthClientIdMissing";
             case ErrorCode::AuthClientNameMissing: return "AuthClientNameMissing";
-            case ErrorCode::AuthFlashSerialMissing: return "AuthFlashSerialMissing";
+            case ErrorCode::AuthDeviceTypeMissing: return "AuthDeviceTypeMissing";
+            case ErrorCode::AuthDeviceIdMissing: return "AuthDeviceIdMissing";
             case ErrorCode::AuthSignatureMissing: return "AuthSignatureMissing";
             case ErrorCode::AuthClientIdNotFound: return "AuthClientIdNotFound";
             case ErrorCode::AuthClientNameMismatch: return "AuthClientNameMismatch";
-            case ErrorCode::AuthFlashSerialMismatch: return "AuthFlashSerialMismatch";
+            case ErrorCode::AuthDeviceTypeMismatch: return "AuthDeviceTypeMismatch";
+            case ErrorCode::AuthDeviceIdMismatch: return "AuthDeviceIdMismatch";
             case ErrorCode::AuthSignatureInvalid: return "AuthSignatureInvalid";
             case ErrorCode::DataSourceDisabled: return "DataSourceDisabled";
             case ErrorCode::DataSourceUnavailable: return "DataSourceUnavailable";

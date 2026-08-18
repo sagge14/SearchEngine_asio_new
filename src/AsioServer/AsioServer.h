@@ -312,7 +312,8 @@ namespace asio_server
         boost::asio::thread_pool& cpu_pool_;
         std::string userName_ = "default_user";
         std::string clientId_;
-        std::string flashSerial_;
+        std::string deviceType_;
+        std::string deviceId_;
         /// Session gate: set only by USER_REGISTRY("admin")+127.0.0.1 peer
         /// or successful AUTHENTICATE_V1 (any peer).
         bool authenticated_{false};

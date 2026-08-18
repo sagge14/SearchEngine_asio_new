@@ -18,7 +18,7 @@ namespace
     using command_execution::CommandResult;
     using command_execution::ErrorCode;
 
-    constexpr std::array<ErrorCode, 45> allErrorCodes{
+    constexpr std::array<ErrorCode, 47> allErrorCodes{
         ErrorCode::PayloadTooLarge,
         ErrorCode::InvalidCommand,
         ErrorCode::CommandNotRegistered,
@@ -56,11 +56,13 @@ namespace
         ErrorCode::AuthRequired,
         ErrorCode::AuthClientIdMissing,
         ErrorCode::AuthClientNameMissing,
-        ErrorCode::AuthFlashSerialMissing,
+        ErrorCode::AuthDeviceTypeMissing,
+        ErrorCode::AuthDeviceIdMissing,
         ErrorCode::AuthSignatureMissing,
         ErrorCode::AuthClientIdNotFound,
         ErrorCode::AuthClientNameMismatch,
-        ErrorCode::AuthFlashSerialMismatch,
+        ErrorCode::AuthDeviceTypeMismatch,
+        ErrorCode::AuthDeviceIdMismatch,
         ErrorCode::AuthSignatureInvalid,
         ErrorCode::DataSourceDisabled,
         ErrorCode::DataSourceUnavailable,

@@ -2,6 +2,7 @@
 
 #include "AsioServer/AsioServer.h"
 #include "Auth/AuthRuntime.h"
+#include "Auth/IssuerPublicKeyPath.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
 #include "ContextRuntime/ContextRuntime.h"
@@ -224,6 +225,10 @@ bool SearchEngineApplication::start()
         try {
             auth::AuthRuntime::instance().initialize(paths_.auth_clients);
             LG("Auth client store opened; path=", paths_.auth_clients.string());
+            LG(
+                "Auth issuer public key; path=",
+                auth::ResolveIssuerPublicPemPath(paths_.auth_clients).string()
+            );
         } catch (const std::exception& ex) {
             throw StartupError(
                 ERROR_OPEN_FAILED,

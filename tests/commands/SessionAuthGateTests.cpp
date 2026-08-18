@@ -51,7 +51,8 @@ namespace
     [[nodiscard]] std::vector<std::uint8_t> authenticatePayload(
         std::optional<std::string_view> client_id,
         std::optional<std::string_view> client_name,
-        std::optional<std::string_view> flash_serial,
+        std::optional<std::string_view> device_type,
+        std::optional<std::string_view> device_id,
         std::optional<std::string_view> signature = "test-signature")
     {
         nlohmann::json document = nlohmann::json::object();
@@ -61,8 +62,11 @@ namespace
         if (client_name) {
             document["client_name"] = *client_name;
         }
-        if (flash_serial) {
-            document["flash_serial"] = *flash_serial;
+        if (device_type) {
+            document["device_type"] = *device_type;
+        }
+        if (device_id) {
+            document["device_id"] = *device_id;
         }
         if (signature) {
             document["signature"] = *signature;
@@ -197,7 +201,7 @@ TEST(SessionAuthGate, AuthenticateUnknownClientFailsClosed)
     AuthenticateCmd command(db.store(), verifier);
 
     const auto result = command.executeResult(
-        authenticatePayload("missing-id", "client", "flash-1"));
+        authenticatePayload("missing-id", "client", "usb", "USB-SERIAL-1"));
 
     expectAuthFailure(result, ErrorCode::AuthClientIdNotFound);
 }
@@ -208,12 +212,12 @@ TEST(SessionAuthGate, SuccessfulAuthenticateAllowsDataGateWithoutLocalhost)
     // Legacy admin is localhost-only; AUTHENTICATE_V1 must remain available
     // to ordinary remote network clients.
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     const auto result = command.executeResult(
-        authenticatePayload("client-1", "desk-a", "flash-serial-1"));
+        authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1"));
 
     EXPECT_TRUE(result.succeeded());
     EXPECT_FALSE(result.error.has_value());
@@ -300,12 +304,12 @@ TEST(SessionAuthGate, DataCommandsRemainBlockedUntilAuthenticated)
 TEST(SessionAuthGate, AuthenticateRejectsDisabledClient)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", false);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", false);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     const auto result = command.executeResult(
-        authenticatePayload("client-1", "desk-a", "flash-serial-1"));
+        authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1"));
 
     expectAuthFailure(result, ErrorCode::AuthClientDisabled);
 }
@@ -318,7 +322,7 @@ TEST(AuthenticateV1Errors, MissingClientId)
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload(std::nullopt, "desk-a", "flash-1")),
+            authenticatePayload(std::nullopt, "desk-a", "usb", "USB-SERIAL-1")),
         ErrorCode::AuthClientIdMissing);
 }
 
@@ -330,11 +334,11 @@ TEST(AuthenticateV1Errors, MissingClientName)
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", std::nullopt, "flash-1")),
+            authenticatePayload("client-1", std::nullopt, "usb", "USB-SERIAL-1")),
         ErrorCode::AuthClientNameMissing);
 }
 
-TEST(AuthenticateV1Errors, MissingFlashSerial)
+TEST(AuthenticateV1Errors, MissingDeviceType)
 {
     TempAuthDb db;
     AcceptingVerifier verifier;
@@ -342,8 +346,20 @@ TEST(AuthenticateV1Errors, MissingFlashSerial)
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "desk-a", std::nullopt)),
-        ErrorCode::AuthFlashSerialMissing);
+            authenticatePayload("client-1", "desk-a", std::nullopt, "USB-SERIAL-1")),
+        ErrorCode::AuthDeviceTypeMissing);
+}
+
+TEST(AuthenticateV1Errors, MissingDeviceId)
+{
+    TempAuthDb db;
+    AcceptingVerifier verifier;
+    AuthenticateCmd command(db.store(), verifier);
+
+    expectAuthFailure(
+        command.executeResult(
+            authenticatePayload("client-1", "desk-a", "usb", std::nullopt)),
+        ErrorCode::AuthDeviceIdMissing);
 }
 
 TEST(AuthenticateV1Errors, MissingSignature)
@@ -357,7 +373,8 @@ TEST(AuthenticateV1Errors, MissingSignature)
             authenticatePayload(
                 "client-1",
                 "desk-a",
-                "flash-1",
+                "usb",
+                "USB-SERIAL-1",
                 std::nullopt)),
         ErrorCode::AuthSignatureMissing);
 }
@@ -370,7 +387,7 @@ TEST(AuthenticateV1Errors, EmptySignature)
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "desk-a", "flash-1", "")),
+            authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1", "")),
         ErrorCode::AuthSignatureMissing);
 }
 
@@ -382,75 +399,133 @@ TEST(AuthenticateV1Errors, UnknownClientId)
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("missing-id", "desk-a", "flash-1")),
+            authenticatePayload("missing-id", "desk-a", "usb", "USB-SERIAL-1")),
         ErrorCode::AuthClientIdNotFound);
 }
 
 TEST(AuthenticateV1Errors, DisabledClient)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", false);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", false);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "desk-a", "flash-serial-1")),
+            authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1")),
         ErrorCode::AuthClientDisabled);
 }
 
 TEST(AuthenticateV1Errors, ClientNameMismatch)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "other-name", "flash-serial-1")),
+            authenticatePayload("client-1", "other-name", "usb", "USB-SERIAL-1")),
         ErrorCode::AuthClientNameMismatch);
 }
 
-TEST(AuthenticateV1Errors, FlashSerialMismatch)
+TEST(AuthenticateV1Errors, DeviceTypeMismatch)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "desk-a", "other-flash")),
-        ErrorCode::AuthFlashSerialMismatch);
+            authenticatePayload(
+                "client-1",
+                "desk-a",
+                "computer",
+                "USB-SERIAL-1")),
+        ErrorCode::AuthDeviceTypeMismatch);
+}
+
+TEST(AuthenticateV1Errors, DeviceIdMismatch)
+{
+    TempAuthDb db;
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
+    AcceptingVerifier verifier;
+    AuthenticateCmd command(db.store(), verifier);
+
+    expectAuthFailure(
+        command.executeResult(
+            authenticatePayload("client-1", "desk-a", "usb", "OTHER-SERIAL")),
+        ErrorCode::AuthDeviceIdMismatch);
 }
 
 TEST(AuthenticateV1Errors, InvalidSignature)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
     RejectingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     expectAuthFailure(
         command.executeResult(
-            authenticatePayload("client-1", "desk-a", "flash-serial-1")),
+            authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1")),
         ErrorCode::AuthSignatureInvalid);
 }
 
-TEST(AuthenticateV1Errors, ValidIdentityAndSignatureSucceeds)
+TEST(AuthenticateV1Errors, ValidUsbIdentityAndSignatureSucceeds)
 {
     TempAuthDb db;
-    db.store().upsertClient("client-1", "desk-a", "flash-serial-1", true);
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
     AcceptingVerifier verifier;
     AuthenticateCmd command(db.store(), verifier);
 
     const auto result = command.executeResult(
-        authenticatePayload("client-1", "desk-a", "flash-serial-1"));
+        authenticatePayload("client-1", "desk-a", "usb", "USB-SERIAL-1"));
 
     EXPECT_TRUE(result.succeeded());
     EXPECT_FALSE(result.error.has_value());
     EXPECT_FALSE(result.payload.empty());
+}
+
+TEST(AuthenticateV1Errors, ValidComputerIdentityAndSignatureSucceeds)
+{
+    TempAuthDb db;
+    db.store().upsertClient(
+        "pc-1",
+        "desk-pc",
+        "computer",
+        "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+        true);
+    AcceptingVerifier verifier;
+    AuthenticateCmd command(db.store(), verifier);
+
+    const auto result = command.executeResult(
+        authenticatePayload(
+            "pc-1",
+            "desk-pc",
+            "computer",
+            "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"));
+
+    EXPECT_TRUE(result.succeeded());
+    EXPECT_FALSE(result.error.has_value());
+    EXPECT_FALSE(result.payload.empty());
+}
+
+TEST(AuthenticateV1Errors, LegacyFlashSerialOnlyRequestFails)
+{
+    TempAuthDb db;
+    db.store().upsertClient("client-1", "desk-a", "usb", "USB-SERIAL-1", true);
+    AcceptingVerifier verifier;
+    AuthenticateCmd command(db.store(), verifier);
+
+    nlohmann::json document = {
+        {"client_id", "client-1"},
+        {"client_name", "desk-a"},
+        {"flash_serial", "USB-SERIAL-1"},
+        {"signature", "test-signature"}};
+    expectAuthFailure(
+        command.executeResult(jsonPayload(document)),
+        ErrorCode::AuthDeviceTypeMissing);
 }
 
 TEST(AuthenticateV1Errors, ExplicitWireNumericValues)
@@ -460,12 +535,14 @@ TEST(AuthenticateV1Errors, ExplicitWireNumericValues)
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthRequired), 35u);
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientIdMissing), 36u);
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientNameMissing), 37u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthFlashSerialMissing), 38u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthSignatureMissing), 39u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientIdNotFound), 40u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientNameMismatch), 41u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthFlashSerialMismatch), 42u);
-    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthSignatureInvalid), 43u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceTypeMissing), 38u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceIdMissing), 39u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthSignatureMissing), 40u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientIdNotFound), 41u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthClientNameMismatch), 42u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceTypeMismatch), 43u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceIdMismatch), 44u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthSignatureInvalid), 45u);
 }
 
 TEST(AuthenticateV1Errors, TypedErrorResponsePreservesAuthCodes)
@@ -473,12 +550,14 @@ TEST(AuthenticateV1Errors, TypedErrorResponsePreservesAuthCodes)
     for (const auto error : {
              ErrorCode::AuthClientIdMissing,
              ErrorCode::AuthClientNameMissing,
-             ErrorCode::AuthFlashSerialMissing,
+             ErrorCode::AuthDeviceTypeMissing,
+             ErrorCode::AuthDeviceIdMissing,
              ErrorCode::AuthSignatureMissing,
              ErrorCode::AuthClientIdNotFound,
              ErrorCode::AuthClientDisabled,
              ErrorCode::AuthClientNameMismatch,
-             ErrorCode::AuthFlashSerialMismatch,
+             ErrorCode::AuthDeviceTypeMismatch,
+             ErrorCode::AuthDeviceIdMismatch,
              ErrorCode::AuthSignatureInvalid})
     {
         const auto response = asio_server::makeTypedErrorResponse(error);
