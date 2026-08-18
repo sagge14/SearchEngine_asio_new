@@ -527,21 +527,6 @@ void search_server::Settings::show() const
     std::cout << "Batch queue memory:\t\t" << batchQueueMemoryMb << " MiB" << std::endl;
 }
 
-search_server::Settings::Settings() {
-
-    name = "TestServer";
-    version = "1.1";
-    dir = "";
-    threadCount = 6;
-    maxResponse = 30;
-    port = 15001;
-    exactSearch = false;
-    compactThresholdPercent = 5.0;
-    saveDictionaryToFile = true;
-    scanOnStartup = true;
-
-}
-
 search_server::Settings *search_server::Settings::getSettings() {
 
     if(!settings)

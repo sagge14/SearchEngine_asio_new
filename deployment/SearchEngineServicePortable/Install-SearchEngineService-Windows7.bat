@@ -384,6 +384,9 @@ goto :REGISTER_SERVICE
 
 :REGISTER_SERVICE
 echo [6/8] Registering and configuring the Windows service...
+echo Service account: LocalSystem
+echo Runtime paths must be accessible to LocalSystem.
+echo User mapped drives are not available to the Windows service.
 if "%REINSTALL%"=="1" goto :CONFIG_EXISTING_SERVICE
 sc.exe create "%SERVICE_NAME%" binPath= "\"%INSTALLED_BIN%\SearchEngine.exe\" --service --service-name \"%SERVICE_NAME%\" --data-dir \"%DATA_DIR%\"" start= delayed-auto DisplayName= "%DISPLAY_NAME%" >nul
 if errorlevel 1 goto :SERVICE_SETUP_FAILED
@@ -435,6 +438,9 @@ del /Q "%HELPER_OUTPUT%" >nul 2>&1
 echo.
 echo Installation completed successfully.
 echo Service:     %SERVICE_NAME% ^(RUNNING and PING/PONG OK^)
+echo Service account: LocalSystem
+echo Runtime paths must be accessible to LocalSystem.
+echo User mapped drives are not available to the Windows service.
 echo Application: %INSTALLED_BIN%
 echo Data:        %DATA_DIR%
 echo Logs:        %DATA_DIR%\logs

@@ -5,6 +5,7 @@
 #ifndef SEARCHENGINE_TEST_GETFILECMD_H
 #define SEARCHENGINE_TEST_GETFILECMD_H
 #include "Commands/Command.h"
+#include <filesystem>
 #include <functional>
 #include <utility>
 
@@ -23,6 +24,8 @@ public:
         const std::vector<uint8_t>& data);
     [[nodiscard]] static command_execution::CommandResult downloadFileResultByPath(
         const std::string& data);
+    [[nodiscard]] static command_execution::CommandResult downloadFileResultByPath(
+        const std::filesystem::path& filePath);
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
     [[nodiscard]] command_execution::CommandResult executeResult(
         const std::vector<uint8_t>& data) override;

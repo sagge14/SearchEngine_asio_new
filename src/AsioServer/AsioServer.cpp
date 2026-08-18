@@ -22,6 +22,7 @@
 #include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
 #include "Commands/Auth/AuthenticateCmd.h"
 #include "Auth/AuthRuntime.h"
+#include "MyUtils/Utf8Path.h"
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <algorithm>
@@ -822,13 +823,18 @@ bool asio_server::session::trustCommand(
 
 void asio_server::Interface::setSearchServer(
     search_server::SearchServer *_server,
-    const std::filesystem::path& attachmentsConfigPath)
+    const ProductionCommandPaths& paths)
 {
     searchServer_ = _server;
+    opis_base_dir_ = paths.opis_base_dir;
+    const std::filesystem::path& attachmentsConfigPath =
+        paths.attachmentsConfigPath;
 
     cmdMap[COMMAND::SOLOREQUEST] = std::make_unique<SoloRequestCmd>(searchServer_);
-    cmdMap[COMMAND::LOAD_TLG_TO_SEND] = std::make_unique<SaveTlgToSendCmd>(L"D:\\");
-    cmdMap[COMMAND::LOAD_RAZN] = std::make_unique<SaveFileDefaultCmd>("D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ\\");
+    cmdMap[COMMAND::LOAD_TLG_TO_SEND] =
+        std::make_unique<SaveTlgToSendCmd>(paths.tlg_send_root);
+    cmdMap[COMMAND::LOAD_RAZN] =
+        std::make_unique<SaveFileDefaultCmd>(paths.razn_output_dir);
     cmdMap[COMMAND::FILETEXT] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileResultByPath(v);});
     cmdMap[COMMAND::GETBINFILE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileResultByPath(v);});
     cmdMap[COMMAND::GET_VH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaVhCmd>();
@@ -841,7 +847,12 @@ void asio_server::Interface::setSearchServer(
     cmdMap[COMMAND::GET_MESSAGE] = std::make_unique<GetMessageCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGA_WAY] = std::make_unique<GetTelegaWayIshCmd>();
     cmdMap[COMMAND::GET_VH_TELEGA_WAY] = std::make_unique<GetTelegaWayVhCmd>();
-    cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){ return GetFileCmd::downloadFileResultByPath("D:\\OPIS_ADMIN\\" + year_ + ".db"); });
+    cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){
+        const std::filesystem::path file =
+            encoding::utf8_to_path(opis_base_dir_) /
+            encoding::utf8_to_wstring(year_ + ".db");
+        return GetFileCmd::downloadFileResultByPath(file);
+    });
     cmdMap[COMMAND::GET_ATTACHMENTS] =
         std::make_unique<GetAttachmentsCmd>(attachmentsConfigPath);
     cmdMap[COMMAND::GET_ISH_PDTV] = std::make_unique<GetIshTelegaPdtvCommand>();

@@ -13,6 +13,7 @@
 #include "MyUtils/LogFile.h"
 #include "MyUtils/OEMCase.h"
 #include "MyUtils/SqlLogger.h"
+#include "MyUtils/Utf8Path.h"
 #include "SearchServer/SearchServer.h"
 #include "scheduler/DelayEventTickTask.h"
 #include "scheduler/FlushPendingTask.h"
@@ -205,13 +206,19 @@ bool SearchEngineApplication::start()
         RecordProcessor::setDefaultDirs(
             Telega::archiveDbPathFor(Telega::TYPE::VHOD),
             Telega::archiveDbPathFor(Telega::TYPE::ISHOD),
-            "D:\\OPIS_ADMIN\\" + pending->settings.year + ".DB",
+            encoding::utf8_path_join(
+                pending->settings.opis_base_dir,
+                pending->settings.year + ".DB"),
             "PRM",
             "PRD"
         );
 
-        TelegaWay::base_way_dir = "D:\\F12\\" + pending->settings.year + ".db";
-        TelegaWay::base_f12_dir = "D:\\F12\\base.db";
+        TelegaWay::base_way_dir = encoding::utf8_path_join(
+            pending->settings.f12_base_dir,
+            pending->settings.year + ".db");
+        TelegaWay::base_f12_dir = encoding::utf8_path_join(
+            pending->settings.f12_base_dir,
+            "base.db");
         TelegaWay::work_year = pending->settings.year;
 
         pending->contexts = std::make_unique<ContextRuntime>(
@@ -246,7 +253,11 @@ bool SearchEngineApplication::start()
         asio_server::Interface::setYear(pending->settings.year);
         asio_server::Interface::setSearchServer(
             pending->search_server.get(),
-            paths_.prefix_map);
+            asio_server::ProductionCommandPaths{
+                pending->settings.tlg_send_root,
+                pending->settings.razn_output_dir,
+                pending->settings.opis_base_dir,
+                paths_.prefix_map});
 
         throwIfStopRequested();
         pending->dispatcher = std::make_unique<FileEventDispatcher>(

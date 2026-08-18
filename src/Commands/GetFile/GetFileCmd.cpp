@@ -3,6 +3,7 @@
 //
 
 #include "GetFileCmd.h"
+#include "MyUtils/Utf8Path.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -50,6 +51,58 @@ command_execution::CommandResult GetFileCmd::downloadFileResultByPath(
 
     const std::string filename(data.begin(), data.end());
     const std::filesystem::path filePath(filename);
+
+    std::error_code metadataError;
+    const auto status = std::filesystem::status(filePath, metadataError);
+    if (metadataError) {
+        if (metadataError == std::errc::no_such_file_or_directory) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::FileNotFound,
+                filename);
+        }
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileMetadataFailed,
+            metadataError.message());
+    }
+    if (!std::filesystem::exists(status)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileNotFound,
+            filename);
+    }
+    if (!std::filesystem::is_regular_file(status)) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileOpenFailed,
+            "path is not a regular file: " + filename);
+    }
+
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileOpenFailed,
+            filename);
+    }
+
+    std::vector<uint8_t> fileContent(
+        std::istreambuf_iterator<char>{file},
+        std::istreambuf_iterator<char>{});
+    if (file.bad()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::FileReadFailed,
+            filename);
+    }
+
+    return command_execution::CommandResult::success(std::move(fileContent));
+}
+
+command_execution::CommandResult GetFileCmd::downloadFileResultByPath(
+    const std::filesystem::path& filePath)
+{
+    const std::string filename = encoding::path_to_utf8(filePath);
+    if (filePath.empty() || filename.empty()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "file path is empty or contains a NUL byte");
+    }
 
     std::error_code metadataError;
     const auto status = std::filesystem::status(filePath, metadataError);

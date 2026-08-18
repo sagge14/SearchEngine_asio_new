@@ -313,6 +313,67 @@ Assert-True (-not $asioCpp.Contains('make_unique<GetAttachmentsCmd>()')) (
     '7. Production registry does not use the CWD default GetAttachmentsCmd'
 )
 
+# 8. SVC-002 LocalSystem + SVC-011 no hidden production D:\ fallback.
+Assert-True ($installText.Contains('Service account: LocalSystem')) (
+    '8. Installer prints Service account: LocalSystem'
+)
+Assert-True ($installText.Contains(
+    'Runtime paths must be accessible to LocalSystem.'
+)) '8. Installer warns that runtime paths must be accessible to LocalSystem'
+Assert-True ($installText.Contains(
+    'User mapped drives are not available to the Windows service.'
+)) '8. Installer warns that user mapped drives are not available'
+$registerStart = $installText.IndexOf("`n:REGISTER_SERVICE")
+Assert-True ($registerStart -ge 0) '8. REGISTER_SERVICE label found'
+if ($registerStart -ge 0) {
+    $registerSlice = $installText.Substring($registerStart)
+    $registerEnd = $registerSlice.IndexOf("`n:INSTALLED")
+    if ($registerEnd -lt 0) { $registerEnd = $registerSlice.Length }
+    $registerOnly = $registerSlice.Substring(0, $registerEnd)
+    Assert-True ($registerOnly.Contains('sc.exe create')) (
+        '8. Installer still uses sc.exe create'
+    )
+    Assert-True (-not $registerOnly.Contains('obj=')) (
+        '8. sc create/config slice has no obj='
+    )
+    Assert-True (-not $registerOnly.Contains('password=')) (
+        '8. sc create/config slice has no password='
+    )
+}
+Assert-True (-not $installText.Contains('obj=')) (
+    '8. Portable installer has no obj='
+)
+Assert-True (-not $installText.ToLower().Contains('net use')) (
+    '8. Portable installer has no net use'
+)
+Assert-True (-not $installText.ToLower().Contains('credential')) (
+    '8. Portable installer has no credential setup'
+)
+Assert-True (-not $asioCpp.Contains('"D:\\F12\\"')) (
+    '8. Production AsioServer does not hardcode D:\\F12\\'
+)
+Assert-True (-not $asioCpp.Contains('"D:\\OPIS_ADMIN\\"')) (
+    '8. Production AsioServer does not hardcode D:\\OPIS_ADMIN\\'
+)
+Assert-True (-not $asioCpp.Contains('SaveTlgToSendCmd(L"D:\\")')) (
+    '8. Production registry does not construct SaveTlgToSendCmd(L"D:\\")'
+)
+Assert-True (-not $appCpp.Contains('"D:\\F12\\"')) (
+    '8. Production application does not hardcode D:\\F12\\'
+)
+Assert-True (-not $appCpp.Contains('"D:\\OPIS_ADMIN\\"')) (
+    '8. Production application does not hardcode D:\\OPIS_ADMIN\\'
+)
+Assert-True ($appCpp.Contains('pending->settings.tlg_send_root')) (
+    '8. Application passes configured tlg_send_root'
+)
+Assert-True ($appCpp.Contains('pending->settings.f12_base_dir')) (
+    '8. Application uses configured f12_base_dir'
+)
+Assert-True ($appCpp.Contains('pending->settings.opis_base_dir')) (
+    '8. Application uses configured opis_base_dir'
+)
+
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
 . (Join-Path $scriptsRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $freshRoot = Join-Path ([IO.Path]::GetTempPath()) (

@@ -75,6 +75,42 @@ std::string utf8(const std::wstring& value)
     return result;
 }
 
+std::wstring utf16(const std::string& value)
+{
+    if (value.empty()) {
+        return {};
+    }
+    const int size = MultiByteToWideChar(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        nullptr, 0);
+    if (size <= 0) {
+        throw std::runtime_error("cannot decode UTF-8 path text");
+    }
+    std::wstring result(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        result.data(), size);
+    return result;
+}
+
+bool isAbsoluteWindowsLocalPath(const std::string& value)
+{
+    if (value.size() < 3) {
+        return false;
+    }
+    if (value[0] == '\\' || value[0] == '/') {
+        return false;
+    }
+    const auto drive = static_cast<unsigned char>(value[0]);
+    if (!std::isalpha(drive)) {
+        return false;
+    }
+    if (value[1] != ':') {
+        return false;
+    }
+    return value[2] == '\\' || value[2] == '/';
+}
+
 void writeInteractive(const std::wstring& text)
 {
     const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -699,6 +735,27 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     requireBaseDirString("prm_base_dir");
     requireBaseDirString("prd_base_dir");
 
+    const auto requireAbsoluteLocalRoot = [&](const char* name) {
+        if (!config.contains(name) || !config[name].is_string() ||
+            config[name].get_ref<const std::string&>().empty())
+        {
+            errors.emplace_back(
+                std::string("config.") + name + " must be a non-empty string");
+            return;
+        }
+        const auto& value = config[name].get_ref<const std::string&>();
+        if (!isAbsoluteWindowsLocalPath(value)) {
+            errors.emplace_back(
+                std::string("config.") + name +
+                " must be an absolute local Windows path "
+                "(UNC and relative paths are not supported)");
+        }
+    };
+    requireAbsoluteLocalRoot("tlg_send_root");
+    requireAbsoluteLocalRoot("razn_output_dir");
+    requireAbsoluteLocalRoot("opis_base_dir");
+    requireAbsoluteLocalRoot("f12_base_dir");
+
     if (!config.contains("dirs") || !config["dirs"].is_array() ||
         config["dirs"].empty())
     {
@@ -964,6 +1021,14 @@ int inspectCommand(const std::vector<std::wstring>& args)
               << "scan_on_startup="
               << (config.value("scan_on_startup", true) ? 1 : 0)
               << '\n'
+              << "tlg_send_root="
+              << config.value("tlg_send_root", std::string()) << '\n'
+              << "razn_output_dir="
+              << config.value("razn_output_dir", std::string()) << '\n'
+              << "opis_base_dir="
+              << config.value("opis_base_dir", std::string()) << '\n'
+              << "f12_base_dir="
+              << config.value("f12_base_dir", std::string()) << '\n'
               << "settings_valid=" << (errors.empty() ? 1 : 0) << '\n';
     return errors.empty() ? 0 : 2;
 }
@@ -1043,6 +1108,18 @@ int configureCommand(const std::vector<std::wstring>& args)
     config["file_indexing_timeout_sec"] = timeout;
     config["enable_prm_short_content_autodetect"] = prmAutodetect;
     config["document_catalog_storage"] = documentCatalogStorage;
+    if (const auto value = option(args, L"--tlg-send-root")) {
+        config["tlg_send_root"] = utf8(*value);
+    }
+    if (const auto value = option(args, L"--razn-output-dir")) {
+        config["razn_output_dir"] = utf8(*value);
+    }
+    if (const auto value = option(args, L"--opis-base-dir")) {
+        config["opis_base_dir"] = utf8(*value);
+    }
+    if (const auto value = option(args, L"--f12-base-dir")) {
+        config["f12_base_dir"] = utf8(*value);
+    }
 
     const auto errors = validateJson(result, false);
     if (!errors.empty()) {
@@ -1062,6 +1139,14 @@ int configureCommand(const std::vector<std::wstring>& args)
                   << "sqlite_load_threads=" << sqliteThreads << '\n'
                   << "document_catalog_storage="
                   << documentCatalogStorage << '\n'
+                  << "tlg_send_root="
+                  << config.value("tlg_send_root", std::string()) << '\n'
+                  << "razn_output_dir="
+                  << config.value("razn_output_dir", std::string()) << '\n'
+                  << "opis_base_dir="
+                  << config.value("opis_base_dir", std::string()) << '\n'
+                  << "f12_base_dir="
+                  << config.value("f12_base_dir", std::string()) << '\n'
                   << "prm_short_content_autodetect="
                   << (prmAutodetect ? 1 : 0) << '\n';
     }
@@ -1121,6 +1206,60 @@ std::string chooseDocumentCatalogStorage(
     }
 }
 
+std::string configStringOr(
+    const json& config,
+    const char* name,
+    const std::string& fallback)
+{
+    if (config.contains(name) && config[name].is_string()) {
+        const auto& value = config[name].get_ref<const std::string&>();
+        if (!value.empty()) {
+            return value;
+        }
+    }
+    return fallback;
+}
+
+std::string chooseAbsoluteLocalPath(
+    UiLanguage language,
+    const wchar_t* ruTitle,
+    const wchar_t* enTitle,
+    const wchar_t* ruPurpose,
+    const wchar_t* enPurpose,
+    const std::string& current)
+{
+    for (;;) {
+        writeInteractive(
+            std::wstring(L"\n") +
+            (language == UiLanguage::Russian ? ruTitle : enTitle) + L"\n" +
+            (language == UiLanguage::Russian ? ruPurpose : enPurpose) + L"\n" +
+            (language == UiLanguage::Russian
+                ? L"Текущее значение: "
+                : L"Current value: ") +
+            utf16(current) + L"\n" +
+            (language == UiLanguage::Russian
+                ? L"Абсолютный локальный путь Windows [Enter = оставить]: "
+                : L"Absolute local Windows path [Enter = keep]: "));
+        const std::wstring answer = trim(readInteractiveLine());
+        const std::string candidate = answer.empty() ? current : utf8(answer);
+        if (candidate.empty()) {
+            writeInteractive(language == UiLanguage::Russian
+                ? L"Путь не должен быть пустым.\n"
+                : L"The path must not be empty.\n");
+            continue;
+        }
+        if (!isAbsoluteWindowsLocalPath(candidate)) {
+            writeInteractive(language == UiLanguage::Russian
+                ? L"Нужен абсолютный локальный путь (например E:\\OPIS_ADMIN). "
+                  L"UNC и относительные пути не принимаются.\n"
+                : L"Enter an absolute local path (for example E:\\OPIS_ADMIN). "
+                  L"UNC and relative paths are not accepted.\n");
+            continue;
+        }
+        return candidate;
+    }
+}
+
 int configureInteractiveCommand(const std::vector<std::wstring>& args)
 {
     const fs::path templatePath = requiredOption(args, L"--template");
@@ -1132,6 +1271,11 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
 
     int defaultPort = 15001;
     std::string defaultDocumentCatalogStorage = "memory";
+    std::string defaultTlgSendRoot = "D:\\";
+    std::string defaultRaznOutputDir =
+        "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ";
+    std::string defaultOpisBaseDir = "D:\\OPIS_ADMIN";
+    std::string defaultF12BaseDir = "D:\\F12";
     if (defaults.contains("config") && defaults["config"].is_object()) {
         const json& config = defaults["config"];
         const char* portName = config.contains("asio_port") ? "asio_port" : "port";
@@ -1150,6 +1294,14 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
             if (inverted_index::parseDocumentCatalogStorage(candidate))
                 defaultDocumentCatalogStorage = candidate;
         }
+        defaultTlgSendRoot = configStringOr(
+            config, "tlg_send_root", defaultTlgSendRoot);
+        defaultRaznOutputDir = configStringOr(
+            config, "razn_output_dir", defaultRaznOutputDir);
+        defaultOpisBaseDir = configStringOr(
+            config, "opis_base_dir", defaultOpisBaseDir);
+        defaultF12BaseDir = configStringOr(
+            config, "f12_base_dir", defaultF12BaseDir);
     }
 
     const UiLanguage language = interactiveLanguage(args);
@@ -1175,6 +1327,40 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     const std::string documentCatalogStorage =
         chooseDocumentCatalogStorage(
             language, defaultDocumentCatalogStorage);
+    const std::string tlgSendRoot = chooseAbsoluteLocalPath(
+        language,
+        L"Корень LOAD_TLG_TO_SEND (tlg_send_root)",
+        L"LOAD_TLG_TO_SEND root (tlg_send_root)",
+        L"Файлы сохраняются в <корень>\\<МЕСЯЦ>\\<ДАТА>\\. "
+        L"Каталог сейчас может отсутствовать.",
+        L"Files are stored under <root>\\<MONTH>\\<DATE>\\. "
+        L"The directory does not have to exist yet.",
+        defaultTlgSendRoot);
+    const std::string raznOutputDir = chooseAbsoluteLocalPath(
+        language,
+        L"Каталог LOAD_RAZN (razn_output_dir)",
+        L"LOAD_RAZN directory (razn_output_dir)",
+        L"Куда писать разноску. Каталог сейчас может отсутствовать.",
+        L"Destination for raznoska files. The directory does not have to exist yet.",
+        defaultRaznOutputDir);
+    const std::string opisBaseDir = chooseAbsoluteLocalPath(
+        language,
+        L"Каталог OPIS (opis_base_dir)",
+        L"OPIS directory (opis_base_dir)",
+        L"GET_OPIS_BASE читает <каталог>\\<год>.db. "
+        L"RecordProcessor использует <каталог>\\<год>.DB.",
+        L"GET_OPIS_BASE reads <directory>\\<year>.db. "
+        L"RecordProcessor uses <directory>\\<year>.DB.",
+        defaultOpisBaseDir);
+    const std::string f12BaseDir = chooseAbsoluteLocalPath(
+        language,
+        L"Каталог F12 (f12_base_dir)",
+        L"F12 directory (f12_base_dir)",
+        L"GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY читают "
+        L"<каталог>\\<год>.db и <каталог>\\base.db.",
+        L"GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY read "
+        L"<directory>\\<year>.db and <directory>\\base.db.",
+        defaultF12BaseDir);
 
     std::vector<std::wstring> configureArgs{
         L"--template", templatePath.wstring(),
@@ -1186,6 +1372,10 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         L"--prm-autodetect", prmAutodetect ? L"1" : L"0",
         L"--document-catalog-storage",
         documentCatalogStorage == "sqlite" ? L"sqlite" : L"memory",
+        L"--tlg-send-root", utf16(tlgSendRoot),
+        L"--razn-output-dir", utf16(raznOutputDir),
+        L"--opis-base-dir", utf16(opisBaseDir),
+        L"--f12-base-dir", utf16(f12BaseDir),
         L"--quiet"
     };
     if (const auto importPath = option(args, L"--import-settings")) {
@@ -1219,7 +1409,11 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
             : L"  Document catalog: ") +
         (documentCatalogStorage == "sqlite" ? L"SQLite\n" :
             (language == UiLanguage::Russian
-                ? L"оперативная память\n" : L"memory\n"))
+                ? L"оперативная память\n" : L"memory\n")) +
+        L"  tlg_send_root=" + utf16(tlgSendRoot) + L"\n" +
+        L"  razn_output_dir=" + utf16(raznOutputDir) + L"\n" +
+        L"  opis_base_dir=" + utf16(opisBaseDir) + L"\n" +
+        L"  f12_base_dir=" + utf16(f12BaseDir) + L"\n"
     );
     return 0;
 }
@@ -1552,6 +1746,8 @@ void printUsage()
         << "            [--import-settings FILE] [--parallel-readers N]\n"
         << "            [--sqlite-load-threads N]\n"
         << "            [--document-catalog-storage memory|sqlite]\n"
+        << "            [--tlg-send-root PATH] [--razn-output-dir PATH]\n"
+        << "            [--opis-base-dir PATH] [--f12-base-dir PATH]\n"
         << "  configure-interactive --template FILE --output FILE\n"
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
         << "  choose-instance --default ID --output FILE\n"

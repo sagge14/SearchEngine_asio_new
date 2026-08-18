@@ -240,9 +240,16 @@ out\package\SearchEngineService-x86-Windows7\
 - `enable_prm_short_content_autodetect`, по умолчанию включённый.
 - `document_catalog_storage`: `memory` по умолчанию либо `sqlite`; вопрос
   показывается и при переустановке, а импортированный режим становится
-  предлагаемым значением.
+  предлагаемым значением;
+- `tlg_send_root`, `razn_output_dir`, `opis_base_dir`, `f12_base_dir`:
+  абсолютные локальные Windows-пути; физическое существование не требуется.
 
-Помощник атомарно формирует UTF-8 `Settings.json`, проверяет каталоги и порт.
+Служба portable-установщика работает как LocalSystem. User mapped drives из
+обычной пользовательской сессии службе недоступны. Буква диска сама по себе
+не доказывает, что это физический локальный том. Отсутствие F12/OPIS/tlg/razn
+каталога не ломает startup: ошибка появляется при вызове функции.
+
+Помощник атомарно формирует UTF-8 `Settings.json`, проверяет синтаксис путей и порт.
 После запуска установщик требует настоящий ответ PONG, а не только состояние
 SCM `RUNNING`.
 
@@ -283,24 +290,15 @@ Uninstall также ждёт исчезновения SCM/registry-регист
 
 ## Установка
 
-Установку выполнять из PowerShell с правами администратора. Скрипт требует
-явно выбрать аккаунт: передать credential либо осознанно разрешить LocalSystem.
+Официальный режим SearchEngineService — LocalSystem. Portable installer создаёт
+службу без `obj=` / `password=`. Рабочие данные должны лежать на локальных
+путях, доступных LocalSystem по ACL.
 
-Рекомендуемый вариант для локальных и сетевых индексируемых путей:
+Установку portable-комплекта выполнять `Install-SearchEngineService.bat` от
+имени администратора. PowerShell на целевой машине не нужен.
 
-```powershell
-$credential = Get-Credential
-.\scripts\Install-SearchEngineService.ps1 `
-  -BinaryPath C:\SearchEngine\bin\SearchEngine.exe `
-  -DataDir C:\SearchEngine\runtime `
-  -InstanceId default `
-  -Credential $credential `
-  -StartupType AutomaticDelayedStart `
-  -Start
-```
-
-LocalSystem выбирается только явно и обычно подходит лишь для локальных путей
-с заранее проверенными ACL:
+Отдельный developer-скрипт `scripts\Install-SearchEngineService.ps1` может
+установить ту же службу для локальной разработки. Официальный режим — LocalSystem:
 
 ```powershell
 .\scripts\Install-SearchEngineService.ps1 `

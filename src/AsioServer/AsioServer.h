@@ -397,9 +397,18 @@ namespace asio_server
 /** ------------------------session_END------------------------ **/
 
 /** ------------------------Interface_START------------------------ **/
+    struct ProductionCommandPaths
+    {
+        std::string tlg_send_root;
+        std::string razn_output_dir;
+        std::string opis_base_dir;
+        std::filesystem::path attachmentsConfigPath;
+    };
+
     class Interface
     {
         inline static std::string year_ = {};
+        inline static std::string opis_base_dir_ = {};
         inline static search_server::SearchServer* searchServer_ = nullptr;
         inline static std::map<COMMAND, std::unique_ptr<Command>> cmdMap{};
 
@@ -408,7 +417,7 @@ namespace asio_server
         static std::string getYear();
         static void setSearchServer(
             search_server::SearchServer* _server,
-            const std::filesystem::path& attachmentsConfigPath);
+            const ProductionCommandPaths& paths);
         static void shutdown();
         [[nodiscard]] static command_execution::CommandResult execCommand(
             COMMAND _command,

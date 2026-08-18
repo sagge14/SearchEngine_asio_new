@@ -63,6 +63,10 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["exclude_dirs"] = val.excludeDirs;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
+    jsonSettings["config"]["tlg_send_root"] = val.tlg_send_root;
+    jsonSettings["config"]["razn_output_dir"] = val.razn_output_dir;
+    jsonSettings["config"]["opis_base_dir"] = val.opis_base_dir;
+    jsonSettings["config"]["f12_base_dir"] = val.f12_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
     jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
     jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
@@ -184,6 +188,23 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         } else {
             criticalErrors.push_back("config.prd_base_dir (must be a string; empty disables PRD)");
         }
+
+        const auto loadOptionalRoot = [&](const char* name, std::string& dest) {
+            if (!config.contains(name)) {
+                addedFields.push_back(std::string("config.") + name);
+                needsResave = true;
+                return;
+            }
+            if (!config[name].is_string()) {
+                throw std::invalid_argument(
+                    std::string("config.") + name + " must be a string");
+            }
+            config.at(name).get_to(dest);
+        };
+        loadOptionalRoot("tlg_send_root", s.tlg_send_root);
+        loadOptionalRoot("razn_output_dir", s.razn_output_dir);
+        loadOptionalRoot("opis_base_dir", s.opis_base_dir);
+        loadOptionalRoot("f12_base_dir", s.f12_base_dir);
 
         // === ОПЦИОНАЛЬНЫЕ ПОЛЯ (с автодополнением) ===
         
@@ -480,6 +501,10 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
     catch (const myExp&)
     {
         throw;  // Пробрасываем дальше
+    }
+    catch (const std::invalid_argument&)
+    {
+        throw;
     }
     catch (...)
     {

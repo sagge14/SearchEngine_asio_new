@@ -3,6 +3,7 @@
 //
 
 #include "SaveTlgToSend.h"
+#include "MyUtils/Encoding.h"
 
 std::filesystem::path SaveTlgToSendCmd::getBasePath() {
 
@@ -13,8 +14,9 @@ std::filesystem::path SaveTlgToSendCmd::getBasePath() {
 
 }
 
-SaveTlgToSendCmd::SaveTlgToSendCmd(std::string _defaultSaveDirectory) {
-
+SaveTlgToSendCmd::SaveTlgToSendCmd(std::string _defaultSaveDirectory)
+    : SaveFileCmd{encoding::utf8_to_wstring(std::move(_defaultSaveDirectory))}
+{
 }
 
 

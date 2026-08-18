@@ -96,18 +96,29 @@ namespace search_server {
 
     public:
 
-        std::string name;
-        std::string version;
-        std::string dir;
+        std::string name = "TestServer";
+        std::string version = "1.1";
+        std::string dir = {};
         std::string year;
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
-        bool exactSearch;
+        /// LOAD_TLG_TO_SEND destination root: <tlg_send_root>\<MONTH>\<DATE>\...
+        std::string tlg_send_root = "D:\\";
+        /// LOAD_RAZN destination directory.
+        std::string razn_output_dir =
+            "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ";
+        /// GET_OPIS_BASE uses <opis_base_dir>\<year>.db;
+        /// RecordProcessor uses <opis_base_dir>\<year>.DB.
+        std::string opis_base_dir = "D:\\OPIS_ADMIN";
+        /// GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY:
+        /// <f12_base_dir>\<year>.db and <f12_base_dir>\base.db.
+        std::string f12_base_dir = "D:\\F12";
+        bool exactSearch = false;
         bool hideMode{};
-        int threadCount{};
-        int port{};
+        int threadCount = 6;
+        int port = 15001;
         size_t indTime{};
-        int maxResponse{};
+        int maxResponse = 30;
         bool requestText{};
         std::vector<std::string> dirs;
         std::vector<std::string> extensions;
@@ -155,7 +166,7 @@ namespace search_server {
         Settings& operator=(const Settings& s) = default;
         Settings(const Settings& s) = default;
 
-        Settings();
+        Settings() = default;
     };
 
     class SearchServer {

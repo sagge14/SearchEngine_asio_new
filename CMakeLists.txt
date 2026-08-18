@@ -1046,6 +1046,9 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveTlgToSend.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveDefaultCmd.cpp"
+            "${PROJECT_SOURCE_DIR}/src/JSON/ConverterJSON.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/ServiceCommands/PingCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaAttachments/GetTelegaAttachments.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.cpp"
@@ -1097,7 +1100,7 @@ if(BUILD_TESTS)
             SearchEngine::utf8proc
     )
     if(WIN32)
-        target_link_libraries(SearchEngine_test PRIVATE ws2_32)
+        target_link_libraries(SearchEngine_test PRIVATE ws2_32 user32)
     endif()
     searchengine_configure_target(SearchEngine_test)
     add_test(NAME SearchEngine_test COMMAND SearchEngine_test)

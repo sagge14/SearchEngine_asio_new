@@ -78,7 +78,7 @@ endforeach()
 
 # The interactive installer path must always ask the question. Empty input
 # keeps memory for a new install and keeps sqlite from imported Settings.json.
-file(WRITE "${TEST_ROOT}/interactive-input.txt" "\n\n\n\n\n\n")
+file(WRITE "${TEST_ROOT}/interactive-input.txt" "\n\n\n\n\n\n\n\n\n\n")
 foreach(case IN ITEMS new imported)
     set(interactive_output "${TEST_ROOT}/interactive-${case}.json")
     set(interactive_args
