@@ -144,6 +144,63 @@ try {
     }
 }
 
+# 5. Production installer preserves ProgramData on update (SVC-005).
+$installBat = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\Install-SearchEngineService-Windows7.bat'
+Assert-True (Test-Path -LiteralPath $installBat) '5. Installer template exists'
+$installText = [IO.File]::ReadAllText($installBat)
+Assert-True (Test-StrictAsciiBytes -Path $installBat) '5. Installer template is strict ASCII'
+Assert-True ($installText.Contains('DisableDelayedExpansion')) (
+    '5. Installer keeps DisableDelayedExpansion'
+)
+Assert-True (-not $installText.Contains('ROLLBACK_DATA')) (
+    '5. Installer has no whole-DataDir rollback variable'
+)
+Assert-True (-not $installText.Contains('move "%DATA_DIR%"')) (
+    '5. Installer does not move DATA_DIR'
+)
+Assert-True (-not $installText.Contains('move "%DATA_DIR%" "%ROLLBACK_DATA%"')) (
+    '5. Installer does not move DATA_DIR to ROLLBACK_DATA'
+)
+Assert-True (-not $installText.Contains('rmdir /S /Q "%DATA_DIR%"')) (
+    '5. Reinstall rollback does not rmdir DATA_DIR'
+)
+Assert-True ($installText.Contains(':FRESH_DATA')) '5. Fresh data path is a separate label'
+Assert-True ($installText.Contains(':UPDATE_DATA')) '5. Update data path is a separate label'
+Assert-True ($installText.Contains('runtime-update-apply')) (
+    '5. Update path calls runtime-update-apply'
+)
+Assert-True ($installText.Contains('runtime-update-commit')) (
+    '5. Success path calls runtime-update-commit'
+)
+Assert-True ($installText.Contains('runtime-update-rollback')) (
+    '5. Reinstall failure path calls runtime-update-rollback'
+)
+Assert-True ($installText.Contains(':WAIT_FOR_HEALTH_PORT')) (
+    '5. Health helper takes an explicit port'
+)
+$updateBlock = $installText
+$updateStart = $updateBlock.IndexOf("`n:UPDATE_DATA")
+Assert-True ($updateStart -ge 0) '5. UPDATE_DATA label found for ignore check'
+if ($updateStart -ge 0) {
+    $updateSlice = $updateBlock.Substring($updateStart)
+    $nextLabel = $updateSlice.IndexOf("`n:REGISTER_SERVICE")
+    if ($nextLabel -lt 0) { $nextLabel = $updateSlice.Length }
+    $updateOnly = $updateSlice.Substring(0, $nextLabel)
+    Assert-True (-not $updateOnly.Contains('xcopy.exe "%PACKAGE_ROOT%data\*"')) (
+        '5. Update path does not xcopy package data over DATA_DIR'
+    )
+    Assert-True (-not $updateOnly.ToLower().Contains('ignore.txt')) (
+        '5. Update BAT path does not overwrite ignore.txt'
+    )
+}
+Assert-True (-not $installText.Contains(
+    'old settings, indexes and logs will be deleted'
+)) '5. no-backup text does not claim ProgramData will be deleted'
+Assert-True ($installText.Contains('Skipping the optional export does not delete ProgramData')) (
+    '5. no-backup text says ProgramData is preserved'
+)
+
 Write-Host ''
 Write-Host "Passed: $script:passed  Failed: $($script:failures.Count)"
 if ($script:failures.Count -gt 0) {

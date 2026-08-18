@@ -206,12 +206,17 @@ if(BUILD_CONFIG_TOOL)
         message(FATAL_ERROR "SearchEngineConfig currently supports Windows only")
     endif()
 
-    add_executable(SearchEngineConfig tools/config/main.cpp)
+    add_executable(
+            SearchEngineConfig
+            tools/config/main.cpp
+            tools/config/RuntimeDataTransaction.cpp
+    )
     target_include_directories(
             SearchEngineConfig
             PRIVATE
             "${PROJECT_SOURCE_DIR}/lib"
             "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/config"
     )
     target_link_libraries(
             SearchEngineConfig

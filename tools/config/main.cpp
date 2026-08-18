@@ -6,6 +6,7 @@
 
 #include "Index/Batch/FullIndexStrategy.h"
 #include "Index/DocumentCatalogStorage.h"
+#include "RuntimeDataTransaction.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1501,7 +1502,12 @@ void printUsage()
         << "  check-port --port N\n"
         << "  health --port N [--timeout-ms N]\n"
         << "  backup --install-root DIR --data-dir DIR --destination DIR\n"
-        << "         --mode full|settings-logs\n";
+        << "         --mode full|settings-logs\n"
+        << "  runtime-update-apply --data-dir DIR --package-data DIR\n"
+        << "            --generated-settings FILE --generated-endpoint FILE\n"
+        << "            --rollback-dir DIR\n"
+        << "  runtime-update-rollback --data-dir DIR --rollback-dir DIR\n"
+        << "  runtime-update-commit --data-dir DIR --rollback-dir DIR\n";
 }
 
 } // namespace
@@ -1548,6 +1554,15 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"backup") {
             return backupCommand(args);
+        }
+        if (command == L"runtime-update-apply") {
+            return runtime_data_transaction::applyCommand(args);
+        }
+        if (command == L"runtime-update-rollback") {
+            return runtime_data_transaction::rollbackCommand(args);
+        }
+        if (command == L"runtime-update-commit") {
+            return runtime_data_transaction::commitCommand(args);
         }
         printUsage();
         return 1;

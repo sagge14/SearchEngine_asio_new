@@ -79,8 +79,11 @@ if /I "%SERVICE_INSTANCE%"=="default" (
 set "FIREWALL_RULE=%SERVICE_NAME% TCP"
 set "DATA_DIR=%ProgramData%\%SERVICE_NAME%"
 set "CONFIG_TEMP=%TEMP%\%SERVICE_NAME%-Settings-%RANDOM%-%RANDOM%.json"
+set "ENDPOINT_TEMP=%TEMP%\%SERVICE_NAME%-Endpoint-%RANDOM%-%RANDOM%.txt"
 set "HELPER_OUTPUT=%TEMP%\%SERVICE_NAME%-Helper-%RANDOM%-%RANDOM%.txt"
-set "ROLLBACK_READY=0"
+set "APP_ROLLBACK_READY=0"
+set "RUNTIME_TX_READY=0"
+set "RUNTIME_TX_APPLIED=0"
 set "REINSTALL=0"
 set "BACKUP_MODE=none"
 
@@ -194,6 +197,14 @@ set "DOCUMENT_CATALOG_STORAGE=%CFG_document_catalog_storage%"
 "%HELPER%" validate --settings "%CONFIG_TEMP%" >nul
 if errorlevel 1 goto :HELPER_FAILED
 
+> "%ENDPOINT_TEMP%" echo server_id=%SERVICE_INSTANCE%
+>> "%ENDPOINT_TEMP%" echo display_name=%DISPLAY_NAME%
+>> "%ENDPOINT_TEMP%" echo host=%COMPUTERNAME%
+>> "%ENDPOINT_TEMP%" echo god=%SERVICE_YEAR%
+>> "%ENDPOINT_TEMP%" echo port=%SERVICE_PORT%
+>> "%ENDPOINT_TEMP%" echo service_name=%SERVICE_NAME%
+if not exist "%ENDPOINT_TEMP%" goto :HELPER_FAILED
+
 :DIRECTORIES_VALID
 echo.
 echo Selected configuration:
@@ -259,34 +270,31 @@ echo [2/8] Stopping the installed service...
 call :STOP_SERVICE
 if errorlevel 1 goto :FAILED
 
-if "%BACKUP_MODE%"=="none" goto :PREPARE_ROLLBACK
+if "%BACKUP_MODE%"=="none" goto :CHECK_NEW_PORT
 echo [3/8] Exporting the previous installation...
 "%HELPER%" backup --install-root "%INSTALL_ROOT%" --data-dir "%DATA_DIR%" --destination "%BACKUP_DESTINATION%" --mode %BACKUP_MODE%
 if errorlevel 1 goto :RESTART_OLD_SERVICE_AND_FAIL
 
-:PREPARE_ROLLBACK
-set "ROLLBACK_INSTALL=%INSTALL_ROOT%.rollback-%RANDOM%-%RANDOM%"
-set "ROLLBACK_DATA=%DATA_DIR%.rollback-%RANDOM%-%RANDOM%"
-if exist "%ROLLBACK_INSTALL%" goto :ROLLBACK_PREPARE_FAILED
-if exist "%ROLLBACK_DATA%" goto :ROLLBACK_PREPARE_FAILED
-if exist "%INSTALL_ROOT%" move "%INSTALL_ROOT%" "%ROLLBACK_INSTALL%" >nul
-if exist "%INSTALL_ROOT%" goto :ROLLBACK_PREPARE_FAILED
-if exist "%DATA_DIR%" move "%DATA_DIR%" "%ROLLBACK_DATA%" >nul
-if exist "%DATA_DIR%" goto :ROLLBACK_PREPARE_FAILED
-set "ROLLBACK_READY=1"
-goto :CHECK_NEW_PORT
-
 :CHECK_NEW_PORT
 "%HELPER%" check-port --port %SERVICE_PORT% >nul
 if errorlevel 1 goto :PORT_IN_USE
+if "%REINSTALL%"=="0" goto :COPY_APPLICATION
 
+echo Preparing application rollback...
+set "ROLLBACK_INSTALL=%INSTALL_ROOT%.rollback-%RANDOM%-%RANDOM%"
+set "ROLLBACK_RUNTIME=%DATA_DIR%.runtime-update-%RANDOM%-%RANDOM%"
+if exist "%ROLLBACK_INSTALL%" goto :ROLLBACK_PREPARE_FAILED
+if exist "%ROLLBACK_RUNTIME%" goto :ROLLBACK_PREPARE_FAILED
+if exist "%INSTALL_ROOT%" move "%INSTALL_ROOT%" "%ROLLBACK_INSTALL%" >nul
+if exist "%INSTALL_ROOT%" goto :ROLLBACK_PREPARE_FAILED
+set "APP_ROLLBACK_READY=1"
+
+:COPY_APPLICATION
 echo [4/8] Copying application files...
 md "%INSTALLED_BIN%" >nul 2>&1
 md "%INSTALLED_TOOLS%" >nul 2>&1
-md "%DATA_DIR%" >nul 2>&1
 if not exist "%INSTALLED_BIN%\" goto :COPY_FAILED
 if not exist "%INSTALLED_TOOLS%\" goto :COPY_FAILED
-if not exist "%DATA_DIR%\" goto :COPY_FAILED
 xcopy.exe "%PACKAGE_ROOT%app\*" "%INSTALLED_BIN%\" /E /I /H /R /Y >nul
 if errorlevel 1 goto :COPY_FAILED
 xcopy.exe "%PACKAGE_ROOT%tools\*" "%INSTALLED_TOOLS%\" /E /I /H /R /Y >nul
@@ -297,20 +305,30 @@ copy /Y "%PACKAGE_ROOT%INSTALLATION_GUIDE_RU.txt" "%INSTALL_ROOT%\INSTALLATION_G
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
 if errorlevel 1 goto :COPY_FAILED
+if "%REINSTALL%"=="1" goto :UPDATE_DATA
 
-echo [5/8] Copying data and generated settings...
+:FRESH_DATA
+echo [5/8] Creating data directory from package...
+md "%DATA_DIR%" >nul 2>&1
+md "%DATA_DIR%\logs" >nul 2>&1
+md "%DATA_DIR%\messages" >nul 2>&1
+if not exist "%DATA_DIR%\" goto :COPY_FAILED
 xcopy.exe "%PACKAGE_ROOT%data\*" "%DATA_DIR%\" /E /I /H /R /Y >nul
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%CONFIG_TEMP%" "%DATA_DIR%\Settings.json" >nul
 if errorlevel 1 goto :COPY_FAILED
-> "%DATA_DIR%\client-endpoint.txt" echo server_id=%SERVICE_INSTANCE%
->> "%DATA_DIR%\client-endpoint.txt" echo display_name=%DISPLAY_NAME%
->> "%DATA_DIR%\client-endpoint.txt" echo host=%COMPUTERNAME%
->> "%DATA_DIR%\client-endpoint.txt" echo god=%SERVICE_YEAR%
->> "%DATA_DIR%\client-endpoint.txt" echo port=%SERVICE_PORT%
->> "%DATA_DIR%\client-endpoint.txt" echo service_name=%SERVICE_NAME%
+copy /Y "%ENDPOINT_TEMP%" "%DATA_DIR%\client-endpoint.txt" >nul
 if errorlevel 1 goto :COPY_FAILED
+goto :REGISTER_SERVICE
 
+:UPDATE_DATA
+echo [5/8] Updating managed runtime files...
+"%HELPER%" runtime-update-apply --data-dir "%DATA_DIR%" --package-data "%PACKAGE_ROOT%data" --generated-settings "%CONFIG_TEMP%" --generated-endpoint "%ENDPOINT_TEMP%" --rollback-dir "%ROLLBACK_RUNTIME%"
+if errorlevel 1 goto :RUNTIME_APPLY_FAILED
+set "RUNTIME_TX_READY=1"
+set "RUNTIME_TX_APPLIED=1"
+
+:REGISTER_SERVICE
 echo [6/8] Registering and configuring the Windows service...
 if "%REINSTALL%"=="1" goto :CONFIG_EXISTING_SERVICE
 sc.exe create "%SERVICE_NAME%" binPath= "\"%INSTALLED_BIN%\SearchEngine.exe\" --service --service-name \"%SERVICE_NAME%\" --data-dir \"%DATA_DIR%\"" start= delayed-auto DisplayName= "%DISPLAY_NAME%" >nul
@@ -341,18 +359,24 @@ sc.exe start "%SERVICE_NAME%" >nul
 if errorlevel 1 goto :SERVICE_START_FAILED
 call :WAIT_FOR_RUNNING
 if errorlevel 1 goto :SERVICE_START_FAILED
-call :WAIT_FOR_HEALTH
+call :WAIT_FOR_HEALTH_PORT %SERVICE_PORT%
 if errorlevel 1 goto :SERVICE_HEALTH_FAILED
 
-if "%ROLLBACK_READY%"=="0" goto :INSTALLED
+if "%APP_ROLLBACK_READY%"=="0" goto :COMMIT_RUNTIME
 rmdir /S /Q "%ROLLBACK_INSTALL%" >nul 2>&1
 if exist "%ROLLBACK_INSTALL%" echo WARNING: old application directory could not be removed: %ROLLBACK_INSTALL%
-rmdir /S /Q "%ROLLBACK_DATA%" >nul 2>&1
-if exist "%ROLLBACK_DATA%" echo WARNING: old data directory could not be removed: %ROLLBACK_DATA%
-set "ROLLBACK_READY=0"
+set "APP_ROLLBACK_READY=0"
+
+:COMMIT_RUNTIME
+if "%RUNTIME_TX_APPLIED%"=="0" goto :INSTALLED
+"%HELPER%" runtime-update-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
+if errorlevel 1 echo WARNING: runtime transaction directory was left for diagnostics: %ROLLBACK_RUNTIME%
+set "RUNTIME_TX_READY=0"
+set "RUNTIME_TX_APPLIED=0"
 
 :INSTALLED
 del /Q "%CONFIG_TEMP%" >nul 2>&1
+del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 echo.
 echo Installation completed successfully.
@@ -386,10 +410,12 @@ set /p "BACKUP_DESTINATION=Destination disk or folder, for example E:\Backups: "
 if "%BACKUP_DESTINATION%"=="" goto :READ_BACKUP_DESTINATION
 exit /b 0
 :CONFIRM_NO_BACKUP
-echo No backup means that old settings, indexes and logs will be deleted
-echo only after the new service passes its health check.
+echo Skipping the optional export does not delete ProgramData.
+echo The index, authorization database, messages, logs, prefix_map.json,
+echo user ignore.txt and other runtime files stay in place. Export is an
+echo extra operator backup only.
 echo   1 - Cancel ^(recommended^)
-echo   2 - Continue without backup
+echo   2 - Continue without export
 choice.exe /C 12 /N /M "Select: "
 if errorlevel 2 set "BACKUP_MODE=none"
 if errorlevel 2 exit /b 0
@@ -485,15 +511,17 @@ if %WAIT_SECONDS% GEQ 120 exit /b 1
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_RUNNING_LOOP
 
-:WAIT_FOR_HEALTH
+:WAIT_FOR_HEALTH_PORT
+set "HEALTH_PORT=%~1"
+if "%HEALTH_PORT%"=="" exit /b 1
 set /a HEALTH_ATTEMPTS=0
-:HEALTH_LOOP
-"%HELPER%" health --port %SERVICE_PORT% --timeout-ms 10000 >nul 2>&1
+:HEALTH_PORT_LOOP
+"%HELPER%" health --port %HEALTH_PORT% --timeout-ms 10000 >nul 2>&1
 if not errorlevel 1 exit /b 0
 set /a HEALTH_ATTEMPTS+=1
 if %HEALTH_ATTEMPTS% GEQ 12 exit /b 1
 ping.exe 127.0.0.1 -n 3 >nul
-goto :HEALTH_LOOP
+goto :HEALTH_PORT_LOOP
 
 :CHECK_EMPTY_DIRECTORY
 if not exist "%~1\" exit /b 0
@@ -533,15 +561,16 @@ sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 
 :ROLLBACK_PREPARE_FAILED
-echo ERROR: Cannot move the previous installation into rollback directories.
+echo ERROR: Cannot move the previous application into a rollback directory.
 if exist "%ROLLBACK_INSTALL%" if not exist "%INSTALL_ROOT%" move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
-if exist "%ROLLBACK_DATA%" if not exist "%DATA_DIR%" move "%ROLLBACK_DATA%" "%DATA_DIR%" >nul
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 
 :PORT_IN_USE
 echo ERROR: TCP port %SERVICE_PORT% is already occupied by another process.
-goto :ROLLBACK_OR_FAIL
+if "%REINSTALL%"=="0" goto :ROLLBACK_OR_FAIL
+if "%APP_ROLLBACK_READY%"=="1" goto :ROLLBACK_OR_FAIL
+goto :RESTART_OLD_SERVICE_AND_FAIL
 
 :COPY_FAILED
 echo ERROR: Cannot copy installation files.
@@ -562,7 +591,9 @@ echo Check logs in %DATA_DIR%\logs
 goto :ROLLBACK_OR_FAIL
 
 :ROLLBACK_OR_FAIL
-if "%ROLLBACK_READY%"=="1" goto :ROLLBACK_REINSTALL
+if "%APP_ROLLBACK_READY%"=="1" goto :ROLLBACK_REINSTALL
+if "%RUNTIME_TX_READY%"=="1" goto :ROLLBACK_REINSTALL
+if "%RUNTIME_TX_APPLIED%"=="1" goto :ROLLBACK_REINSTALL
 sc.exe query "%SERVICE_NAME%" >nul 2>&1
 if errorlevel 1 goto :CLEAN_FAILURE_FIREWALL
 call :STOP_SERVICE
@@ -571,37 +602,94 @@ sc.exe delete "%SERVICE_NAME%" >nul 2>&1
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 goto :FAILED_WITH_FILES
 
+:RUNTIME_APPLY_FAILED
+if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_OR_FAIL
+set "RUNTIME_TX_READY=1"
+goto :ROLLBACK_OR_FAIL
+
 :ROLLBACK_REINSTALL
 echo Restoring the previous working installation...
+set "ROLLBACK_APP_OK=0"
+set "ROLLBACK_RUNTIME_OK=0"
+set "ROLLBACK_HEALTH_OK=0"
 call :STOP_SERVICE
 if errorlevel 1 goto :ROLLBACK_STOP_FAILED
-rmdir /S /Q "%INSTALL_ROOT%" >nul 2>&1
-rmdir /S /Q "%DATA_DIR%" >nul 2>&1
+if "%APP_ROLLBACK_READY%"=="1" goto :ROLLBACK_RESTORE_APP
+set "ROLLBACK_APP_OK=1"
+goto :ROLLBACK_RUNTIME_FILES
+
+:ROLLBACK_RESTORE_APP
+call :DELETE_DIRECTORY_RETRY "%INSTALL_ROOT%"
+if errorlevel 1 goto :ROLLBACK_FILES_FAILED
 if exist "%INSTALL_ROOT%" goto :ROLLBACK_FILES_FAILED
-if exist "%DATA_DIR%" goto :ROLLBACK_FILES_FAILED
 move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
-move "%ROLLBACK_DATA%" "%DATA_DIR%" >nul
 if not exist "%INSTALL_ROOT%" goto :ROLLBACK_FILES_FAILED
-if not exist "%DATA_DIR%" goto :ROLLBACK_FILES_FAILED
-set "ROLLBACK_READY=0"
+set "APP_ROLLBACK_READY=0"
+set "ROLLBACK_APP_OK=1"
+
+:ROLLBACK_RUNTIME_FILES
+if "%RUNTIME_TX_READY%"=="1" goto :ROLLBACK_RUNTIME_DO
+if "%RUNTIME_TX_APPLIED%"=="1" goto :ROLLBACK_RUNTIME_DO
+set "ROLLBACK_RUNTIME_OK=1"
+goto :ROLLBACK_FIREWALL
+
+:ROLLBACK_RUNTIME_DO
+if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_RUNTIME_ALREADY_CLEARED
+"%HELPER%" runtime-update-rollback --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
+if errorlevel 1 goto :ROLLBACK_RUNTIME_FAILED
+:ROLLBACK_RUNTIME_ALREADY_CLEARED
+set "RUNTIME_TX_READY=0"
+set "RUNTIME_TX_APPLIED=0"
+set "ROLLBACK_RUNTIME_OK=1"
+
+:ROLLBACK_FIREWALL
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 if defined OLD_port netsh.exe advfirewall firewall add rule name="%FIREWALL_RULE%" dir=in action=allow protocol=TCP localport=%OLD_port% program="%INSTALLED_BIN%\SearchEngine.exe" enable=yes >nul 2>&1
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
-echo Previous application and data files were restored.
+if not defined OLD_port goto :ROLLBACK_NO_HEALTH
+call :WAIT_FOR_RUNNING
+if errorlevel 1 goto :ROLLBACK_HEALTH_FAILED
+call :WAIT_FOR_HEALTH_PORT %OLD_port%
+if errorlevel 1 goto :ROLLBACK_HEALTH_FAILED
+set "ROLLBACK_HEALTH_OK=1"
+if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
+if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
+echo Previous application, managed files and old-port PING/PONG were restored.
+goto :FAILED
+
+:ROLLBACK_NO_HEALTH
+if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
+if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
+echo Previous application and managed files were restored.
+echo Old service port is unknown, so PING/PONG was not verified.
 goto :FAILED
 
 :ROLLBACK_STOP_FAILED
 echo ERROR: The new service could not be stopped for automatic rollback.
-echo Both rollback directories were preserved:
-echo   %ROLLBACK_INSTALL%
-echo   %ROLLBACK_DATA%
+if defined ROLLBACK_INSTALL echo   Application rollback: %ROLLBACK_INSTALL%
+if defined ROLLBACK_RUNTIME echo   Runtime transaction: %ROLLBACK_RUNTIME%
 goto :FAILED
 
 :ROLLBACK_FILES_FAILED
-echo ERROR: Automatic rollback could not replace the new directories.
-echo Rollback data was preserved where possible:
-echo   %ROLLBACK_INSTALL%
-echo   %ROLLBACK_DATA%
+echo ERROR: Automatic rollback could not restore the previous application directory.
+if defined ROLLBACK_INSTALL echo   Application rollback: %ROLLBACK_INSTALL%
+if defined ROLLBACK_RUNTIME echo   Runtime transaction: %ROLLBACK_RUNTIME%
+goto :FAILED
+
+:ROLLBACK_RUNTIME_FAILED
+echo ERROR: Runtime managed-file rollback did not complete.
+echo Transaction directory preserved:
+echo   %ROLLBACK_RUNTIME%
+goto :FAILED
+
+:ROLLBACK_HEALTH_FAILED
+echo ERROR: The previous service was started but old-port PING/PONG was not confirmed.
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
+goto :FAILED
+
+:ROLLBACK_INCOMPLETE
+echo ERROR: Automatic rollback did not fully restore the previous installation.
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
 goto :FAILED
 
 :INVALID_INSTANCE
@@ -640,6 +728,7 @@ echo   %DATA_DIR%
 :FAILED
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 del /Q "%CONFIG_TEMP%" >nul 2>&1
+del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 echo.
 echo Installation failed. Read the error above.
@@ -648,6 +737,7 @@ exit /b 1
 :CANCELLED
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 del /Q "%CONFIG_TEMP%" >nul 2>&1
+del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 echo Installation cancelled. No installed files were changed.
 exit /b 1
