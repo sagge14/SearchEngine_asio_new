@@ -54,7 +54,7 @@ VERIFIED    — реализовано и проверено
 | SVC-005 | P0 | Update/reinstall теряет runtime-state | DECIDED |
 | SVC-006 | P0/P1 | `PING/PONG` как core health-check | REJECTED |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
-| SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | OPEN |
+| SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | REJECTED |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
 | SVC-010 | P0 security | Upload path escape и upload целиком в RAM | DECIDED |
 | SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
@@ -165,6 +165,26 @@ root они индексируются обратно.
 
 Возможный будущий отдельный feature — `freeze` индекса, при котором поиск
 работает по текущему индексу, а scanner/watcher его не изменяют.
+
+---
+
+## SVC-008 — watcher и позднее появление parent/root: текущее поведение принято
+
+**Статус:** REJECTED
+
+Нормальный сценарий, когда parent (например `D:\`) существует, а configured
+месячная папка появляется позже, уже подхватывается parent watcher: создаётся
+inner `FileWatcher` с `forceWalk=true`, который рекурсивно выдаёт Added для уже
+находящихся там файлов.
+
+Остаётся edge case: сам parent/root отсутствовал при старте и позднее появился
+уже с существующими configured children. После открытия parent текущий код не
+делает явного повторного enumerate kids и может ждать будущего directory event.
+
+Этот edge case сейчас сознательно не исправляется. Решение согласовано с SVC-007:
+сложную recovery-логику, дополнительные состояния и изменения production watcher
+не вводить. Отдельное восстановление после позднего появления самого диска/root
+может быть реализовано в будущем как самостоятельная feature.
 
 ---
 
@@ -448,26 +468,6 @@ Service mode использует `%ProgramData%\SearchEngineService[-instance]`
 
 ---
 
-## SVC-008 — watcher и позднее появление parent/root
-
-**Приоритет:** P1  
-**Статус:** OPEN
-
-Нормальный сценарий, когда parent (например `D:\`) существует, а configured
-месячная папка появляется позже, уже подхватывается parent watcher: создаётся
-inner `FileWatcher` с `forceWalk=true`, который рекурсивно выдаёт Added для уже
-находящихся там файлов.
-
-Остаётся только edge case: сам parent/root отсутствовал при старте и позднее
-появился уже с существующими configured children. После открытия parent текущий
-код не делает явного повторного enumerate kids и может ждать будущего directory
-event.
-
-С учётом решения SVC-007 предварительная рекомендация — не усложнять этот edge
-case сейчас и перевести SVC-008 в REJECTED отдельным решением.
-
----
-
 ## SVC-013 — legacy state и диагностика service mode
 
 **Приоритет:** P2  
@@ -542,6 +542,7 @@ SVC-005 -> DECIDED
 SVC-003 -> DECIDED
 SVC-004 -> DECIDED
 SVC-007 -> REJECTED
+SVC-008 -> REJECTED
 SVC-009 -> DECIDED
 SVC-010 -> DECIDED
 SVC-012 -> DECIDED
@@ -552,9 +553,8 @@ SVC-006 -> REJECTED
 
 Дальше:
 
-1. **SVC-008** — формально закрыть watcher edge-case, если решение принято.
-2. **SVC-001** — runtime config UX.
-3. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
+1. **SVC-001** — runtime config UX.
+2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
 
 ---
 
@@ -563,7 +563,7 @@ SVC-006 -> REJECTED
 - Перед кодом соответствующий пункт должен быть `DECIDED`.
 - Один пункт или тесно связанная группа — отдельная feature branch/commit.
 - Wire command/error/payload изменения проверять согласованно в сервере и клиенте.
-- Существующие command/error ordinals не перенумеровывать.
+- Существующие command/error/payload ordinals не перенумеровывать.
 - Installer tests выполнять только на disposable instance и тестовых данных.
 - Filesystem tests выполнять во временных каталогах.
 - Не запускать destructive scan/update против production data во время тестов.
