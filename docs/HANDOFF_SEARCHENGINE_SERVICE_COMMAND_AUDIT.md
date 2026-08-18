@@ -2,40 +2,28 @@
 
 ## Назначение
 
-Этот handoff — рабочий реестр проблем, решений и сознательно принятых ограничений,
-обнаруженных при проверке перехода `SearchEngine.exe` от ручного запуска к
-основному режиму Windows-службы.
+Рабочий реестр проблем, решений и сознательно принятых ограничений, обнаруженных
+при переводе `SearchEngine.exe` в основной режим Windows-службы.
 
-Пункты разбираются по одному. Не исправлять всё одним большим рефакторингом.
-Для каждого пункта сначала фиксируется решение, затем при необходимости делается
-узкая реализация и отдельная проверка.
+Пункты разбираются по одному. Сначала фиксируется решение, затем при необходимости
+выполняется отдельная реализация и проверка.
 
 ---
 
 ## Контекст аудита
 
-Сервер:
-
 ```text
-repository: sagge14/SearchEngine_asio_new
+server: sagge14/SearchEngine_asio_new
 branch: main
-server audit HEAD: 07c7fa49b6e09b0fc4259ea590ac3635232d61ee
+server audit baseline: 07c7fa49b6e09b0fc4259ea590ac3635232d61ee
+
+client: myLitleWork/SearchEngine-client
+branch: main
+client audit baseline: 07b16d1f6d578544ce842693ddddf35514dbf424
 ```
 
-Клиент, использованный для проверки реальных вызовов:
-
-```text
-repository: myLitleWork/SearchEngine-client
-branch: main
-client audit HEAD: 07b16d1f6d578544ce842693ddddf35514dbf424
-```
-
-Проверялись service lifecycle, runtime paths, installer/update, command dispatch,
-файловые команды, AutoPad PRM/PRD, приложения, watcher/full scan, auth и legacy
-message/attachment paths.
-
-После существенных изменений этих областей выводы нужно перепроверить по
-актуальному HEAD.
+После существенных изменений service lifecycle, filesystem/protocol, installer,
+auth или AutoPad выводы необходимо перепроверять по актуальному HEAD.
 
 ---
 
@@ -44,7 +32,7 @@ message/attachment paths.
 ```text
 OPEN        — проблема зафиксирована, решение не принято
 ANALYSIS    — идёт отдельный разбор
-DECIDED     — решение принято, реализация ещё не обязана быть выполнена
+DECIDED     — решение принято, реализация ещё не выполнена/не завершена
 DEFERRED    — сознательно отложено
 REJECTED    — обсуждено; текущее поведение принято, исправление не требуется
 CANCELLED   — пункт отменён
@@ -60,280 +48,164 @@ VERIFIED    — реализовано и проверено
 | ID | Приоритет | Тема | Статус |
 |---|---:|---|---|
 | SVC-001 | P1 | Runtime-root и редактирование настроек | OPEN |
-| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | OPEN |
+| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | DECIDED |
 | SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
 | SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
 | SVC-005 | P0 | Update/reinstall теряет runtime-state | DECIDED |
 | SVC-006 | P0/P1 | `PING/PONG` как единственный health-check | OPEN |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
-| SVC-008 | P1 | Watcher может не подхватить поздно появившуюся папку | OPEN |
+| SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | OPEN |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
-| SVC-010 | P0 security | Upload path escape и буферизация upload целиком в RAM | DECIDED |
-| SVC-011 | P1 | Жёсткие пути `D:\...` | OPEN |
+| SVC-010 | P0 security | Upload path escape и upload целиком в RAM | DECIDED |
+| SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | DECIDED |
-| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` в service mode | OPEN |
+| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | OPEN |
 | SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
 
 ---
 
 # Принятые решения
 
-## SVC-005 — обычный update не должен заменять `%ProgramData%`
+## SVC-005 — ProgramData является persistent state
 
-**Статус:** DECIDED  
-**Реализация:** ещё не выполнена
-
-### Текущее проблемное поведение
-
-При reinstall/update установщик сейчас отодвигает в rollback не только
-`INSTALL_ROOT`, но и весь `%ProgramData%\<service>`, создаёт новый data-dir,
-копирует туда свежий package `data\*`, запускает службу и после успешного
-`PING/PONG` удаляет старый data-dir.
-
-Из-за этого могут пропасть:
+**Статус:** DECIDED
 
 ```text
-auth_clients.sqlite
-issuer-public.pem
-inverted_index.sqlite
-messages\
-prefix_map.json
-ignore.txt
-log.db
-server_log.log
-logs\
-другие runtime-файлы экземпляра
-```
-
-Особенно критична `auth_clients.sqlite`: новая пустая БД может быть технически
-валидной, сервер запустится и ответит на `PING`, но зарегистрированные USB/PC
-клиенты исчезнут.
-
-### Принятое правило
-
-```text
-Program Files = приложение, его можно заменять при update.
+Program Files = заменяемое приложение.
 ProgramData   = постоянное состояние конкретного экземпляра службы.
 ```
 
-При обычном update/reinstall того же instance:
+Обычный update/reinstall того же instance не должен перемещать, удалять или
+пересоздавать весь `%ProgramData%\SearchEngineService[-instance]`.
 
-- `%ProgramData%\SearchEngineService[-instance]` остаётся на месте;
-- `auth_clients.sqlite` сохраняется;
-- `issuer-public.pem` сохраняется, если используется sibling key;
-- `inverted_index.sqlite` сохраняется;
-- `messages\` сохраняется;
-- `prefix_map.json` сохраняется;
-- пользовательский `ignore.txt` сохраняется;
-- `log.db`, `server_log.log`, `logs\` сохраняются;
-- неизвестные дополнительные runtime-файлы оператора не удаляются автоматически.
+Сохранять:
 
-### Что установщик может обновлять
+- `auth_clients.sqlite`;
+- `issuer-public.pem`;
+- `inverted_index.sqlite` и связанные WAL/SHM;
+- `messages\`;
+- `prefix_map.json`;
+- пользовательский `ignore.txt`;
+- `log.db`, `server_log.log`, `logs\`;
+- неизвестные operator-added runtime files.
 
-`Settings.json` — особый случай. На update сохраняется уже существующая схема:
+`Settings.json` при update формируется из нового template с импортом старых
+значений через существующий `configure-interactive --template ... --import-settings ...`
+и заменяется атомарно.
 
-```text
-новый template Settings.json
-        +
-старые пользовательские значения
-        ->
-новый Settings.json
-```
+`client-endpoint.txt` можно пересоздавать. `OEM866.INI` считается package-managed
+resource и может обновляться, сохраняя rollback-копию.
 
-То есть использовать существующий `configure-interactive --template ...
---import-settings ...`.
-
-Допустимо пересоздавать `client-endpoint.txt`.
-
-`OEM866.INI` может обновляться из новой поставки как поставляемый runtime-resource,
-если это не уничтожает пользовательскую конфигурацию.
-
-### `ignore.txt`
-
-Не перезаписывать пользовательский файл дефолтным при update:
-
-```text
-если уже существует -> оставить;
-если отсутствует     -> можно скопировать дефолтный из package.
-```
-
-### Rollback
-
-Rollback должен в первую очередь откатывать приложение в `Program Files` и те
-небольшие конфигурационные файлы, которые реально изменил installer.
-
-Не требуется копировать весь потенциально большой индекс перед каждым update.
-Если будущая версия введёт несовместимую миграцию индекса, её rollback/rebuild
-должен решаться отдельным изменением.
-
-Критичные маленькие auth/config-файлы можно дополнительно страховать локальной
-rollback-копией, но это не должно означать перенос всего data-dir.
-
-Полное удаление `ProgramData`, auth, index, messages и logs выполняется только
-через явный full uninstall/reset с предупреждением пользователя.
-
-### Критерий будущей реализации
-
-После update того же instance должны сохраниться auth-клиенты, индекс, сообщения,
-пользовательские конфиги и логи. При неудачном запуске новой версии должна быть
-возможность вернуть старые binaries без уничтожения persistent state.
+Rollback откатывает прежде всего `Program Files` и небольшие installer-owned
+config/auth-файлы. Копировать многогигабайтный индекс перед каждым update не
+требуется. Полное удаление ProgramData допускается только при явном full
+uninstall/reset с предупреждением.
 
 ---
 
-## SVC-003 — `prefix_map.json` входит в release и настраивается установщиком
+## SVC-003 — `prefix_map.json` входит в release и настраивается installer
 
-**Статус:** DECIDED  
-**Реализация:** ещё не выполнена
+**Статус:** DECIDED
 
-### Назначение
-
-`GET_ATTACHMENTS` остаётся рабочей функцией. Команда читает относительный
-`prefix_map.json`, поэтому в service mode рабочий файл должен оказаться в:
+`GET_ATTACHMENTS` остаётся рабочей функцией. Активный файл в service mode:
 
 ```text
 %ProgramData%\SearchEngineService[-instance]\prefix_map.json
 ```
 
-### Принятое поведение release/package
+В release входит шаблон/заготовка `data\prefix_map.json`.
 
-В релизный комплект SearchEngine входит шаблонный:
+Installer спрашивает, используется ли на этом instance `GET_ATTACHMENTS` /
+кнопка «Сохранить приложения».
 
-```text
-data\prefix_map.json
-```
-
-Он является заготовкой для настройки конкретного сервера.
-
-### Принятое поведение installer
-
-На этапе установки спрашивать, используется ли на этом сервере функция
-`GET_ATTACHMENTS` / клиентская кнопка «Сохранить приложения».
-
-Если пользователь отвечает **нет**:
-
-- `prefix_map.json` не является обязательным;
-- его отсутствие не блокирует установку;
-- функция считается неиспользуемой на данном экземпляре.
-
-Если пользователь отвечает **да**:
-
-- проверить наличие `data\prefix_map.json` в установочном комплекте;
-- если файл отсутствует — вывести явное предупреждение, что
-  `GET_ATTACHMENTS` работать не будет;
-- отсутствие файла само по себе не обязано блокировать установку;
-- если файл есть — проверить хотя бы корректность JSON и ожидаемую структуру
-  `prefix` + `map`;
-- после проверки скопировать файл в активный data-dir экземпляра.
-
-При обычном update существующий рабочий `%ProgramData%\...\prefix_map.json`
-сохраняется по решению SVC-005 и не должен молча заменяться шаблоном из новой
-поставки.
+- Если нет — отсутствие `prefix_map.json` не блокирует установку.
+- Если да — проверить package-файл, валидировать JSON (`prefix` + `map`) и
+  скопировать его при новой установке. При отсутствии — явное предупреждение,
+  но не обязательный abort.
+- При update существующий рабочий ProgramData `prefix_map.json` сохраняется и
+  не перезаписывается шаблоном молча.
 
 ---
 
 ## SVC-004 — текущая семантика `GET_ATTACHMENTS` сохраняется
 
-**Статус:** DECIDED  
-**Реализация:** изменение бизнес-логики не требуется
+**Статус:** DECIDED
 
-Принято оставить существующий сценарий:
+Оставить текущий сценарий:
 
 1. клиент вызывает `GET_ATTACHMENTS` только на `primaryServerId()`;
-2. сервер по имени оператора и `prefix_map.json` находит буферный каталог;
-3. рекурсивно читает его файлы;
+2. сервер по оператору и `prefix_map.json` находит буферный каталог;
+3. читает его файлы;
 4. после успешного чтения удаляет исходный буферный каталог;
 5. возвращает содержимое клиенту.
 
-Не вводить сейчас ACK, quarantine, processed-folder или опрос дополнительных
-серверов.
-
-Известный риск потери буфера при ошибке после чтения/удаления принят как часть
-текущей legacy-семантики. Если в будущем потребуется гарантированная доставка,
-это будет отдельная задача.
+Не вводить сейчас ACK/quarantine/processed-folder. Риск удаления буфера до
+окончательной доставки принят как часть текущей legacy-семантики.
 
 ---
 
-## SVC-007 — текущее поведение отсутствующих месячных папок принято
+## SVC-007 — отсутствие месячных папок: текущее поведение принято
 
-**Статус:** REJECTED  
-**Исправление:** не требуется
+**Статус:** REJECTED
 
-### Реальная бизнес-модель
-
-В `Settings.json` нормально заранее иметь все месячные каталоги:
+В `Settings.json` нормально заранее перечислить все месяцы:
 
 ```text
 D:\ЯНВАРЬ
-D:\ФЕВРАЛЬ
-D:\МАРТ
 ...
 D:\ДЕКАБРЬ
 ```
 
-При этом физически могут существовать только месяцы, которые уже наступили.
-Например в январе нормально, если есть только `D:\ЯНВАРЬ`.
+даже если будущие месяцы ещё физически не существуют.
 
-### Принятое компромиссное поведение
+Не вводить сейчас отдельные состояния для disconnected disk, network drive,
+missing volume letter, Access Denied и т.п. Если root не найден и scan видит
+его как пустой, документы могут быть помечены deleted; при повторном появлении
+root они индексируются обратно.
 
-Сейчас не вводить сложную модель состояний root и не различать специально:
-
-- физическое удаление каталога;
-- временную недоступность диска;
-- сетевой/mapped-drive сценарий;
-- Access Denied;
-- позднее появление тома;
-- иные причины отсутствия файлов.
-
-Если настроенная папка физически отсутствует и полный scan видит её как пустую,
-старые документы этого каталога могут быть помечены `deleted`.
-
-Если папка затем появляется снова, очередной scan индексирует её файлы обратно.
-
-Это поведение принято сознательно как простой текущий контракт. SVC-007 не надо
-«улучшать» без нового отдельного решения.
-
-### Будущая идея — не часть SVC-007
-
-В будущем отдельно рассмотреть режим **freeze / заморозки индекса**:
-
-```text
-сервер продолжает поиск по текущему индексу;
-full scan не изменяет индекс;
-watcher add/remove/change не изменяет индекс;
-состояние фиксируется до явного снятия freeze.
-```
-
-Это отдельная будущая feature, а не исправление текущего scanner.
+Возможный будущий отдельный feature — `freeze` индекса, при котором поиск
+работает по текущему индексу, а scanner/watcher его не изменяют.
 
 ---
 
 ## SVC-009 + SVC-012 — scoped-доступ к тексту и приложениям, end-to-end streaming
 
-**Статус:** DECIDED  
-**Реализация:** ещё не выполнена
+**Статус:** DECIDED
 
-Фиксируем решение следующим образом:
+Все загрузки приложений переводятся на безопасную схему:
 
-- Все загрузки приложений переводим на безопасную схему
-  `GET_TELEGA_ATACHMENTS -> GET_TELEGA_SINGLE_ATACHMENT`.
-- Это касается и просмотра/скачивания одного приложения, и массового сохранения
-  выбранных документов.
-- `GET_TELEGA_SINGLE_ATACHMENT` переделываем в настоящий end-to-end streaming:
-  сервер не читает файл целиком в RAM, а передаёт блоками; клиент так же блоками
-  сразу пишет на диск.
-- Команды списка и получения одного приложения должны быть согласованы по одному
-  контракту `id + type + file_name`.
-- Для текста телеграммы тоже убираем передачу клиентом физического пути на
-  сервере. Клиент должен передавать идентификатор телеграммы и тип, сервер сам
-  определяет `DirectTo/FileName` и возвращает содержимое.
-- Для текста нужен отдельный scoped endpoint/команда по телеграмме с тем же
-  принципом: клиент не знает и не задаёт server filesystem path.
-- Старые raw-path команды `FILETEXT` и `GETBINFILE` запрещаем для клиентского
-  использования после перехода на новые механизмы.
-- Их wire-номера не удаляем и не перенумеровываем: оставляем
-  зарезервированными/legacy, но сервер должен отклонять такие запросы.
-- Локальный путь, куда пользователь сохраняет файл на своём ПК, остаётся на
-  стороне SearchClient и серверу не передаётся.
+```text
+GET_TELEGA_ATACHMENTS
+        ->
+GET_TELEGA_SINGLE_ATACHMENT
+```
+
+Это касается и одиночного скачивания, и массового сохранения выбранных документов.
+
+`GET_TELEGA_SINGLE_ATACHMENT` должен стать настоящим end-to-end streaming:
+сервер читает файл блоками и передаёт блоками; SearchClient принимает блоками и
+сразу пишет на диск. Большой файл не должен целиком находиться в RAM.
+
+Контракт приложений:
+
+```text
+list:   id + type
+single: id + type + file_name
+```
+
+Клиент не задаёт физический server path. Сервер сам через AutoPad определяет
+`DirectTo` и допустимый файл.
+
+Для текста телеграммы создать отдельный scoped endpoint/command по `id + type`:
+сервер сам определяет `DirectTo/FileName` и возвращает содержимое. Клиент не
+знает и не передаёт server filesystem path.
+
+После миграции SearchClient старые raw-path `FILETEXT` и `GETBINFILE` запрещаются
+для клиентского использования. Их wire ordinals не удалять и не перенумеровывать:
+оставить legacy/reserved, а сервер должен отклонять raw-path requests.
+
+Локальный путь, куда пользователь сохраняет файл на своём ПК, остаётся только на
+стороне SearchClient.
 
 Итоговый принцип:
 
@@ -344,194 +216,174 @@ watcher add/remove/change не изменяет индекс;
 Raw server filesystem paths через клиентский протокол больше не принимаются.
 ```
 
-### Подтверждённое текущее состояние перед реализацией
-
-- `GET_TELEGA_ATACHMENTS` уже получает `id + type` и возвращает список
-  приложений без выдачи клиенту физического пути.
-- `GET_TELEGA_SINGLE_ATACHMENT` уже получает `id + type + file_name` и сервер
-  сам разрешает `DirectTo`, но его серверный обработчик пока читает весь файл в
-  `vector<uint8_t>`; это требуется заменить на потоковую выдачу.
-- SearchClient при скачивании приложения из attachment-frame уже использует
-  `requestFileToPath`, то есть клиентская сторона способна писать ответ на диск
-  потоково.
-- Массовое сохранение найденных документов пока строит абсолютные server paths и
-  использует `GETBINFILE`; этот путь должен быть переведён на scoped-команды.
-- Для текста телеграммы текущий `FILETEXT` принимает raw server path; требуется
-  отдельный scoped endpoint по `id + type`.
-
-### Совместимость
-
-До завершения двухрепозиторной миграции не перенумеровывать существующие wire
-значения. После перевода SearchClient на scoped-команды `FILETEXT` и
-`GETBINFILE` остаются на своих ordinal как legacy/reserved, но сервер больше не
-исполняет raw-path запросы через них.
-
 ---
 
-## SVC-010 — безопасная server-side маршрутизация upload и end-to-end streaming
+## SVC-010 — безопасная server-side маршрутизация upload и streaming
 
-**Статус:** DECIDED  
-**Реализация:** ещё не выполнена
+**Статус:** DECIDED
 
-### Подтверждённое текущее состояние
+`LOAD_TLG_TO_SEND` и `LOAD_RAZN` больше не должны использовать клиентский
+`filename` как относительный server path и не должны передавать весь файл внутри
+сериализованного `FileData`/`vector<uint8_t>`.
 
-`LOAD_TLG_TO_SEND` и `LOAD_RAZN` используют общий `SaveFileCmd` и получают
-сериализованный `FileData`, который содержит `filename` и весь `vector<uint8_t>`
-содержимого файла.
+### `LOAD_RAZN`
 
-В текущем SearchClient:
+Клиент передаёт только basename + metadata/stream файла. Каталоги, `..`, rooted,
+absolute и UNC path запрещены. Destination определяет сервер.
 
-- `LOAD_RAZN` передаёт обычный basename выбранного файла;
-- `LOAD_TLG_TO_SEND` намеренно формирует `filename` как
-  `<user>\\<basename>`, чтобы сервер создал пользовательскую подпапку;
-- весь файл сначала читается клиентом в RAM, затем сериализуется в один request;
-- сервер сначала принимает весь request в RAM, десериализует весь `FileData` и
-  только после этого пишет содержимое на диск.
+### `LOAD_TLG_TO_SEND`
 
-В `SaveFileCmd::createTimestampedPath()` подпуть из `filename` участвует в
-формировании destination без строгого правила, что итоговый путь обязан
-оставаться внутри server-side base. Поэтому клиентское имя потенциально может
-содержать `..`, rooted/absolute/UNC path или другой escape.
+Клиент передаёт basename + metadata/stream. Имя оператора сервер берёт из уже
+авторизованной сессии, а не из `<user>\filename` клиента.
 
-Текущая duplicate-логика также считает совпадение размера существующего файла и
-пришедшего payload достаточным основанием оставить то же имя. После этого файл
-может быть открыт с `trunc`. Совпадение размера не означает совпадение
-содержимого и больше не должно использоваться как критерий идентичности.
-
-### Принятое правило
-
-Клиент **не задаёт структуру server filesystem path**. Он передаёт только
-безопасное имя файла и необходимые бизнес-данные. Сервер сам определяет, куда
-записывать upload.
-
-#### `LOAD_RAZN`
-
-Клиент передаёт только basename файла и содержимое/поток данных.
-
-Запрещены в клиентском имени:
+Сервер сам строит бизнес-структуру:
 
 ```text
-parent path / каталоги
-..
-absolute/rooted path
-UNC/root name
-path separators как средство задания destination
+<tlg_send_root>\<МЕСЯЦ>\<ДАТА>\<authenticated_operator>_<time>\<filename>
 ```
 
-Сервер сам знает и рассчитывает базовый каталог `LOAD_RAZN`.
-
-#### `LOAD_TLG_TO_SEND`
-
-Клиент больше не передаёт `<user>\\<filename>` как server relative path.
-Он передаёт только basename файла и содержимое/поток данных.
-
-Имя/идентичность оператора сервер берёт из уже **авторизованной сессии**, а не из
-`FileData.filename` или другого клиентского path-поля.
-
-Сервер самостоятельно формирует существующую бизнес-структуру назначения, по
-смыслу эквивалентную:
-
-```text
-<server upload root>\<ТЕКУЩИЙ МЕСЯЦ>\<ТЕКУЩАЯ ДАТА>\<authenticated_operator>_<time>\<filename>
-```
-
-Компонент authenticated operator должен быть безопасно преобразован/проверен как
-один filesystem-компонент и не может использоваться для выхода из рассчитанной
-директории.
+Operator component должен быть безопасным одиночным filesystem-компонентом.
 
 ### Containment
 
-Даже при server-side построении destination перед созданием каталогов и файла
-обязательна проверка, что итоговый путь находится внутри рассчитанного
-разрешённого base.
+Перед записью обязательна проверка, что итоговый destination остаётся внутри
+command-specific root. Не допускать escape через `..`, absolute/rooted/UNC,
+mixed separators, junction/symlink/reparse point.
 
-Не допускать escape через:
+### Existing file policy
 
-```text
-..
-absolute/rooted/UNC input
-смешанные separators
-junction/symlink/reparse point
-```
-
-Проверка должна выполняться до записи. Upload никогда не должен создавать файл
-за пределами command-specific server root.
-
-### Политика существующих файлов
-
-Правило `одинаковый размер = тот же файл` удалить.
-
-Принятый простой контракт:
+Удалить правило `одинаковый размер = тот же файл`.
 
 ```text
-имя свободно       -> сохранить под исходным именем;
-имя уже существует -> подобрать новое имя file(1).ext, file(2).ext, ...;
+имя свободно       -> сохранить;
+имя занято         -> file(1).ext, file(2).ext, ...;
 ```
 
-Существующий файл автоматически не перезаписывать и не считать идентичным только
-по размеру.
+Существующие файлы автоматически не перезаписывать.
 
 ### End-to-end streaming upload
 
-`LOAD_TLG_TO_SEND` и `LOAD_RAZN` должны быть переведены на настоящий потоковый
-upload:
-
 ```text
-файл на диске клиента
-    -> небольшие блоки
-TCP
-    -> небольшие блоки
-временный/целевой файл на сервере
+client disk -> small blocks -> TCP -> small blocks -> server staging file
 ```
 
-Большой файл не должен целиком находиться:
+Большой upload не должен целиком находиться в RAM клиента, serialized request,
+server `requestData` или `FileData::data`. Для этих команд нужен отдельный
+streaming framing/path, потому что текущий общий `readLoop` сначала полностью
+читает `requestHeader.size`.
 
-- в `std::vector<uint8_t>` SearchClient;
-- в сериализованном request buffer SearchClient;
-- в `requestData` сервера;
-- в `FileData::data` сервера.
+Перед потоком передаётся ограниченная metadata (`filename`, `file size`, при
+необходимости version/flags), сервер валидирует её и открывает staging file.
+Публикация/rename выполняется только после полного успешного получения. При
+обрыве partial/staging удаляется.
 
-Недостаточно заменить только финальный `ofstream`: текущий общий `readLoop`
-сначала читает `requestHeader.size` целиком в `requestData`, поэтому для upload
-нужен отдельный streaming path/protocol framing для этих команд.
+Wire ordinals не перенумеровывать; конкретный migration framing согласовать в
+SearchEngine и SearchClient.
 
-Перед началом байтов файла клиент передаёт только ограниченную metadata,
-необходимую серверу для проверки запроса и расчёта destination, например:
+---
+
+## SVC-002 — service account: LocalSystem остаётся поддерживаемым режимом
+
+**Статус:** DECIDED
+
+Installer сейчас создаёт/configure службу без `obj=`, поэтому Windows запускает
+её под `LocalSystem`. Это поведение оставить.
+
+На текущем этапе официальный эксплуатационный контракт:
 
 ```text
-filename basename
-file size
-при необходимости version/flags
+SearchEngineService работает как LocalSystem.
+Рабочие данные находятся на локальных физических дисках/путях,
+доступных этому service account по ACL.
 ```
 
-После проверки metadata сервер открывает безопасный destination/staging file и
-принимает ровно объявленное количество байтов блоками.
+Сейчас не добавлять:
 
-При сетевой/дисковой ошибке не должен оставаться опубликованный частичный файл.
-Допустим временный файл с последующим publish/rename только после полного
-успешного получения.
+- выбор service account в installer;
+- логин/пароль службы;
+- автоматический `net use`;
+- поддержку user mapped drives;
+- `subst`/profile-specific drive mappings;
+- хранение credentials для UNC/network shares.
 
-### Совместимость и wire
+Если позже понадобится сетевое хранилище, это отдельная задача по service
+account/UNC и credential model.
 
-Не перенумеровывать существующие command ordinals. Конкретный способ перехода
-старого сериализованного `FileData` на streaming framing определить при
-реализации согласованно в SearchEngine и SearchClient. После миграции рабочий
-клиент не должен иметь возможности задавать server destination path через
-upload payload.
+Installer/config diagnostics должны явно показывать:
 
-### Критерии будущей реализации
+```text
+Service account: LocalSystem
+```
 
-Проверить минимум:
+и документация не должна создавать впечатление, что пользовательские mapped
+drives автоматически видны службе.
 
-- обычный `LOAD_RAZN` basename;
-- обычный `LOAD_TLG_TO_SEND` с authenticated operator;
-- `..`, absolute, rooted, UNC и separators в filename отклоняются;
-- reparse/junction escape не позволяет выйти из root;
-- существующий файл не перезаписывается, создаётся уникальное имя;
-- два разных файла одинакового размера не считаются одинаковыми;
-- большой upload не приводит к выделению RAM размером с файл ни на клиенте, ни
-  на сервере;
-- обрыв передачи удаляет staging/partial file и не повреждает существующий файл.
+Отсутствие/недоступность будущих monthly roots не является startup-fatal само по
+себе — это остаётся решением SVC-007.
+
+---
+
+## SVC-011 — все скрытые production roots выносятся в Settings
+
+**Статус:** DECIDED
+
+Жёсткие production paths в C++ убрать. В `Settings.json` добавить отдельные
+настройки назначения, как минимум:
+
+```json
+{
+  "tlg_send_root": "D:\\",
+  "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
+  "opis_base_dir": "D:\\OPIS_ADMIN",
+  "f12_base_dir": "D:\\F12"
+}
+```
+
+Не сводить всё в один общий `base_dir`: назначения разные и должны оставаться
+явными.
+
+Сервер сам строит конкретные пути:
+
+```text
+tlg_send_root
+  -> <МЕСЯЦ>\<ДАТА>\<operator>_<time>\<file>
+
+razn_output_dir
+  -> <file>
+
+opis_base_dir
+  -> <year>.db / <year>.DB по фактическому контракту соответствующего consumer
+
+f12_base_dir
+  -> <year>.db
+  -> base.db
+```
+
+Перевести на эти настройки текущие hardcoded consumers:
+
+- `LOAD_TLG_TO_SEND`;
+- `LOAD_RAZN`;
+- `GET_OPIS_BASE`;
+- `RecordProcessor`;
+- `GET_VH_TELEGA_WAY` / `GET_ISH_TELEGA_WAY` (`TelegaWay`).
+
+Существующие `dirs`, `prm_base_dir`, `prd_base_dir` остаются отдельными
+настройками как сейчас.
+
+Installer/config helper должен включить новые поля в template, interactive
+configuration/import/validation. При update старые значения сохраняются по
+правилу SVC-005, а новые поля получают template/default значения до явного
+изменения оператором.
+
+### Проверка доступности
+
+Не требовать физического существования всех `dirs` при установке/startup: будущие
+месячные папки могут отсутствовать.
+
+Для feature-specific roots (`opis_base_dir`, `f12_base_dir`, `razn_output_dir`,
+`tlg_send_root`) отсутствие или недоступность должна диагностироваться при
+использовании соответствующей функции и возвращаться как нормальная typed error,
+а не превращаться в доступ к скрытому fallback `D:\...`.
 
 ---
 
@@ -543,33 +395,11 @@ upload payload.
 **Статус:** OPEN
 
 Service mode использует `%ProgramData%\SearchEngineService[-instance]` как
-`--data-dir` и CWD. Поэтому `Settings.json`, индекс, auth DB, logs/messages и
-другие относительные runtime-файлы находятся там, а не рядом с EXE.
+`--data-dir` и CWD. Оператор может по привычке редактировать копию Settings рядом
+с EXE, которая не используется.
 
-Проблема эксплуатационная: оператор, привыкший редактировать файлы рядом с EXE,
-может изменить неиспользуемую копию. Нельзя ради удобства давать обычным
-пользователям Modify на весь data-dir, потому что там auth DB и индекс.
-
-Варианты на будущее: документированный stop/edit/validate/start, admin helper,
-разделение config/state/logs или безопасный reload отдельных настроек.
-
----
-
-## SVC-002 — service account и доступ к рабочим путям
-
-**Приоритет:** P0/P1  
-**Статус:** OPEN
-
-Установщик сейчас не задаёт `obj=`, поэтому служба работает как `LocalSystem`.
-Локальный физический `D:` обычно доступен, если ACL позволяют. Пользовательские
-mapped drives, `subst`, profile credentials и часть сетевых ресурсов могут быть
-не видны service context.
-
-Затронуты index roots, AutoPad PRM/PRD, F12/OPIS, attachments, raw downloads и
-upload destinations.
-
-Решение пока не принято. Не смешивать с SVC-007: там сознательно принято текущее
-поведение scanner, здесь вопрос именно прав и поддерживаемой service account.
+Нужно позже решить UX безопасного редактирования/валидации/reload config без
+выдачи Modify на весь data-dir, где лежат auth DB и индекс.
 
 ---
 
@@ -578,66 +408,40 @@ upload destinations.
 **Приоритет:** P0/P1  
 **Статус:** OPEN
 
-Installer считает новую установку здоровой, если SCM показывает `RUNNING` и
-сервер отвечает на `PING`.
+Installer считает службу здоровой по SCM `RUNNING` + `PING/PONG`.
 
-`PING` проверяет liveness, но не подтверждает:
+`PING` подтверждает liveness, но не проверяет:
 
-- сохранность/работоспособность auth state;
-- доступность index;
-- наличие optional `prefix_map.json`;
-- рабочие PRM/PRD/F12/OPIS sources;
-- права чтения/записи для command paths.
+- auth store;
+- index;
+- обязательную runtime config;
+- feature-specific roots;
+- optional `prefix_map.json`;
+- PRM/PRD/F12/OPIS доступность;
+- права для upload/download функций.
 
-После решения SVC-005 часть риска уменьшается, но вопрос readiness остаётся.
-Варианты: отдельный installer diagnostic/smoke-check или структурированный
-readiness endpoint. Optional функции не должны блокировать установку, если они
-явно не используются.
+Нужно определить отдельный readiness/diagnostic contract с учётом того, что
+optional функции и будущие monthly roots не должны блокировать установку.
 
 ---
 
-## SVC-008 — watcher может не подхватить поздно появившийся child/root
+## SVC-008 — watcher и позднее появление parent/root
 
 **Приоритет:** P1  
 **Статус:** OPEN
 
-`MultiDirWatcher` создаёт inner watcher для уже существующих configured kids.
-Если parent/root отсутствовал при старте, после его позднего появления watcher
-может начать ждать новые directory events, не выполнив повторное перечисление
-уже существующих configured child directories.
+Нормальный сценарий, когда parent (например `D:\`) существует, а configured
+месячная папка появляется позже, уже подхватывается parent watcher: создаётся
+inner `FileWatcher` с `forceWalk=true`, который рекурсивно выдаёт Added для уже
+находящихся там файлов.
 
-Следствие: периодический full scan позже увидит файлы, но realtime watcher может
-не следить за каталогом до нового directory event или перезапуска.
+Остаётся только edge case: сам parent/root отсутствовал при старте и позднее
+появился уже с существующими configured children. После открытия parent текущий
+код не делает явного повторного enumerate kids и может ждать будущего directory
+event.
 
-Возможные решения:
-
-- при каждом успешном open/reopen parent повторно проверять существующие kids;
-- периодически сверять configured kids и active inner watchers;
-- после появления child создавать watcher немедленно.
-
-Нужно разобрать с учётом месячной схемы: папки `ЯНВАРЬ...ДЕКАБРЬ` нормально
-появляются по ходу года.
-
----
-
-## SVC-011 — жёстко заданные production paths
-
-**Приоритет:** P1  
-**Статус:** OPEN
-
-Подтверждённые примеры:
-
-```text
-LOAD_TLG_TO_SEND -> D:\ + <МЕСЯЦ> + <дата>
-LOAD_RAZN        -> D:\OPIS_ADMIN\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ\
-GET_OPIS_BASE    -> D:\OPIS_ADMIN\<year>.db
-GET_*_TELEGA_WAY -> D:\F12\<year>.db и D:\F12\base.db
-RecordProcessor  -> D:\OPIS_ADMIN\<year>.DB
-```
-
-PRM/PRD уже частично конфигурируются через Settings, но не все filesystem roots.
-Нужно отдельно решить, какие пути оставить исторически фиксированными, а какие
-вынести в Settings.
+С учётом решения SVC-007 предварительная рекомендация — не усложнять этот edge
+case сейчас и перевести SVC-008 в REJECTED отдельным решением.
 
 ---
 
@@ -646,22 +450,21 @@ PRM/PRD уже частично конфигурируются через Settin
 **Приоритет:** P2  
 **Статус:** OPEN
 
-`MessageQueue` использует `current_path()/messages`; благодаря service CWD это
-сейчас попадает в data-dir. Legacy `GET_MESSAGE` всегда использует `user_id=1`.
-`UserRegistry/users.dat` не является основным текущим auth-путём.
+`MessageQueue` использует `current_path()/messages`; service CWD направляет его в
+active data-dir. Legacy `GET_MESSAGE` использует `user_id=1`. Часть legacy
+ошибок всё ещё идёт только в `cout/cerr`, невидимые оператору службы.
 
-Часть legacy-ошибок всё ещё выводится только через `cout/cerr`, которые оператор
-службы не видит. Нужно позже решить судьбу endpoints и перевести важные ошибки в
-structured logs/typed responses.
+Нужно позже решить судьбу legacy endpoints и перевести важные ошибки в structured
+logs/typed responses.
 
 ---
 
-## SVC-014 — enum содержит исторические unsupported команды
+## SVC-014 — enum содержит unsupported historical commands
 
 **Приоритет:** P2  
 **Статус:** OPEN
 
-В списке имён остаются команды без активного request handler, включая:
+Остаются исторические wire slots без активного handler:
 
 ```text
 JSONREGUEST
@@ -673,58 +476,37 @@ GETDOCS
 GETDOC
 ```
 
-Нельзя просто удалить элементы из середины последовательного wire enum и тем
-самым перенумеровать существующие команды.
-
-Варианты: explicit ordinals + reserved/unsupported documentation и cross-repo
-compile/tests.
+Нельзя удалять их из середины последовательного enum с перенумерацией остальных.
+Нужно позже закрепить explicit/reserved ordinals и cross-repo tests/docs.
 
 ---
 
 # Матрица команд — кратко
 
-| Команда | Основная зависимость/риск |
+| Команда | Основная зависимость/решение |
 |---|---|
 | `NEGOTIATE_PROTOCOL_V1` | файловых зависимостей нет |
-| `PING` | только liveness; SVC-006 |
+| `PING` | liveness only; SVC-006 |
 | `AUTHENTICATE_V1` | persistent auth state; SVC-005/006 |
 | `USER_REGISTRY` | legacy localhost-admin path |
-| `SOLOREQUEST` | индекс и scanner roots |
-| `GETSQLJSONANSWEAR` | индекс и scanner roots |
+| `SOLOREQUEST` | index + configured `dirs` |
+| `GETSQLJSONANSWEAR` | index + configured `dirs` |
 | `START_UPDATE_BASE` | full scan/index update |
-| `FILETEXT` | текущий raw-path text read; после scoped migration должен отклоняться; SVC-009 |
-| `GETBINFILE` | текущий raw-path streamed read; после scoped migration должен отклоняться; SVC-009/012 |
-| `GET_VH_TELEGI_FROM_SQL` | PRM source |
-| `GET_ISH_TELEGI_FROM_SQL` | PRD source |
-| `GET_ISH_PDTV` | PRD source |
-| `GET_VH_TELEGA_WAY` | `D:\F12`; SVC-011 |
-| `GET_ISH_TELEGA_WAY` | `D:\F12`; SVC-011 |
-| `GET_OPIS_BASE` | `D:\OPIS_ADMIN`; SVC-011 |
-| `LOAD_TLG_TO_SEND` | server-side destination + streaming upload; SVC-010/011 |
-| `LOAD_RAZN` | server-side destination + streaming upload; SVC-010/011 |
-| `GET_ATTACHMENTS` | primary only, `prefix_map`, buffer delete; SVC-003/004 |
+| `FILETEXT` | после scoped migration отклонять raw path; SVC-009 |
+| `GETBINFILE` | после scoped migration отклонять raw path; SVC-009/012 |
+| `GET_VH_TELEGI_FROM_SQL` | `prm_base_dir` |
+| `GET_ISH_TELEGI_FROM_SQL` | `prd_base_dir` |
+| `GET_ISH_PDTV` | `prd_base_dir` |
+| `GET_VH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
+| `GET_ISH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
+| `GET_OPIS_BASE` | configurable `opis_base_dir`; SVC-011 |
+| `LOAD_TLG_TO_SEND` | configurable `tlg_send_root`, safe streaming upload; SVC-010/011 |
+| `LOAD_RAZN` | configurable `razn_output_dir`, safe streaming upload; SVC-010/011 |
+| `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
-| `GET_SINGLE_ATACHMENT` | scoped attachment read; требуется server-side streaming; SVC-009/012 |
+| `GET_SINGLE_ATACHMENT` | scoped streaming attachment read; SVC-009/012 |
 | `SAVE_MESSAGE_TO` | legacy messages state |
-| `GET_MESSAGE` | legacy user 1 queue |
-
-`SOMEERROR`, `SERVER_BUSY_ERROR`, `ERROR_RESPONSE` — response/error values;
-`END_COMMAND` — sentinel.
-
----
-
-# Что уже подтверждено и не считается отдельной поломкой
-
-1. Console и service mode создают один `SearchEngineApplication` и один набор
-   command handlers; отдельной урезанной service-версии команд нет.
-2. До реализации SVC-009/012 основной attachment download через `GETBINFILE`
-   передаёт абсолютный путь; смена CWD сама его не ломает.
-3. `GET_TELEGA_ATACHMENTS` и `GET_SINGLE_ATACHMENT` получают рабочие пути через
-   AutoPad данные на сервере.
-4. `MessageQueue` сейчас попадает в active data-dir из-за явной установки CWD.
-5. `GET_PRIL` как wire-команды нет.
-6. Отсутствующие будущие месячные папки в Settings — нормальная эксплуатационная
-   модель; по SVC-007 текущее scanner-поведение принято сознательно.
+| `GET_MESSAGE` | legacy queue/user 1 |
 
 ---
 
@@ -740,26 +522,24 @@ SVC-007 -> REJECTED
 SVC-009 -> DECIDED
 SVC-010 -> DECIDED
 SVC-012 -> DECIDED
+SVC-002 -> DECIDED
+SVC-011 -> DECIDED
 ```
 
 Дальше:
 
-1. **SVC-002 + SVC-011** — service account и hardcoded roots.
-2. **SVC-006** — readiness/health после определения обязательных функций.
-3. **SVC-008** — watcher и поздно появляющиеся child/root, если потребуется
-   вернуться к этому пункту.
-4. **SVC-001, SVC-013, SVC-014** — эксплуатационный UX и legacy cleanup.
-
-Порядок можно менять отдельным решением.
+1. **SVC-006** — readiness/health с учётом обязательных и optional функций.
+2. **SVC-008** — формально закрыть watcher edge-case, если решение принято.
+3. **SVC-001** — runtime config UX.
+4. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
 
 ---
 
 # Правила реализации
 
-- Перед кодом соответствующий пункт должен быть `DECIDED` с понятным контрактом.
+- Перед кодом соответствующий пункт должен быть `DECIDED`.
 - Один пункт или тесно связанная группа — отдельная feature branch/commit.
-- Не смешивать installer persistence, security и protocol redesign без причины.
-- Wire command/error/payload изменения проверять в сервере и клиенте.
+- Wire command/error/payload изменения проверять согласованно в сервере и клиенте.
 - Существующие command/error ordinals не перенумеровывать.
 - Installer tests выполнять только на disposable instance и тестовых данных.
 - Filesystem tests выполнять во временных каталогах.
@@ -783,5 +563,5 @@ Tests/build/smoke:
 Remaining limitations:
 ```
 
-Не удалять отвергнутые/отменённые пункты: сохранять `REJECTED`/`CANCELLED` и
-причину, чтобы тот же вопрос не поднимался повторно без новых вводных.
+Не удалять REJECTED/CANCELLED пункты: сохранять причину, чтобы тот же вопрос не
+поднимался повторно без новых вводных.
