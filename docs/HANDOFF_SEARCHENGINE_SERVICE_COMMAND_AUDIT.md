@@ -67,10 +67,10 @@ VERIFIED    — реализовано и проверено
 | SVC-006 | P0/P1 | `PING/PONG` как единственный health-check | OPEN |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившуюся папку | OPEN |
-| SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` читают слишком широкий набор путей | OPEN |
+| SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
 | SVC-010 | P0 security | Upload path escape | OPEN |
 | SVC-011 | P1 | Жёсткие пути `D:\...` | OPEN |
-| SVC-012 | P1 | Основной download приложений через `GETBINFILE` | OPEN |
+| SVC-012 | P1 | Основной download приложений через `GETBINFILE` | DECIDED |
 | SVC-013 | P2 | Legacy state и невидимые `cout/cerr` в service mode | OPEN |
 | SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
 
@@ -307,6 +307,67 @@ watcher add/remove/change не изменяет индекс;
 
 ---
 
+## SVC-009 + SVC-012 — scoped-доступ к тексту и приложениям, end-to-end streaming
+
+**Статус:** DECIDED  
+**Реализация:** ещё не выполнена
+
+Фиксируем решение следующим образом:
+
+- Все загрузки приложений переводим на безопасную схему
+  `GET_TELEGA_ATACHMENTS -> GET_TELEGA_SINGLE_ATACHMENT`.
+- Это касается и просмотра/скачивания одного приложения, и массового сохранения
+  выбранных документов.
+- `GET_TELEGA_SINGLE_ATACHMENT` переделываем в настоящий end-to-end streaming:
+  сервер не читает файл целиком в RAM, а передаёт блоками; клиент так же блоками
+  сразу пишет на диск.
+- Команды списка и получения одного приложения должны быть согласованы по одному
+  контракту `id + type + file_name`.
+- Для текста телеграммы тоже убираем передачу клиентом физического пути на
+  сервере. Клиент должен передавать идентификатор телеграммы и тип, сервер сам
+  определяет `DirectTo/FileName` и возвращает содержимое.
+- Для текста нужен отдельный scoped endpoint/команда по телеграмме с тем же
+  принципом: клиент не знает и не задаёт server filesystem path.
+- Старые raw-path команды `FILETEXT` и `GETBINFILE` запрещаем для клиентского
+  использования после перехода на новые механизмы.
+- Их wire-номера не удаляем и не перенумеровываем: оставляем
+  зарезервированными/legacy, но сервер должен отклонять такие запросы.
+- Локальный путь, куда пользователь сохраняет файл на своём ПК, остаётся на
+  стороне SearchClient и серверу не передаётся.
+
+Итоговый принцип:
+
+```text
+Клиент передаёт бизнес-идентификаторы.
+Сервер сам определяет физические пути.
+Большие файлы никогда целиком не загружаются в RAM.
+Raw server filesystem paths через клиентский протокол больше не принимаются.
+```
+
+### Подтверждённое текущее состояние перед реализацией
+
+- `GET_TELEGA_ATACHMENTS` уже получает `id + type` и возвращает список
+  приложений без выдачи клиенту физического пути.
+- `GET_TELEGA_SINGLE_ATACHMENT` уже получает `id + type + file_name` и сервер
+  сам разрешает `DirectTo`, но его серверный обработчик пока читает весь файл в
+  `vector<uint8_t>`; это требуется заменить на потоковую выдачу.
+- SearchClient при скачивании приложения из attachment-frame уже использует
+  `requestFileToPath`, то есть клиентская сторона способна писать ответ на диск
+  потоково.
+- Массовое сохранение найденных документов пока строит абсолютные server paths и
+  использует `GETBINFILE`; этот путь должен быть переведён на scoped-команды.
+- Для текста телеграммы текущий `FILETEXT` принимает raw server path; требуется
+  отдельный scoped endpoint по `id + type`.
+
+### Совместимость
+
+До завершения двухрепозиторной миграции не перенумеровывать существующие wire
+значения. После перевода SearchClient на scoped-команды `FILETEXT` и
+`GETBINFILE` остаются на своих ordinal как legacy/reserved, но сервер больше не
+исполняет raw-path запросы через них.
+
+---
+
 # Открытые пункты
 
 ## SVC-001 — runtime-root службы и управление настройками
@@ -392,25 +453,6 @@ readiness endpoint. Optional функции не должны блокирова
 
 ---
 
-## SVC-009 — `GETBINFILE`/`FILETEXT` читают произвольный доступный путь
-
-**Приоритет:** P0 security  
-**Статус:** OPEN
-
-Авторизованный клиент может передать серверный путь. Проверки в основном
-ограничены существованием/open/read, без строгой canonical allowlist рабочих
-roots.
-
-Под `LocalSystem` это даёт endpoint более широкие права, чем требуются поисковому
-клиенту.
-
-Варианты: canonical allowlist, server-side IDs вместо raw paths, scoped
-attachment endpoint, отдельные capabilities, ограниченная service account.
-
-Не менять wire ordinals без двухрепозиторного плана.
-
----
-
 ## SVC-010 — upload-команды могут выйти из base path
 
 **Приоритет:** P0 security  
@@ -446,30 +488,6 @@ RecordProcessor  -> D:\OPIS_ADMIN\<year>.DB
 PRM/PRD уже частично конфигурируются через Settings, но не все filesystem roots.
 Нужно отдельно решить, какие пути оставить исторически фиксированными, а какие
 вынести в Settings.
-
----
-
-## SVC-012 — основной client attachment download через `GETBINFILE`
-
-**Приоритет:** P1  
-**Статус:** OPEN
-
-Команды `GET_PRIL` в wire-контракте нет.
-
-При обычном сохранении найденных документов SearchClient строит абсолютный путь
-к приложению/zip и скачивает через `GETBINFILE`. Поэтому смена CWD службы сама по
-себе этот путь не ломает.
-
-На сервере уже есть более scoped:
-
-```text
-GET_TELEGA_ATACHMENTS
-GET_SINGLE_ATACHMENT
-```
-
-Они получают id/type и разрешают attachment на стороне сервера. Решение о
-переходе основного UI на них пока не принято. Это будет двухрепозиторное
-изменение.
 
 ---
 
@@ -524,8 +542,8 @@ compile/tests.
 | `SOLOREQUEST` | индекс и scanner roots |
 | `GETSQLJSONANSWEAR` | индекс и scanner roots |
 | `START_UPDATE_BASE` | full scan/index update |
-| `FILETEXT` | raw path read; SVC-009 |
-| `GETBINFILE` | raw path read; SVC-009/012 |
+| `FILETEXT` | текущий raw-path text read; после scoped migration должен отклоняться; SVC-009 |
+| `GETBINFILE` | текущий raw-path streamed read; после scoped migration должен отклоняться; SVC-009/012 |
 | `GET_VH_TELEGI_FROM_SQL` | PRM source |
 | `GET_ISH_TELEGI_FROM_SQL` | PRD source |
 | `GET_ISH_PDTV` | PRD source |
@@ -535,8 +553,8 @@ compile/tests.
 | `LOAD_TLG_TO_SEND` | hardcoded root + upload path; SVC-010/011 |
 | `LOAD_RAZN` | hardcoded OPIS path + upload path; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only, `prefix_map`, buffer delete; SVC-003/004 |
-| `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list |
-| `GET_SINGLE_ATACHMENT` | scoped attachment read |
+| `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
+| `GET_SINGLE_ATACHMENT` | scoped attachment read; требуется server-side streaming; SVC-009/012 |
 | `SAVE_MESSAGE_TO` | legacy messages state |
 | `GET_MESSAGE` | legacy user 1 queue |
 
@@ -549,8 +567,8 @@ compile/tests.
 
 1. Console и service mode создают один `SearchEngineApplication` и один набор
    command handlers; отдельной урезанной service-версии команд нет.
-2. Основной attachment download через `GETBINFILE` передаёт абсолютный путь;
-   смена CWD сама его не ломает.
+2. До реализации SVC-009/012 основной attachment download через `GETBINFILE`
+   передаёт абсолютный путь; смена CWD сама его не ломает.
 3. `GET_TELEGA_ATACHMENTS` и `GET_SINGLE_ATACHMENT` получают рабочие пути через
    AutoPad данные на сервере.
 4. `MessageQueue` сейчас попадает в active data-dir из-за явной установки CWD.
@@ -569,17 +587,18 @@ SVC-005 -> DECIDED
 SVC-003 -> DECIDED
 SVC-004 -> DECIDED
 SVC-007 -> REJECTED
+SVC-009 -> DECIDED
+SVC-012 -> DECIDED
 ```
 
 Дальше:
 
-1. **SVC-008** — корректно ли watcher подхватывает месячную папку, появившуюся
-   после запуска службы.
-2. **SVC-009 + SVC-010** — filesystem security boundary.
+1. **SVC-010** — безопасная запись `LOAD_TLG_TO_SEND` / `LOAD_RAZN`.
+2. **SVC-008** — watcher и поздно появляющиеся child/root, если потребуется
+   вернуться к этому пункту.
 3. **SVC-002 + SVC-011** — service account и hardcoded roots.
 4. **SVC-006** — readiness/health после определения обязательных функций.
-5. **SVC-012** — нужен ли переход клиента на scoped attachment endpoints.
-6. **SVC-001, SVC-013, SVC-014** — эксплуатационный UX и legacy cleanup.
+5. **SVC-001, SVC-013, SVC-014** — эксплуатационный UX и legacy cleanup.
 
 Порядок можно менять отдельным решением.
 
