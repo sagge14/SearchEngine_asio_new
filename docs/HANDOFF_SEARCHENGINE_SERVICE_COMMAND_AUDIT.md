@@ -68,7 +68,7 @@ VERIFIED    — реализовано и проверено
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившуюся папку | OPEN |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
-| SVC-010 | P0 security | Upload path escape | OPEN |
+| SVC-010 | P0 security | Upload path escape и буферизация upload целиком в RAM | DECIDED |
 | SVC-011 | P1 | Жёсткие пути `D:\...` | OPEN |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | DECIDED |
 | SVC-013 | P2 | Legacy state и невидимые `cout/cerr` в service mode | OPEN |
@@ -368,6 +368,173 @@ Raw server filesystem paths через клиентский протокол б�
 
 ---
 
+## SVC-010 — безопасная server-side маршрутизация upload и end-to-end streaming
+
+**Статус:** DECIDED  
+**Реализация:** ещё не выполнена
+
+### Подтверждённое текущее состояние
+
+`LOAD_TLG_TO_SEND` и `LOAD_RAZN` используют общий `SaveFileCmd` и получают
+сериализованный `FileData`, который содержит `filename` и весь `vector<uint8_t>`
+содержимого файла.
+
+В текущем SearchClient:
+
+- `LOAD_RAZN` передаёт обычный basename выбранного файла;
+- `LOAD_TLG_TO_SEND` намеренно формирует `filename` как
+  `<user>\\<basename>`, чтобы сервер создал пользовательскую подпапку;
+- весь файл сначала читается клиентом в RAM, затем сериализуется в один request;
+- сервер сначала принимает весь request в RAM, десериализует весь `FileData` и
+  только после этого пишет содержимое на диск.
+
+В `SaveFileCmd::createTimestampedPath()` подпуть из `filename` участвует в
+формировании destination без строгого правила, что итоговый путь обязан
+оставаться внутри server-side base. Поэтому клиентское имя потенциально может
+содержать `..`, rooted/absolute/UNC path или другой escape.
+
+Текущая duplicate-логика также считает совпадение размера существующего файла и
+пришедшего payload достаточным основанием оставить то же имя. После этого файл
+может быть открыт с `trunc`. Совпадение размера не означает совпадение
+содержимого и больше не должно использоваться как критерий идентичности.
+
+### Принятое правило
+
+Клиент **не задаёт структуру server filesystem path**. Он передаёт только
+безопасное имя файла и необходимые бизнес-данные. Сервер сам определяет, куда
+записывать upload.
+
+#### `LOAD_RAZN`
+
+Клиент передаёт только basename файла и содержимое/поток данных.
+
+Запрещены в клиентском имени:
+
+```text
+parent path / каталоги
+..
+absolute/rooted path
+UNC/root name
+path separators как средство задания destination
+```
+
+Сервер сам знает и рассчитывает базовый каталог `LOAD_RAZN`.
+
+#### `LOAD_TLG_TO_SEND`
+
+Клиент больше не передаёт `<user>\\<filename>` как server relative path.
+Он передаёт только basename файла и содержимое/поток данных.
+
+Имя/идентичность оператора сервер берёт из уже **авторизованной сессии**, а не из
+`FileData.filename` или другого клиентского path-поля.
+
+Сервер самостоятельно формирует существующую бизнес-структуру назначения, по
+смыслу эквивалентную:
+
+```text
+<server upload root>\<ТЕКУЩИЙ МЕСЯЦ>\<ТЕКУЩАЯ ДАТА>\<authenticated_operator>_<time>\<filename>
+```
+
+Компонент authenticated operator должен быть безопасно преобразован/проверен как
+один filesystem-компонент и не может использоваться для выхода из рассчитанной
+директории.
+
+### Containment
+
+Даже при server-side построении destination перед созданием каталогов и файла
+обязательна проверка, что итоговый путь находится внутри рассчитанного
+разрешённого base.
+
+Не допускать escape через:
+
+```text
+..
+absolute/rooted/UNC input
+смешанные separators
+junction/symlink/reparse point
+```
+
+Проверка должна выполняться до записи. Upload никогда не должен создавать файл
+за пределами command-specific server root.
+
+### Политика существующих файлов
+
+Правило `одинаковый размер = тот же файл` удалить.
+
+Принятый простой контракт:
+
+```text
+имя свободно       -> сохранить под исходным именем;
+имя уже существует -> подобрать новое имя file(1).ext, file(2).ext, ...;
+```
+
+Существующий файл автоматически не перезаписывать и не считать идентичным только
+по размеру.
+
+### End-to-end streaming upload
+
+`LOAD_TLG_TO_SEND` и `LOAD_RAZN` должны быть переведены на настоящий потоковый
+upload:
+
+```text
+файл на диске клиента
+    -> небольшие блоки
+TCP
+    -> небольшие блоки
+временный/целевой файл на сервере
+```
+
+Большой файл не должен целиком находиться:
+
+- в `std::vector<uint8_t>` SearchClient;
+- в сериализованном request buffer SearchClient;
+- в `requestData` сервера;
+- в `FileData::data` сервера.
+
+Недостаточно заменить только финальный `ofstream`: текущий общий `readLoop`
+сначала читает `requestHeader.size` целиком в `requestData`, поэтому для upload
+нужен отдельный streaming path/protocol framing для этих команд.
+
+Перед началом байтов файла клиент передаёт только ограниченную metadata,
+необходимую серверу для проверки запроса и расчёта destination, например:
+
+```text
+filename basename
+file size
+при необходимости version/flags
+```
+
+После проверки metadata сервер открывает безопасный destination/staging file и
+принимает ровно объявленное количество байтов блоками.
+
+При сетевой/дисковой ошибке не должен оставаться опубликованный частичный файл.
+Допустим временный файл с последующим publish/rename только после полного
+успешного получения.
+
+### Совместимость и wire
+
+Не перенумеровывать существующие command ordinals. Конкретный способ перехода
+старого сериализованного `FileData` на streaming framing определить при
+реализации согласованно в SearchEngine и SearchClient. После миграции рабочий
+клиент не должен иметь возможности задавать server destination path через
+upload payload.
+
+### Критерии будущей реализации
+
+Проверить минимум:
+
+- обычный `LOAD_RAZN` basename;
+- обычный `LOAD_TLG_TO_SEND` с authenticated operator;
+- `..`, absolute, rooted, UNC и separators в filename отклоняются;
+- reparse/junction escape не позволяет выйти из root;
+- существующий файл не перезаписывается, создаётся уникальное имя;
+- два разных файла одинакового размера не считаются одинаковыми;
+- большой upload не приводит к выделению RAM размером с файл ни на клиенте, ни
+  на сервере;
+- обрыв передачи удаляет staging/partial file и не повреждает существующий файл.
+
+---
+
 # Открытые пункты
 
 ## SVC-001 — runtime-root службы и управление настройками
@@ -453,23 +620,6 @@ readiness endpoint. Optional функции не должны блокирова
 
 ---
 
-## SVC-010 — upload-команды могут выйти из base path
-
-**Приоритет:** P0 security  
-**Статус:** OPEN
-
-`LOAD_TLG_TO_SEND` и `LOAD_RAZN` используют полученное имя/подпуть для
-формирования destination. Требуется отдельно решить защиту от `..`, absolute,
-UNC/rooted paths и reparse escape.
-
-Варианты: разрешать только basename либо безопасный relative path с canonical
-containment check.
-
-Отдельно решить старую duplicate-логику, где совпадение размера может считаться
-достаточным для совпадения файла.
-
----
-
 ## SVC-011 — жёстко заданные production paths
 
 **Приоритет:** P1  
@@ -550,8 +700,8 @@ compile/tests.
 | `GET_VH_TELEGA_WAY` | `D:\F12`; SVC-011 |
 | `GET_ISH_TELEGA_WAY` | `D:\F12`; SVC-011 |
 | `GET_OPIS_BASE` | `D:\OPIS_ADMIN`; SVC-011 |
-| `LOAD_TLG_TO_SEND` | hardcoded root + upload path; SVC-010/011 |
-| `LOAD_RAZN` | hardcoded OPIS path + upload path; SVC-010/011 |
+| `LOAD_TLG_TO_SEND` | server-side destination + streaming upload; SVC-010/011 |
+| `LOAD_RAZN` | server-side destination + streaming upload; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only, `prefix_map`, buffer delete; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
 | `GET_SINGLE_ATACHMENT` | scoped attachment read; требуется server-side streaming; SVC-009/012 |
@@ -588,17 +738,17 @@ SVC-003 -> DECIDED
 SVC-004 -> DECIDED
 SVC-007 -> REJECTED
 SVC-009 -> DECIDED
+SVC-010 -> DECIDED
 SVC-012 -> DECIDED
 ```
 
 Дальше:
 
-1. **SVC-010** — безопасная запись `LOAD_TLG_TO_SEND` / `LOAD_RAZN`.
-2. **SVC-008** — watcher и поздно появляющиеся child/root, если потребуется
+1. **SVC-002 + SVC-011** — service account и hardcoded roots.
+2. **SVC-006** — readiness/health после определения обязательных функций.
+3. **SVC-008** — watcher и поздно появляющиеся child/root, если потребуется
    вернуться к этому пункту.
-3. **SVC-002 + SVC-011** — service account и hardcoded roots.
-4. **SVC-006** — readiness/health после определения обязательных функций.
-5. **SVC-001, SVC-013, SVC-014** — эксплуатационный UX и legacy cleanup.
+4. **SVC-001, SVC-013, SVC-014** — эксплуатационный UX и legacy cleanup.
 
 Порядок можно менять отдельным решением.
 
