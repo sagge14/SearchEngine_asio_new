@@ -22,12 +22,15 @@
 #include "Commands/TelegramFiles/TelegramFileResolver.h"
 #include "Commands/TelegramFiles/PdtvFileResolver.h"
 #include "Commands/Auth/AuthenticateCmd.h"
+#include "Commands/StreamingUpload/StreamingUpload.h"
 #include "Auth/AuthRuntime.h"
 #include "MyUtils/Utf8Path.h"
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <span>
 #include <boost/concept_check.hpp>
 
 using boost::asio::ip::tcp;
@@ -136,6 +139,14 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
             co_await boost::asio::async_read(
                     socket_, boost::asio::buffer(&requestHeader, sizeof(requestHeader)),
                     boost::asio::use_awaitable);
+
+            if (isStreamingUploadCommand(requestHeader.command)) {
+                const bool keepSession =
+                    co_await handleStreamingUpload(requestHeader);
+                if (!keepSession)
+                    co_return;
+                continue;
+            }
 
             // 1) лимит размера
             constexpr std::size_t MAX_PAYLOAD = 1000 * 1024 * 1024; // 1GB
@@ -441,6 +452,285 @@ boost::asio::awaitable<bool> asio_server::session::queueError(
         terminal_error_queued_.store(true, std::memory_order_release);
 
     co_return true;
+}
+
+boost::asio::awaitable<bool> asio_server::session::queueJsonResponse(
+    COMMAND command,
+    std::string json)
+{
+    Header header{};
+    header.command = command;
+    header.size = static_cast<uint_fast64_t>(json.size());
+    auto payload = std::make_shared<std::vector<BYTE>>(json.begin(), json.end());
+
+    boost::system::error_code sendError;
+    co_await write_channel_.async_send(
+        boost::system::error_code{},
+        WriteItem{ResponseWrite{header, std::move(payload)}},
+        boost::asio::redirect_error(boost::asio::use_awaitable, sendError));
+    if (sendError) {
+        search_server::addToLog(
+            "Failed to queue streaming upload JSON: " + sendError.message());
+        co_return false;
+    }
+    co_return true;
+}
+
+boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
+    Header requestHeader)
+{
+    streaming_upload::StreamingUploadSink sink;
+    bool commandStarted = false;
+    bool readySent = false;
+    auto finishCommandIfStarted = [&]() {
+        if (commandStarted && activity_) {
+            activity_->finishCommand();
+            commandStarted = false;
+        }
+    };
+    auto abortPrepared = [&]() {
+        sink.abort();
+        finishCommandIfStarted();
+    };
+
+    std::optional<uint_fast32_t> saveMessageUserId;
+    if (!trustCommand(requestHeader, saveMessageUserId)) {
+        co_await queueError(
+            command_execution::ErrorCode::InvalidCommand,
+            "wire_command=" + std::to_string(
+                static_cast<uint_fast64_t>(requestHeader.command)),
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+
+    const auto gate = evaluateSessionCommandGate(
+        requestHeader.command,
+        authenticated_);
+    if (!gate.allow_execute) {
+        co_await queueError(
+            command_execution::ErrorCode::AuthRequired,
+            "session is not authenticated",
+            gate.close_after_auth_required,
+            requestHeader.command);
+        co_return false;
+    }
+
+    if (requestHeader.size > streaming_upload::kMaxMetadataBytes) {
+        co_await queueError(
+            command_execution::ErrorCode::PayloadTooLarge,
+            "streaming upload metadata_size=" +
+                std::to_string(requestHeader.size),
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+
+    if (!activity_ || !activity_->tryStartCommand()) {
+        co_await queueError(
+            command_execution::ErrorCode::ServerStopping,
+            {},
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+    commandStarted = true;
+
+    std::string unexpectedError;
+    try {
+        std::vector<BYTE> metadataBytes(
+            static_cast<std::size_t>(requestHeader.size), 0);
+        std::size_t totalRead = 0;
+        while (totalRead < metadataBytes.size()) {
+            const std::size_t toRead = std::min<std::size_t>(
+                max_length,
+                metadataBytes.size() - totalRead);
+            const std::size_t bytes = co_await socket_.async_read_some(
+                boost::asio::buffer(metadataBytes.data() + totalRead, toRead),
+                boost::asio::use_awaitable);
+            totalRead += bytes;
+        }
+
+        streaming_upload::Metadata metadata{};
+        auto parsed = streaming_upload::parseMetadata(metadataBytes, metadata);
+        if (parsed.failed()) {
+            co_await queueError(
+                parsed.error.value_or(command_execution::ErrorCode::InvalidJson),
+                std::move(parsed.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        std::string operatorName;
+        {
+            std::lock_guard<std::mutex> lock(user_name_mutex_);
+            operatorName = userName_;
+        }
+
+        std::filesystem::path configuredRoot;
+        std::string rootError;
+        try {
+            const std::string& rootUtf8 =
+                requestHeader.command == COMMAND::UPLOAD_RAZN_V1
+                    ? Interface::raznOutputDir()
+                    : Interface::tlgSendRoot();
+            configuredRoot = encoding::utf8_to_path(rootUtf8);
+        }
+        catch (const std::exception& error) {
+            rootError = error.what();
+        }
+        if (!rootError.empty()) {
+            co_await queueError(
+                command_execution::ErrorCode::ConfigurationError,
+                rootError,
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        streaming_upload::PlannedTarget target;
+        command_execution::CommandResult planned =
+            command_execution::CommandResult::failure(
+                command_execution::ErrorCode::InternalError);
+        if (requestHeader.command == COMMAND::UPLOAD_RAZN_V1) {
+            planned = streaming_upload::planRaznTarget(
+                configuredRoot, metadata, target);
+        } else {
+            planned = streaming_upload::planTlgTarget(
+                configuredRoot,
+                operatorName,
+                metadata,
+                streaming_upload::currentLocalTimeParts(),
+                target);
+        }
+        if (planned.failed()) {
+            co_await queueError(
+                planned.error.value_or(
+                    command_execution::ErrorCode::ConfigurationError),
+                std::move(planned.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        auto prepared = sink.prepare(target, metadata.file_size);
+        if (prepared.failed()) {
+            co_await queueError(
+                prepared.error.value_or(
+                    command_execution::ErrorCode::FileOpenFailed),
+                std::move(prepared.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        if (!(co_await queueJsonResponse(
+                requestHeader.command,
+                streaming_upload::makeReadyJson()))) {
+            abortPrepared();
+            co_return false;
+        }
+        readySent = true;
+
+        std::array<BYTE, streaming_upload::kChunkSize> chunk{};
+        std::uint64_t remaining = metadata.file_size;
+        while (remaining > 0) {
+            const std::size_t toRead = static_cast<std::size_t>(
+                (std::min)(
+                    static_cast<std::uint64_t>(chunk.size()),
+                    remaining));
+            std::size_t got = 0;
+            while (got < toRead) {
+                const std::size_t bytes = co_await socket_.async_read_some(
+                    boost::asio::buffer(chunk.data() + got, toRead - got),
+                    boost::asio::use_awaitable);
+                if (bytes == 0) {
+                    search_server::addToLog(
+                        "streaming upload EOF before advertised file_size");
+                    abortPrepared();
+                    co_return false;
+                }
+                got += bytes;
+            }
+            auto written = sink.writeChunk(
+                std::span<const std::uint8_t>(chunk.data(), toRead));
+            if (written.failed()) {
+                search_server::addToLog(
+                    "streaming upload write failed: " + written.diagnostic);
+                abortPrepared();
+                co_return false;
+            }
+            remaining -= toRead;
+        }
+
+        auto published = sink.publish();
+        if (published.failed()) {
+            co_await queueError(
+                published.error.value_or(
+                    command_execution::ErrorCode::FileWriteFailed),
+                std::move(published.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        if (!(co_await queueJsonResponse(
+                requestHeader.command,
+                streaming_upload::makeFinalJson(sink.savedName())))) {
+            abortPrepared();
+            co_return false;
+        }
+
+        PersonalRequest personalRequest{};
+        personalRequest.request_type = getTextCommand(requestHeader.command);
+        personalRequest.request = sink.savedName().empty()
+            ? getTextCommand(requestHeader.command)
+            : sink.savedName();
+        {
+            std::lock_guard<std::mutex> lock(user_name_mutex_);
+            personalRequest.user_name = userName_;
+        }
+        logutil::log(personalRequest);
+        finishCommandIfStarted();
+        co_return true;
+    }
+    catch (const boost::system::system_error& error) {
+        abortPrepared();
+        if (error.code() == boost::asio::error::eof) {
+            search_server::addToLog(
+                "Client closed during streaming upload (" + getRemoteIP() + ")");
+        } else {
+            search_server::addToLog(
+                std::string("streaming upload error: ") + error.what());
+        }
+        co_return false;
+    }
+    catch (const std::exception& error) {
+        const bool afterReady = readySent;
+        unexpectedError = error.what();
+        abortPrepared();
+        if (afterReady) {
+            search_server::addToLog(
+                "streaming upload failed after READY: " + unexpectedError);
+            co_return false;
+        }
+    }
+
+    if (!unexpectedError.empty()) {
+        co_await queueError(
+            command_execution::ErrorCode::InternalError,
+            unexpectedError,
+            false,
+            requestHeader.command);
+        co_return true;
+    }
+    co_return false;
 }
 
 boost::asio::awaitable<void> asio_server::session::commandExec(
@@ -814,6 +1104,8 @@ void asio_server::Interface::setSearchServer(
 {
     searchServer_ = _server;
     opis_base_dir_ = paths.opis_base_dir;
+    tlg_send_root_ = paths.tlg_send_root;
+    razn_output_dir_ = paths.razn_output_dir;
     const std::filesystem::path& attachmentsConfigPath =
         paths.attachmentsConfigPath;
 
@@ -981,4 +1273,7 @@ void asio_server::Interface::shutdown()
     cmdMap.clear();
     searchServer_ = nullptr;
     year_.clear();
+    opis_base_dir_.clear();
+    tlg_send_root_.clear();
+    razn_output_dir_.clear();
 }

@@ -79,6 +79,8 @@ namespace asio_server
         AUTHENTICATE_V1 = 31,
         GET_TELEGA_TEXT = 32,
         GET_ISH_PDTV_TEXT = 33,
+        UPLOAD_TLG_TO_SEND_V1 = 34,
+        UPLOAD_RAZN_V1 = 35,
         // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
@@ -94,6 +96,8 @@ namespace asio_server
                     case COMMAND::AUTHENTICATE_V1: return "AUTHENTICATE_V1";
                     case COMMAND::GET_TELEGA_TEXT: return "GET_TELEGA_TEXT";
                     case COMMAND::GET_ISH_PDTV_TEXT: return "GET_ISH_PDTV_TEXT";
+                    case COMMAND::UPLOAD_TLG_TO_SEND_V1: return "UPLOAD_TLG_TO_SEND_V1";
+                    case COMMAND::UPLOAD_RAZN_V1: return "UPLOAD_RAZN_V1";
                     default:
                 return "UNKNOWN COMMAND";
         }
@@ -155,6 +159,8 @@ namespace asio_server
             case COMMAND::GET_SINGLE_ATACHMENT:
             case COMMAND::GET_TELEGA_TEXT:
             case COMMAND::GET_ISH_PDTV_TEXT:
+            case COMMAND::UPLOAD_TLG_TO_SEND_V1:
+            case COMMAND::UPLOAD_RAZN_V1:
             case COMMAND::NEGOTIATE_PROTOCOL_V1:
             case COMMAND::AUTHENTICATE_V1:
                 return true;
@@ -164,6 +170,13 @@ namespace asio_server
     }
 
     /// Commands allowed before session authorization (USER_REGISTRY or AUTHENTICATE_V1).
+    [[nodiscard]] inline constexpr bool isStreamingUploadCommand(
+        COMMAND command) noexcept
+    {
+        return command == COMMAND::UPLOAD_TLG_TO_SEND_V1
+            || command == COMMAND::UPLOAD_RAZN_V1;
+    }
+
     [[nodiscard]] inline constexpr bool isSessionBootstrapCommand(
         COMMAND command) noexcept
     {
@@ -263,8 +276,12 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::ERROR_RESPONSE) == 29);
     static_assert(static_cast<uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1) == 30);
     static_assert(static_cast<uint_fast64_t>(COMMAND::AUTHENTICATE_V1) == 31);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::LOAD_TLG_TO_SEND) == 15);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::LOAD_RAZN) == 22);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_TELEGA_TEXT) == 32);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_ISH_PDTV_TEXT) == 33);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::UPLOAD_TLG_TO_SEND_V1) == 34);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::UPLOAD_RAZN_V1) == 35);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
     static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
     static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);
@@ -342,6 +359,10 @@ namespace asio_server
             Header requestHeader,
             std::vector<BYTE> requestData,
             std::optional<uint_fast32_t> saveMessageUserId);
+        boost::asio::awaitable<bool> handleStreamingUpload(Header requestHeader);
+        boost::asio::awaitable<bool> queueJsonResponse(
+            COMMAND command,
+            std::string json);
         bool trustCommand(
             Header& requestHeader,
             std::optional<uint_fast32_t>& saveMessageUserId);
@@ -418,6 +439,8 @@ namespace asio_server
     {
         inline static std::string year_ = {};
         inline static std::string opis_base_dir_ = {};
+        inline static std::string tlg_send_root_ = {};
+        inline static std::string razn_output_dir_ = {};
         inline static search_server::SearchServer* searchServer_ = nullptr;
         inline static std::map<COMMAND, std::unique_ptr<Command>> cmdMap{};
 
@@ -428,6 +451,14 @@ namespace asio_server
             search_server::SearchServer* _server,
             const ProductionCommandPaths& paths);
         static void shutdown();
+        [[nodiscard]] static const std::string& tlgSendRoot() noexcept
+        {
+            return tlg_send_root_;
+        }
+        [[nodiscard]] static const std::string& raznOutputDir() noexcept
+        {
+            return razn_output_dir_;
+        }
         [[nodiscard]] static command_execution::CommandResult execCommand(
             COMMAND _command,
             std::vector<uint8_t>& _request);

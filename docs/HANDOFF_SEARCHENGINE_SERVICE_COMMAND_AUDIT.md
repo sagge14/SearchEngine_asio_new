@@ -269,6 +269,12 @@ Raw server filesystem paths через клиентский протокол б�
 
 **Статус:** DECIDED
 
+Streaming upload protocol V1 foundation exists as explicit commands
+`UPLOAD_TLG_TO_SEND_V1 = 34` and `UPLOAD_RAZN_V1 = 35` with bounded metadata,
+READY handshake, chunked staging, and atomic publish. Production clients still
+use legacy `LOAD_TLG_TO_SEND = 15` and `LOAD_RAZN = 22`. This item is not
+VERIFIED until production migration and legacy reject.
+
 `LOAD_TLG_TO_SEND` и `LOAD_RAZN` больше не должны использовать клиентский
 `filename` как относительный server path и не должны передавать весь файл внутри
 сериализованного `FileData`/`vector<uint8_t>`.

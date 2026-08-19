@@ -127,6 +127,8 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_SINGLE_ATACHMENT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_TELEGA_TEXT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_ISH_PDTV_TEXT));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::UPLOAD_TLG_TO_SEND_V1));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::UPLOAD_RAZN_V1));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::USER_REGISTRY));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::NEGOTIATE_PROTOCOL_V1));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::AUTHENTICATE_V1));

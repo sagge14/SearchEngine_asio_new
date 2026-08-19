@@ -283,6 +283,8 @@ TEST(SessionAuthGate, DataCommandsRemainBlockedUntilAuthenticated)
         COMMAND::GET_SINGLE_ATACHMENT,
         COMMAND::GET_TELEGA_TEXT,
         COMMAND::GET_ISH_PDTV_TEXT,
+        COMMAND::UPLOAD_TLG_TO_SEND_V1,
+        COMMAND::UPLOAD_RAZN_V1,
         COMMAND::LOAD_TLG_TO_SEND,
         COMMAND::LOAD_RAZN,
         COMMAND::GET_MESSAGE,
