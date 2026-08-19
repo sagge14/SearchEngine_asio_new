@@ -280,7 +280,7 @@ if ($Architecture -eq 'x86' -and
 $settings = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 |
     ConvertFrom-Json
 $config = $settings.config
-if (-not $config -or -not $config.Name -or -not $config.year -or
+if (-not $config -or -not $config.year -or
     -not $config.dirs -or $config.dirs.Count -eq 0 -or
     -not $config.extensions -or $config.extensions.Count -eq 0) {
     throw "Settings.json is missing required config fields: $SettingsPath"

@@ -46,20 +46,15 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
 
     nh::json jsonSettings;
 
-    jsonSettings["config"]["Name"] = val.name;
-    jsonSettings["config"]["Version"] = val.version;
     jsonSettings["config"]["max_response"] = val.maxResponse;
     jsonSettings["config"]["thread_count"] = val.threadCount;
-    jsonSettings["config"]["dir"] = val.dir;
     jsonSettings["config"]["asio_port"] = val.port;
     jsonSettings["config"]["ind_time"] = val.indTime;
-    jsonSettings["config"]["text_request"] = val.requestText;
     jsonSettings["config"]["exact_search"] = val.exactSearch;
     jsonSettings["config"]["dirs"] = val.dirs;
     jsonSettings["config"]["extensions"] = val.extensions;
     jsonSettings["config"]["year"] = val.year;
-    jsonSettings["config"]["hide_mode"] = val.hideMode;
-    jsonSettings["Files"] = val.files;
+    jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
     jsonSettings["config"]["exclude_dirs"] = val.excludeDirs;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
@@ -68,7 +63,6 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["opis_base_dir"] = val.opis_base_dir;
     jsonSettings["config"]["f12_base_dir"] = val.f12_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
-    jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
     jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
     jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
@@ -113,7 +107,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         // Создаем пустой JSON для дальнейшей обработки
         jsonSettings = nh::json::object();
         jsonSettings["config"] = nh::json::object();
-        jsonSettings["Files"] = nh::json::array();
     } else {
         try
         {
@@ -142,19 +135,16 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         
         auto& config = jsonSettings["config"];
 
-        // === Сначала загружаем hide_mode для обработки ошибок ===
-        if (config.contains("hide_mode")) {
-            config.at("hide_mode").get_to(s.hideMode);
+        // === hide_console_window (legacy hide_mode alias) — load early for error UI ===
+        const bool hasHideConsoleWindow = config.contains("hide_console_window");
+        const bool hasLegacyHideMode = config.contains("hide_mode");
+        if (hasHideConsoleWindow) {
+            config.at("hide_console_window").get_to(s.hideConsoleWindow);
+        } else if (hasLegacyHideMode) {
+            config.at("hide_mode").get_to(s.hideConsoleWindow);
         }
 
         // === КРИТИЧЕСКИЕ ПОЛЯ (обязательные) ===
-        // name
-        if (config.contains("Name")) {
-            config.at("Name").get_to(s.name);
-        } else {
-            criticalErrors.push_back("config.Name");
-        }
-
         // dirs - директории для индексации (не могут быть пустыми)
         if (config.contains("dirs") && config["dirs"].is_array() && !config["dirs"].empty()) {
             config.at("dirs").get_to(s.dirs);
@@ -207,14 +197,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         loadOptionalRoot("f12_base_dir", s.f12_base_dir);
 
         // === ОПЦИОНАЛЬНЫЕ ПОЛЯ (с автодополнением) ===
-        
-        // version
-        if (config.contains("Version")) {
-            config.at("Version").get_to(s.version);
-        } else {
-            addedFields.push_back("config.Version");
-            needsResave = true;
-        }
 
         // max_response
         if (config.contains("max_response")) {
@@ -242,14 +224,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // dir
-        if (config.contains("dir")) {
-            config.at("dir").get_to(s.dir);
-        } else {
-            addedFields.push_back("config.dir");
-            needsResave = true;
-        }
-
         // exact_search
         if (config.contains("exact_search")) {
             config.at("exact_search").get_to(s.exactSearch);
@@ -258,9 +232,11 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // hide_mode (уже загружено выше, но нужно отметить если отсутствовало)
-        if (!config.contains("hide_mode")) {
-            addedFields.push_back("config.hide_mode");
+        // hide_console_window — canonical; legacy hide_mode already applied above
+        if (!hasHideConsoleWindow && !hasLegacyHideMode) {
+            addedFields.push_back("config.hide_console_window");
+            needsResave = true;
+        } else if (!hasHideConsoleWindow && hasLegacyHideMode) {
             needsResave = true;
         }
 
@@ -269,14 +245,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("ind_time").get_to(s.indTime);
         } else {
             addedFields.push_back("config.ind_time");
-            needsResave = true;
-        }
-
-        // text_request
-        if (config.contains("text_request")) {
-            config.at("text_request").get_to(s.requestText);
-        } else {
-            addedFields.push_back("config.text_request");
             needsResave = true;
         }
 
@@ -293,14 +261,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("compact_threshold_percent").get_to(s.compactThresholdPercent);
         } else {
             addedFields.push_back("config.compact_threshold_percent");
-            needsResave = true;
-        }
-
-        // save_dictionary_to_file — сохранять inverted_index3.dat (дефолт true в Settings)
-        if (config.contains("save_dictionary_to_file")) {
-            config.at("save_dictionary_to_file").get_to(s.saveDictionaryToFile);
-        } else {
-            addedFields.push_back("config.save_dictionary_to_file");
             needsResave = true;
         }
 
@@ -429,14 +389,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // Files
-        if (jsonSettings.contains("Files")) {
-            jsonSettings.at("Files").get_to(s.files);
-        } else {
-            addedFields.push_back("Files");
-            needsResave = true;
-        }
-
         // Если были добавлены поля - пересохраняем настройки
         if (needsResave) {
             setSettings(s, jsonPath);  // Сохраняем в тот же файл, откуда читали
@@ -486,8 +438,8 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             LogFile::getStartup().write("Please fix Settings.json and restart the server.");
             LogFile::getStartup().write("Logs directory: " + logsPathStr);
             
-            // Если hideMode - показываем окно с ошибкой
-            if (s.hideMode &&
+            // Если hideConsoleWindow - показываем окно с ошибкой
+            if (s.hideConsoleWindow &&
                 g_interactiveErrors.load(std::memory_order_acquire)) {
                 ShowWindow(GetConsoleWindow(), SW_SHOW);  // Показываем консоль
                 MessageBoxA(nullptr, errorMsg.c_str(), "Search Engine - Critical Settings Error", 

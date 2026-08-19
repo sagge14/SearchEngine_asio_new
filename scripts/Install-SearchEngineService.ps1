@@ -162,7 +162,7 @@ $oemPath = Resolve-RequiredPath $oemPath Leaf
 
 $settings = Read-JsonFile $settingsPath
 $config = $settings.config
-if (-not $config -or -not $config.Name -or -not $config.year -or
+if (-not $config -or -not $config.year -or
     -not $config.dirs -or $config.dirs.Count -eq 0 -or
     -not $config.extensions -or $config.extensions.Count -eq 0) {
     throw "Settings.json is missing required config fields: $settingsPath"

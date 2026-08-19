@@ -1214,4 +1214,14 @@ if(TARGET SearchEngineConfig)
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigFormatJson.cmake"
     )
+    add_test(
+            NAME SearchEngineConfigBlock1Legacy_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-block1-legacy-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock1Legacy.cmake"
+    )
 endif()

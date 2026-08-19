@@ -1,13 +1,10 @@
 {
   "config": {
-    "Name": "mySearchEngine_S",
-    "Version": "1.1",
     "asio_port": 15006,
     "batch_indexer_threads": 0,
     "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1,
     "compact_threshold_percent": 5.0,
-    "dir": "D:\\",
     "dirs": [
       "D:\\ЯНВАРЬ",
       "D:\\ФЕВРАЛЬ",
@@ -35,7 +32,7 @@
     "file_indexing_timeout_sec": 120,
     "full_index_strategy": "batch",
     "document_catalog_storage": "memory",
-    "hide_mode": false,
+    "hide_console_window": false,
     "ind_time": 500,
     "max_parallel_readers": 0,
     "max_response": 50000,
@@ -45,13 +42,11 @@
     "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
     "opis_base_dir": "D:\\OPIS_ADMIN",
     "f12_base_dir": "D:\\F12",
-    "save_dictionary_to_file": true,
     "scan_on_startup": true,
     "sqlite_load_threads": 4,
     "sqlite_mirror_flush_interval_sec": 2.0,
     "sqlite_mirror_max_pending_ops": 500,
     "sqlite_precount_postings": false,
-    "text_request": true,
     "thread_count": 4,
     "year": "2026"
   }

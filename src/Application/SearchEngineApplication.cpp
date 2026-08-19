@@ -67,9 +67,6 @@ void validateSettings(const search_server::Settings& settings)
             "config.document_catalog_storage must be memory or sqlite"
         );
     }
-    if (settings.name.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.Name is empty");
-    }
     if (settings.threadCount < 0 || settings.threadCount == 1) {
         throw StartupError(
             ERROR_INVALID_DATA,
@@ -326,10 +323,10 @@ bool SearchEngineApplication::start()
         LG("ASIO port bound; server accepts connections");
 
         if (options_.mode == SearchEngineLaunchMode::Console &&
-            pending->settings.hideMode)
+            pending->settings.hideConsoleWindow)
         {
             ShowWindow(GetConsoleWindow(), SW_HIDE);
-            LG("Console hidden by config.hide_mode");
+            LG("Console hidden by config.hide_console_window");
         }
 
         runtime_ = std::move(pending_runtime);

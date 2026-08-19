@@ -81,24 +81,17 @@ namespace search_server {
 
     class Settings
     {
-        /** @param name имя сервера.
-          * @param version версия сервера,
-          * @param dir для поиска по всем файлам в дирректории включая подпапки
-          * если параметр пустой, то поиск осуществляется только по файлам указанным в @param files.*
-          * @param exactSearch для установки серевера в режим работы "точного поиска".*
+        /** @param exactSearch для установки серевера в режим работы "точного поиска".*
           * @param threadCount устанавливает количество потоков осуществляющих индексирование файлов,
           * если установить значение 0 - то количество потоков будет выбрано автоматически, по количеству ядер процессора.*
           * @param indTime устанавливает период переиндексации файлов в секундах.*
           * @param maxResponse устанавливает максимальное количество ответов на запрос.*
-          * @param requestText для отображения в файле ответов вместо идентификаторов запросов текста запросов */
+          * @param hideConsoleWindow скрыть консольное окно при ручном запуске (Windows service mode не затронут). */
 
         inline static Settings* settings = nullptr;
 
     public:
 
-        std::string name = "TestServer";
-        std::string version = "1.1";
-        std::string dir = {};
         std::string year;
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
@@ -114,19 +107,15 @@ namespace search_server {
         /// <f12_base_dir>\<year>.db and <f12_base_dir>\base.db.
         std::string f12_base_dir = "D:\\F12";
         bool exactSearch = false;
-        bool hideMode{};
+        bool hideConsoleWindow{};
         int threadCount = 6;
         int port = 15001;
         size_t indTime{};
         int maxResponse = 30;
-        bool requestText{};
         std::vector<std::string> dirs;
         std::vector<std::string> extensions;
-        std::vector<std::string> files;
         std::vector<std::string> excludeDirs;
         double compactThresholdPercent = 5.0;  // Порог для compact (%)
-        /// Сохранять inverted_index3.dat; вызывает SearchServer (не InvertedIndex в конце апдейта).
-        bool saveDictionaryToFile = true;
         /// Запускать полный scan/updateStep сразу после старта (после загрузки словаря).
         /// false = только по таймеру ind_time.
         bool scanOnStartup = true;

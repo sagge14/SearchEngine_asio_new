@@ -220,12 +220,10 @@ listAnswer search_server::SearchServer::getAnswer(const string& _request) const 
                 "document catalog has no row for search result doc_id=" +
                 std::to_string(selectedIds[item]));
         }
-        if (!settings.dir.empty()) {
-            out.push_back(AnswerItem{
-                encoding::wstring_to_utf8(documents[item]->path),
-                selected[item]->getRelativeIndex(),
-                documents[item]->deleted});
-        }
+        out.push_back(AnswerItem{
+            encoding::wstring_to_utf8(documents[item]->path),
+            selected[item]->getRelativeIndex(),
+            documents[item]->deleted});
     }
 
  //   updateM.unlock();
@@ -254,23 +252,9 @@ std::set<std::string> search_server::SearchServer::getUniqWords(const string& te
 }
 
 listAnswers search_server::SearchServer::getAllAnswers(const vector<string>& requests) const {
-    /**
-    Формируем лист ответов на все запросы, с возможностью выбора, что использовать в качестве
-     идентификатора файла - индекс или текст запроса.*/
-
     listAnswers out;
-    int i = 1;
-
-    for(auto& request: requests)
-        if(settings.requestText)
-            out.emplace_back(getAnswer(request), request);
-        else
-        {
-            string nRequest = i < 10 ? "00" + to_string(i) : i < 100 ? "0" + to_string(i) : to_string(i);
-            out.emplace_back(getAnswer(request), "request" + nRequest);
-            i++;
-        }
-
+    for (const auto& request : requests)
+        out.emplace_back(getAnswer(request), request);
     return out;
 }
 
@@ -303,19 +287,8 @@ index(), cpu_pool_(cpu_pool), io_commit(_io_commit)
 }
 
 void search_server::SearchServer::trustSettings() const {
-    /**
-    Функция проверяет корректность настроек сервера:
-     1. Имя сервера не может быть пустым.
-     2. Количество потоков индексирующих базу не может быть отрицательным.
-     3. Файлы для индексирования должны браться либо из папки указанной в @param 'settings.dir'
-        либо напрямую из файла настроек сервера (по умолчанию Settings.json).
-    Если настройки не корректны выбрасывается соответствующее исключение. */
-
-    if(settings.name.empty())
-        throw(myExp(ErrorCodes::NAME));
-    if(settings.threadCount < 0)
+    if (settings.threadCount < 0)
         throw(myExp(ErrorCodes::THREADCOUNT));
-
 }
 
 bool search_server::SearchServer::checkHash(bool resetHash) const {
@@ -502,11 +475,8 @@ void search_server::SearchServer::myExp::show() const {
 void search_server::Settings::show() const
 {
     std::cout << "--- Server information ---" << std::endl;
-    std::cout << std::endl << "Name:\t\t\t\t" << name << std::endl;
-    std::cout << "Version:\t\t\t" << version << std::endl;
+    std::cout << std::endl;
     std::cout << "Number of maximum responses:\t" << maxResponse << std::endl;
-    if(!dir.empty())
-        std::cout << "The directory for indexing:\t" << dir << std::endl;
     std::cout << "Thread count:\t\t\t";
     if(threadCount)
         std::cout << threadCount << std::endl;
@@ -515,9 +485,8 @@ void search_server::Settings::show() const
     std::cout << "Index database update period:\t" << indTime << " seconds" << std::endl;
     std::cout << "Scan on startup:\t\t" << std::boolalpha << scanOnStartup << std::endl;
     std::cout << "Asio port:\t\t\t" << port << std::endl;
-    std::cout << "Show request as text:\t\t" << std::boolalpha << requestText << std::endl;
     std::cout << "Use exact search:\t\t" << std::boolalpha << exactSearch << std::endl;
-    std::cout << "Save dictionary to file:\t" << std::boolalpha << saveDictionaryToFile << std::endl << std::endl;
+    std::cout << "Hide console window:\t\t" << std::boolalpha << hideConsoleWindow << std::endl << std::endl;
     std::cout << "Full index strategy:\t\t"
               << inverted_index::toString(fullIndexStrategy) << std::endl;
     std::cout << "Document catalog storage:\t"
@@ -662,12 +631,8 @@ void search_server::SearchServer::updateStep()
     index->waitForIdle();
     addToLog("updateStep() → compact done");
 
-    if (settings.saveDictionaryToFile) {
-        addToLog("updateStep() → saveIndex (save_dictionary_to_file=true)");
-        index->saveIndex();
-    } else {
-        addToLog("updateStep() → saveIndex skipped (save_dictionary_to_file=false)");
-    }
+    addToLog("updateStep() → saveIndex");
+    index->saveIndex();
 
     time = getTimeOfUpdate();
 
@@ -772,7 +737,7 @@ void search_server::SearchServer::stop()
         return;
     requestStop();
     wait();
-    if (index && settings.saveDictionaryToFile)
+    if (index)
         index->saveIndex();
 }
 

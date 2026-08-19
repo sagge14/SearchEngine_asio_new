@@ -787,6 +787,36 @@ void mergeJson(json& destination, const json& source)
     }
 }
 
+void stripRetiredBlock1Fields(json& root)
+{
+    if (!root.is_object()) {
+        return;
+    }
+    root.erase("Files");
+    if (!root.contains("config") || !root["config"].is_object()) {
+        return;
+    }
+    json& config = root["config"];
+    if (!config.contains("hide_console_window") && config.contains("hide_mode")) {
+        config["hide_console_window"] = config["hide_mode"];
+    }
+    for (const char* key : {
+        "hide_mode",
+        "dir",
+        "Version",
+        "text_request",
+        "save_dictionary_to_file",
+        "Name",
+    }) {
+        config.erase(key);
+    }
+}
+
+void canonicalizeBlock1LegacySettings(json& root)
+{
+    stripRetiredBlock1Fields(root);
+}
+
 std::string withTrailingLf(std::string text)
 {
     if (text.empty() || text.back() != '\n') {
@@ -910,7 +940,6 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
                                 " must be a non-empty string");
         }
     };
-    requireString("Name");
     requireString("year");
     const auto requireBaseDirString = [&](const char* name) {
         if (!config.contains(name) || !config[name].is_string())
@@ -1055,15 +1084,9 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
 
     // SVC-001: validate additional fields deserialized by ConverterJSON
 
-    // Optional string fields: if present must be strings.
-    if (config.contains("Version") && !config["Version"].is_string())
-        errors.emplace_back("config.Version must be a string");
-    if (config.contains("dir") && !config["dir"].is_string())
-        errors.emplace_back("config.dir must be a string");
-
     // Boolean fields: if present must be booleans (get_to<bool> would throw otherwise).
     for (const char* boolField : {
-        "exact_search", "hide_mode", "text_request", "save_dictionary_to_file"
+        "exact_search", "hide_console_window", "scan_on_startup"
     }) {
         if (config.contains(boolField) && !config[boolField].is_boolean()) {
             errors.emplace_back(std::string("config.") + boolField + " must be boolean");
@@ -1091,20 +1114,6 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
             for (const auto& el : config["exclude_dirs"]) {
                 if (!el.is_string()) {
                     errors.emplace_back("config.exclude_dirs must contain only strings");
-                    break;
-                }
-            }
-        }
-    }
-
-    // Top-level Files: if present must be array of strings.
-    if (root.contains("Files")) {
-        if (!root["Files"].is_array()) {
-            errors.emplace_back("Files must be an array");
-        } else {
-            for (const auto& el : root["Files"]) {
-                if (!el.is_string()) {
-                    errors.emplace_back("Files must contain only strings");
                     break;
                 }
             }
@@ -1430,7 +1439,9 @@ int configureCommand(const std::vector<std::wstring>& args)
 
     json result = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
-        mergeJson(result, readJson(fs::path(*importPath)));
+        json imported = readJson(fs::path(*importPath));
+        canonicalizeBlock1LegacySettings(imported);
+        mergeJson(result, imported);
     }
     if (!result.contains("config") || !result["config"].is_object()) {
         result["config"] = json::object();
@@ -1466,6 +1477,8 @@ int configureCommand(const std::vector<std::wstring>& args)
     if (const auto value = option(args, L"--f12-base-dir")) {
         config["f12_base_dir"] = utf8(*value);
     }
+
+    stripRetiredBlock1Fields(result);
 
     const auto errors = validateJson(result, false);
     if (!errors.empty()) {
@@ -1612,7 +1625,9 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     const fs::path outputPath = requiredOption(args, L"--output");
     json defaults = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
-        mergeJson(defaults, readJson(fs::path(*importPath)));
+        json imported = readJson(fs::path(*importPath));
+        canonicalizeBlock1LegacySettings(imported);
+        mergeJson(defaults, imported);
     }
 
     int defaultPort = 15001;
