@@ -100,8 +100,15 @@ resource и может обновляться, сохраняя rollback-коп�
 
 Rollback откатывает прежде всего `Program Files` и небольшие installer-owned
 config/auth-файлы. Копировать многогигабайтный индекс перед каждым update не
-требуется. Полное удаление ProgramData допускается только при явном full
-uninstall/reset с предупреждением.
+требуется.
+
+При обычном update/reinstall автоматического destructive cleanup ProgramData
+нет. Historical `messages\` сохраняются; runtime их больше не использует и
+автоматически не удаляет.
+
+Полное удаление ProgramData допускается только через явно подтверждённый
+destructive uninstall/reset/leftover-cleanup workflow (включая случай, когда SCM
+service отсутствует и оператор подтверждает удаление остатков).
 
 ---
 
@@ -143,6 +150,9 @@ Installer спрашивает, используется ли на этом inst
 
 Не вводить сейчас ACK/quarantine/processed-folder. Риск удаления буфера до
 окончательной доставки принят как часть текущей legacy-семантики.
+
+Final cross-repo audit на baseline `59c03b257` / `6c2167a2` подтвердил, что
+production server/client соответствуют этому destructive-контракту.
 
 ---
 
@@ -346,14 +356,20 @@ SearchEngine и SearchClient.
 
 ---
 
-## SVC-002 — service account: LocalSystem остаётся поддерживаемым режимом
+## SVC-002 — service account: production portable contract = LocalSystem
 
 **Статус:** VERIFIED
 
-Installer сейчас создаёт/configure службу без `obj=`, поэтому Windows запускает
-её под `LocalSystem`. Это поведение оставить.
+Production portable package contract:
 
-На текущем этапе официальный эксплуатационный контракт:
+```text
+SearchEngineService runs as LocalSystem.
+Portable installer явно показывает:
+  Service account: LocalSystem
+и не поддерживает user mapped drives.
+```
+
+На текущем этапе официальный эксплуатационный контракт portable release:
 
 ```text
 SearchEngineService работает как LocalSystem.
@@ -361,9 +377,13 @@ SearchEngineService работает как LocalSystem.
 доступных этому service account по ACL.
 ```
 
-Сейчас не добавлять:
+Generic `scripts/Install-SearchEngineService.ps1` имеет отдельный explicit
+выбор `-Credential` или `-UseLocalSystem`; это не меняет production portable
+contract и не расширяет его на user mapped drives / UNC без отдельной задачи.
 
-- выбор service account в installer;
+Portable installer сейчас не добавляет:
+
+- выбор service account в interactive portable flow;
 - логин/пароль службы;
 - автоматический `net use`;
 - поддержку user mapped drives;
@@ -373,14 +393,14 @@ SearchEngineService работает как LocalSystem.
 Если позже понадобится сетевое хранилище, это отдельная задача по service
 account/UNC и credential model.
 
-Installer/config diagnostics должны явно показывать:
+Portable installer/config diagnostics должны явно показывать:
 
 ```text
 Service account: LocalSystem
 ```
 
 и документация не должна создавать впечатление, что пользовательские mapped
-drives автоматически видны службе.
+drives автоматически видны production portable service.
 
 Отсутствие/недоступность будущих monthly roots не является startup-fatal само по
 себе — это остаётся решением SVC-007.
@@ -695,35 +715,27 @@ SVC-013/009/010/012 contracts.
 | `UPLOAD_RAZN_V1` | streaming V1; Settings `razn_output_dir`; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
-| `GET_SINGLE_ATACHMENT` | scoped attachment flow; SVC-009/012 |
+| `GET_SINGLE_ATACHMENT` / `GET_TELEGA_SINGLE_ATACHMENT` | slot 26; naming differs (server/client), wire ordinal один; scoped streaming attachment flow; SVC-009/012 |
 | `SAVE_MESSAGE_TO` | historical reserved composite marker; rejected InvalidCommand |
 | `GET_MESSAGE` | historical reserved slot 16; rejected InvalidCommand |
 
 ---
 
-# Текущий порядок дальнейшего разбора
-
-Все пункты SVC-001..014 закрыты:
+# Финальный статус service/command audit
 
 ```text
-SVC-001 -> VERIFIED
-SVC-002 -> VERIFIED
-SVC-003 -> VERIFIED
-SVC-004 -> VERIFIED
-SVC-005 -> VERIFIED
-SVC-006 -> REJECTED
-SVC-007 -> REJECTED
-SVC-008 -> REJECTED
-SVC-009 -> VERIFIED
-SVC-010 -> VERIFIED
-SVC-011 -> VERIFIED
-SVC-012 -> VERIFIED
-SVC-013 -> VERIFIED
-SVC-014 -> VERIFIED
+FINAL CROSS-REPO AUDIT: CLEAN
+server baseline: 59c03b25799da0435edda5ecafd9b3f764a9cfa3
+client baseline: 6c2167a2fb885f921c89b40f23e687ab0fef8a46
+audit date:      2026-08-19
 ```
 
-Финальный cross-repo audit 2026-08-19 (`59c03b257` / `6c2167a2`): **CLEAN**.
-Новых OPEN пунктов нет. Не переоткрывать VERIFIED/REJECTED без нового material fact.
+Все зарегистрированные SVC-001..014 имеют финальный статус VERIFIED или
+REJECTED. Новых OPEN service/protocol issues на проверенных baseline нет.
+
+Это закрывает данный service/command audit, а не утверждает, что проект не
+может иметь будущих bugs/features вне этой области. Не переоткрывать
+VERIFIED/REJECTED без нового material fact.
 
 ---
 

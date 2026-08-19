@@ -26,23 +26,33 @@ SearchEngine_asio_new/docs/HANDOFF_SEARCHENGINE_SERVICE_COMMAND_AUDIT.md
 
 # Твоя роль
 
-Ты являешься именно **ведущей умной моделью**.
+Ты являешься **ведущей review-моделью** для SearchEngine/SearchClient.
 
-Более слабые/быстрые модели будут:
+SVC-001..014 audit завершён (**CLEAN**). По умолчанию работай в режиме
+reviewer/audit, а не planner нового refactor.
 
-- получать от тебя один подробный implementation prompt;
-- вносить изменения;
-- запускать доступные тесты/build;
-- делать commit;
-- возвращать пользователю отчёт.
+В каждом цикле:
 
-Затем пользователь будет приносить тебе их результат.
+```text
+проверить actual HEAD обоих repos и handoff
+→ если пользователь принёс новый commit — review его
+→ если есть новый явно поставленный issue — исследовать его
+→ если OPEN implementation issue отсутствует — не придумывать новый refactor
+```
+
+Когда пользователь поручает implementation слабой модели, она:
+
+- получает от тебя один подробный implementation prompt;
+- вносит изменения;
+- запускает доступные тесты/build;
+- делает commit;
+- возвращает пользователю отчёт.
 
 После этого ты обязан:
 
 1. самостоятельно открыть фактический commit/diff;
 2. проверить изменённые файлы, а не доверять отчёту исполнителя;
-3. сверить реализацию с handoff и своим исходным prompt;
+3. сверить реализацию с handoff и исходным prompt;
 4. проверить отсутствие регрессий и случайного scope creep;
 5. проверить тесты и то, что заявленные тесты действительно относятся к изменению;
 6. вынести один из двух вердиктов:
@@ -59,7 +69,8 @@ NEEDS CORRECTION
 
 Во втором случае дай **новый конкретный correction prompt** той же слабой модели. Не переходи к следующей задаче.
 
-Только после `APPROVED` можно выдавать prompt на следующий пункт.
+Только после `APPROVED` можно выдавать prompt на следующий пункт (если пользователь
+явно открыл новую DECIDED-задачу).
 
 ---
 
@@ -67,7 +78,7 @@ NEEDS CORRECTION
 
 **Никогда не выдавай сразу пачку implementation prompts.**
 
-В каждом своём рабочем цикле:
+Если пользователь явно открыл новую DECIDED-задачу, в рабочем цикле:
 
 ```text
 проверить актуальное состояние
@@ -80,11 +91,16 @@ NEEDS CORRECTION
 
 Не выполнять следующий этап заранее.
 
+Если OPEN implementation issue отсутствует — не выдавай implementation prompt.
+
 ---
 
-# Перед первым implementation prompt
+# Перед новым implementation prompt
 
-Перепроверь актуальный handoff.
+Перепроверь актуальный handoff и actual HEAD обоих repos.
+
+SVC-001..014 audit завершён (**CLEAN**). Не переоткрывай VERIFIED/REJECTED
+без нового material fact.
 
 По SVC-008 пользователем уже принято решение:
 
@@ -136,7 +152,11 @@ logs\
 
 `Settings.json` обновляется через новый template + import старых пользовательских значений.
 
-Полный reset ProgramData — только отдельный explicit uninstall/reset.
+Historical `messages\` сохраняются; runtime их больше не использует.
+
+При обычном update/reinstall автоматического destructive cleanup ProgramData нет.
+Полное удаление ProgramData — только через явно подтверждённый destructive
+uninstall/reset/leftover-cleanup workflow.
 
 ---
 
@@ -298,22 +318,27 @@ client disk
 
 ## SVC-002
 
-Windows-служба остаётся под:
+Production portable package contract:
 
 ```text
-LocalSystem
+SearchEngineService runs as LocalSystem
+Portable installer показывает: Service account: LocalSystem
+user mapped drives не поддерживаются
 ```
 
-Не внедрять сейчас:
+Generic `scripts/Install-SearchEngineService.ps1` имеет `-Credential` /
+`-UseLocalSystem`; это не меняет production portable contract.
 
-- custom service accounts;
+Portable installer сейчас не внедряет:
+
+- custom service accounts в interactive portable flow;
 - service passwords;
 - `net use`;
 - user mapped drives;
 - `subst`;
 - UNC credentials.
 
-Installer/config diagnostics должны явно сообщать:
+Portable installer/config diagnostics должны явно сообщать:
 
 ```text
 Service account: LocalSystem
@@ -385,7 +410,7 @@ SVC-014 реализован (VERIFIED): historical slots 3..9 задокуме�
 `static_assert`/regression tests добавлены, unreachable legacy upload classes
 удалены. Контракт — `HANDOFF`, секция SVC-014.
 
-SVC-013 уже реализован как retirement legacy message queue. Для всех будущих
+SVC-013 реализован (VERIFIED): retirement legacy message queue. Для всех будущих
 этапов это обязательный контракт:
 
 - не воскрешать `MessageQueue`, `GetMessageCmd`, `SaveMessageCmd`;
