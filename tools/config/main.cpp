@@ -817,6 +817,31 @@ void canonicalizeBlock1LegacySettings(json& root)
     stripRetiredBlock1Fields(root);
 }
 
+void migrateBlock2IndexRootsAliases(json& root)
+{
+    if (!root.is_object()) {
+        return;
+    }
+    if (!root.contains("config") || !root["config"].is_object()) {
+        return;
+    }
+    json& config = root["config"];
+    if (!config.contains("index_roots") && config.contains("dirs")) {
+        config["index_roots"] = config["dirs"];
+    }
+    config.erase("dirs");
+    if (!config.contains("excluded_subtrees") && config.contains("exclude_dirs")) {
+        config["excluded_subtrees"] = config["exclude_dirs"];
+    }
+    config.erase("exclude_dirs");
+}
+
+void canonicalizeLegacySettings(json& root)
+{
+    stripRetiredBlock1Fields(root);
+    migrateBlock2IndexRootsAliases(root);
+}
+
 std::string withTrailingLf(std::string text)
 {
     if (text.empty() || text.back() != '\n') {
@@ -972,10 +997,18 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     requireAbsoluteLocalRoot("opis_base_dir");
     requireAbsoluteLocalRoot("f12_base_dir");
 
-    if (!config.contains("dirs") || !config["dirs"].is_array() ||
-        config["dirs"].empty())
+    if (!config.contains("index_roots") || !config["index_roots"].is_array() ||
+        config["index_roots"].empty())
     {
-        errors.emplace_back("config.dirs must be a non-empty array");
+        errors.emplace_back("config.index_roots must be a non-empty array");
+    }
+    if (config.contains("dirs")) {
+        errors.emplace_back(
+            "config.dirs is retired; use config.index_roots");
+    }
+    if (config.contains("exclude_dirs")) {
+        errors.emplace_back(
+            "config.exclude_dirs is retired; use config.excluded_subtrees");
     }
     if (!config.contains("extensions") ||
         !config["extensions"].is_array() || config["extensions"].empty())
@@ -1093,8 +1126,8 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
 
-    // Element type checks for dirs and extensions (already checked non-empty above).
-    for (const char* arrField : {"dirs", "extensions"}) {
+    // Element type checks for index_roots and extensions.
+    for (const char* arrField : {"index_roots", "extensions"}) {
         if (config.contains(arrField) && config[arrField].is_array()) {
             for (const auto& el : config[arrField]) {
                 if (!el.is_string()) {
@@ -1106,14 +1139,42 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
 
-    // exclude_dirs: if present must be array of strings.
-    if (config.contains("exclude_dirs")) {
-        if (!config["exclude_dirs"].is_array()) {
-            errors.emplace_back("config.exclude_dirs must be an array");
+    if (config.contains("index_roots") && config["index_roots"].is_array()) {
+        for (const auto& el : config["index_roots"]) {
+            if (!el.is_string()) {
+                continue;
+            }
+            const auto& value = el.get_ref<const std::string&>();
+            if (value.empty()) {
+                errors.emplace_back(
+                    "config.index_roots must contain non-empty strings");
+                break;
+            }
+            if (!isAbsoluteWindowsLocalPath(value)) {
+                errors.emplace_back(
+                    "config.index_roots must contain absolute local Windows paths "
+                    "(UNC and relative paths are not supported)");
+                break;
+            }
+        }
+    }
+
+    // excluded_subtrees: if present must be array of strings.
+    if (config.contains("excluded_subtrees")) {
+        if (!config["excluded_subtrees"].is_array()) {
+            errors.emplace_back("config.excluded_subtrees must be an array");
         } else {
-            for (const auto& el : config["exclude_dirs"]) {
+            for (const auto& el : config["excluded_subtrees"]) {
                 if (!el.is_string()) {
-                    errors.emplace_back("config.exclude_dirs must contain only strings");
+                    errors.emplace_back(
+                        "config.excluded_subtrees must contain only strings");
+                    break;
+                }
+                const auto& value = el.get_ref<const std::string&>();
+                if (!value.empty() && !isAbsoluteWindowsLocalPath(value)) {
+                    errors.emplace_back(
+                        "config.excluded_subtrees must contain absolute local "
+                        "Windows paths (UNC and relative paths are not supported)");
                     break;
                 }
             }
@@ -1202,10 +1263,10 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         errors.emplace_back("config.sqlite_precount_postings must be boolean");
     }
 
-    if (checkDirectories && config.contains("dirs") &&
-        config["dirs"].is_array())
+    if (checkDirectories && config.contains("index_roots") &&
+        config["index_roots"].is_array())
     {
-        for (const auto& directory : config["dirs"]) {
+        for (const auto& directory : config["index_roots"]) {
             if (!directory.is_string() ||
                 !fs::is_directory(fs::u8path(directory.get<std::string>())))
             {
@@ -1274,7 +1335,9 @@ int validateCommand(const std::vector<std::wstring>& args)
     const fs::path settings = requiredOption(args, L"--settings");
     const bool checkDirectories =
         std::find(args.begin(), args.end(), L"--check-dirs") != args.end();
-    const auto errors = validateJson(readJson(settings), checkDirectories);
+    json root = readJson(settings);
+    canonicalizeLegacySettings(root);
+    const auto errors = validateJson(root, checkDirectories);
     for (const auto& error : errors) {
         std::cout << "error=" << error << '\n';
     }
@@ -1341,7 +1404,8 @@ int validatePrefixMapCommand(const std::vector<std::wstring>& args)
 
 int inspectCommand(const std::vector<std::wstring>& args)
 {
-    const json root = readJson(requiredOption(args, L"--settings"));
+    json root = readJson(requiredOption(args, L"--settings"));
+    canonicalizeLegacySettings(root);
     const auto errors = validateJson(root, false);
     if (!root.contains("config") || !root["config"].is_object()) {
         return validateCommand(args);
@@ -1440,7 +1504,7 @@ int configureCommand(const std::vector<std::wstring>& args)
     json result = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
         json imported = readJson(fs::path(*importPath));
-        canonicalizeBlock1LegacySettings(imported);
+        canonicalizeLegacySettings(imported);
         mergeJson(result, imported);
     }
     if (!result.contains("config") || !result["config"].is_object()) {
@@ -1478,7 +1542,7 @@ int configureCommand(const std::vector<std::wstring>& args)
         config["f12_base_dir"] = utf8(*value);
     }
 
-    stripRetiredBlock1Fields(result);
+    canonicalizeLegacySettings(result);
 
     const auto errors = validateJson(result, false);
     if (!errors.empty()) {
@@ -1626,7 +1690,7 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     json defaults = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
         json imported = readJson(fs::path(*importPath));
-        canonicalizeBlock1LegacySettings(imported);
+        canonicalizeLegacySettings(imported);
         mergeJson(defaults, imported);
     }
 

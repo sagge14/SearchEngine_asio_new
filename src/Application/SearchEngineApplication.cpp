@@ -76,8 +76,8 @@ void validateSettings(const search_server::Settings& settings)
     if (settings.port <= 0 || settings.port > 65535) {
         throw StartupError(ERROR_INVALID_DATA, "config.port is outside 1..65535");
     }
-    if (settings.dirs.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.dirs is empty");
+    if (settings.indexRoots.empty()) {
+        throw StartupError(ERROR_INVALID_DATA, "config.index_roots is empty");
     }
     if (settings.extensions.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.extensions is empty");
@@ -258,8 +258,9 @@ bool SearchEngineApplication::start()
 
         throwIfStopRequested();
         pending->dispatcher = std::make_unique<FileEventDispatcher>(
-            pending->settings.dirs,
+            pending->settings.indexRoots,
             pending->settings.extensions,
+            pending->settings.excludedSubtrees,
             pending->contexts->scheduler()
         );
         pending->scheduler =

@@ -5,6 +5,7 @@
 #include "FileEventDispatcher.h"
 #include "MyUtils/Encoding.h"
 #include "MyUtils/LogFile.h"
+#include "MyUtils/PathExclusion.h"
 #include <unordered_set>
 
 static const wchar_t* evtToStr(FileEvent e)
@@ -42,6 +43,12 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
         return;
     if (!matchByExtensions(path)) {
         LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+        return;
+    }
+    if (evt != FileEvent::Removed && evt != FileEvent::RenamedOld &&
+        path_exclusion::isPathExcluded(std::filesystem::path(path), excludedSubtrees_))
+    {
+        LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (excluded) path=" + path);
         return;
     }
     LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent " + std::wstring(evtToStr(evt)) + L" path=" + path);
@@ -109,13 +116,13 @@ void FileEventDispatcher::flushPending()
     }
 }
 
-void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
+void FileEventDispatcher::initWatchers(const std::vector<std::string>& _indexRoots)
 {
     /* parent-dir → множество имён нужных подпапок */
     std::unordered_map<std::wstring,
             std::unordered_set<std::wstring>> need;
 
-    for (const auto& d8 : _dirs)
+    for (const auto& d8 : _indexRoots)
     {
         std::filesystem::path p = encoding::utf8_to_wstring(d8);
         std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
@@ -140,13 +147,16 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
     }
 }
 
-FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& _dirs,
-                                         const std::vector<std::string>& _ext,
-                                         boost::asio::io_context& io) : io_(io), dirs_(_dirs), ext_(_ext)
+FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& indexRoots,
+                                         const std::vector<std::string>& extensions,
+                                         const std::vector<std::string>& excludedSubtrees,
+                                         boost::asio::io_context& io)
+        : io_(io)
+        , indexRoots_(indexRoots)
+        , ext_(extensions)
+        , excludedSubtrees_(excludedSubtrees)
 {
-
-    initWatchers(dirs_);
-
+    initWatchers(indexRoots_);
 }
 
 bool FileEventDispatcher::matchByExtensions(const std::wstring& path) const

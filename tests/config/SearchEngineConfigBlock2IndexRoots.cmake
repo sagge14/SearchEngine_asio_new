@@ -47,77 +47,13 @@ function(assert_json_key_present file label key)
 endfunction()
 
 # ------------------------------------------------------------------
-# E. Fresh template has no retired BLOCK-1 fields
+# dirs -> index_roots migration preserves user value over template default
 # ------------------------------------------------------------------
-foreach(retired IN ITEMS Name Version dir text_request save_dictionary_to_file hide_mode)
-    assert_json_key_absent("${TEMPLATE}" "release template" "${retired}")
-endforeach()
-assert_json_key_absent("${TEMPLATE}" "release template top-level" "Files")
-assert_json_key_present("${TEMPLATE}" "release template" "hide_console_window")
-
-# ------------------------------------------------------------------
-# C/D. Old install explicit update + unknown field preservation
-# ------------------------------------------------------------------
-set(old_settings "${TEST_ROOT}/old-installed.json")
-file(WRITE "${old_settings}" [=[{
+set(old_dirs_only "${TEST_ROOT}/old-dirs-only.json")
+file(WRITE "${old_dirs_only}" [=[{
   "config": {
-    "Name": "Server",
-    "Version": "1.1",
-    "dir": "D:\\",
-    "hide_mode": true,
-    "text_request": false,
-    "save_dictionary_to_file": false,
-    "year": "2025",
-    "dirs": ["D:\\KEEP_ME"],
-    "extensions": ["txt"],
-    "prm_base_dir": "",
-    "prd_base_dir": "",
-    "tlg_send_root": "D:\\",
-    "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
-    "opis_base_dir": "D:\\OPIS_ADMIN",
-    "f12_base_dir": "D:\\F12",
-    "thread_count": 4,
-    "file_indexing_timeout_sec": 120,
-    "my_future_field": 123
-  },
-  "Files": ["D:\\a.txt"],
-  "custom_section": { "abc": true }
-}]=])
-
-set(configured "${TEST_ROOT}/configured-from-old.json")
-run_configure("${configured}" "${old_settings}")
-
-foreach(retired IN ITEMS Name Version dir text_request save_dictionary_to_file hide_mode)
-    assert_json_key_absent("${configured}" "configured output" "${retired}")
-endforeach()
-assert_json_key_absent("${configured}" "configured output top-level" "Files")
-assert_json_key_present("${configured}" "configured output" "hide_console_window")
-
-file(READ "${configured}" configured_content)
-if(NOT configured_content MATCHES "\"hide_console_window\"[ \t]*:[ \t]*true")
-    message(FATAL_ERROR "hide_mode=true was not migrated to hide_console_window=true")
-endif()
-if(NOT configured_content MATCHES "KEEP_ME")
-    message(FATAL_ERROR "legacy dirs value was not migrated to index_roots")
-endif()
-assert_json_key_absent("${configured}" "configured output" "dirs")
-if(NOT configured_content MATCHES "\"my_future_field\"[ \t]*:[ \t]*123")
-    message(FATAL_ERROR "unknown config field was lost during configure")
-endif()
-if(NOT configured_content MATCHES "\"custom_section\"")
-    message(FATAL_ERROR "unknown top-level section was lost during configure")
-endif()
-
-# ------------------------------------------------------------------
-# Conflict: hide_console_window wins over hide_mode
-# ------------------------------------------------------------------
-set(conflict_settings "${TEST_ROOT}/conflict-installed.json")
-file(WRITE "${conflict_settings}" [=[{
-  "config": {
-    "hide_console_window": false,
-    "hide_mode": true,
     "year": "2026",
-    "dirs": ["D:\\TEST"],
+    "dirs": ["E:\\CUSTOM"],
     "extensions": ["txt"],
     "prm_base_dir": "",
     "prd_base_dir": "",
@@ -130,17 +66,85 @@ file(WRITE "${conflict_settings}" [=[{
   }
 }]=])
 
-set(conflict_output "${TEST_ROOT}/configured-conflict.json")
+set(configured_dirs "${TEST_ROOT}/configured-dirs-only.json")
+run_configure("${configured_dirs}" "${old_dirs_only}")
+
+assert_json_key_present("${configured_dirs}" "configured output" "index_roots")
+assert_json_key_absent("${configured_dirs}" "configured output" "dirs")
+file(READ "${configured_dirs}" configured_dirs_content)
+if(NOT configured_dirs_content MATCHES "CUSTOM")
+    message(FATAL_ERROR "legacy dirs value was not migrated to index_roots")
+endif()
+if(configured_dirs_content MATCHES "\"dirs\"")
+    message(FATAL_ERROR "legacy dirs key was not removed")
+endif()
+
+# ------------------------------------------------------------------
+# canonical index_roots wins over legacy dirs
+# ------------------------------------------------------------------
+set(conflict_settings "${TEST_ROOT}/conflict-index-roots.json")
+file(WRITE "${conflict_settings}" [=[{
+  "config": {
+    "year": "2026",
+    "dirs": ["D:\\OLD"],
+    "index_roots": ["D:\\NEW"],
+    "extensions": ["txt"],
+    "prm_base_dir": "",
+    "prd_base_dir": "",
+    "tlg_send_root": "D:\\",
+    "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
+    "opis_base_dir": "D:\\OPIS_ADMIN",
+    "f12_base_dir": "D:\\F12",
+    "thread_count": 4,
+    "file_indexing_timeout_sec": 120
+  }
+}]=])
+
+set(conflict_output "${TEST_ROOT}/configured-conflict-index-roots.json")
 run_configure("${conflict_output}" "${conflict_settings}")
 
 file(READ "${conflict_output}" conflict_content)
-if(NOT conflict_content MATCHES "\"hide_console_window\"[ \t]*:[ \t]*false")
-    message(FATAL_ERROR "hide_console_window=false did not win over hide_mode=true")
+if(NOT conflict_content MATCHES "NEW")
+    message(FATAL_ERROR "index_roots did not win over legacy dirs")
 endif()
-assert_json_key_absent("${conflict_output}" "conflict output" "hide_mode")
+if(conflict_content MATCHES "OLD")
+    message(FATAL_ERROR "legacy dirs value leaked into configured output")
+endif()
+assert_json_key_absent("${conflict_output}" "conflict output" "dirs")
+
+# ------------------------------------------------------------------
+# exclude_dirs -> excluded_subtrees migration
+# ------------------------------------------------------------------
+set(old_exclude "${TEST_ROOT}/old-exclude-dirs.json")
+file(WRITE "${old_exclude}" [=[{
+  "config": {
+    "year": "2026",
+    "dirs": ["D:\\DATA"],
+    "exclude_dirs": ["D:\\DATA\\TEMP"],
+    "extensions": ["txt"],
+    "prm_base_dir": "",
+    "prd_base_dir": "",
+    "tlg_send_root": "D:\\",
+    "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
+    "opis_base_dir": "D:\\OPIS_ADMIN",
+    "f12_base_dir": "D:\\F12",
+    "thread_count": 4,
+    "file_indexing_timeout_sec": 120
+  }
+}]=])
+
+set(configured_exclude "${TEST_ROOT}/configured-exclude-dirs.json")
+run_configure("${configured_exclude}" "${old_exclude}")
+
+assert_json_key_present("${configured_exclude}" "configured output" "excluded_subtrees")
+assert_json_key_absent("${configured_exclude}" "configured output" "exclude_dirs")
+file(READ "${configured_exclude}" configured_exclude_content)
+if(NOT configured_exclude_content MATCHES "TEMP")
+    message(FATAL_ERROR "exclude_dirs value was not migrated to excluded_subtrees")
+endif()
 
 execute_process(
-    COMMAND "${CONFIG_EXE}" validate --settings "${configured}"
+    COMMAND "${CONFIG_EXE}" validate --settings "${configured_dirs}"
     RESULT_VARIABLE validate_rc
     OUTPUT_VARIABLE validate_out
     ERROR_VARIABLE validate_err
@@ -151,4 +155,4 @@ if(NOT validate_rc EQUAL 0 OR NOT validate_out MATCHES "settings_valid=1")
         "out=${validate_out} err=${validate_err}")
 endif()
 
-message(STATUS "SearchEngineConfigBlock1Legacy: all checks passed")
+message(STATUS "SearchEngineConfigBlock2IndexRoots: all checks passed")

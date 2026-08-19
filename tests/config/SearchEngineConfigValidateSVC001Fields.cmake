@@ -179,16 +179,16 @@ write_json_with_field("${template_json}" "${f}" "compact_threshold_percent" "150
 assert_validate("compact_threshold_percent over 100" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 16. Missing dirs without --check-dirs -> PASS
+# 16. Missing index_roots on disk without --check-dirs -> PASS
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/missing-dirs.json")
+set(f "${TEST_ROOT}/missing-index-roots.json")
 string(REGEX REPLACE
-    "(\"dirs\"[ \t]*:[ \t]*\\[)[^\\]]*\\]"
+    "(\"index_roots\"[ \t]*:[ \t]*\\[)[^\\]]*\\]"
     "\\1\"/nonexistent/path/for/test\"]"
-    no_dirs_json
+    no_index_roots_json
     "${template_json}")
-file(WRITE "${f}" "${no_dirs_json}")
-assert_validate("missing dirs without --check-dirs" "${f}" TRUE)
+file(WRITE "${f}" "${no_index_roots_json}")
+assert_validate("missing index_roots without --check-dirs" "${f}" TRUE)
 
 # ------------------------------------------------------------------
 # 17. Valid positive max_parallel_readers -> PASS
@@ -279,9 +279,9 @@ set(compact_base [=[{
     "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1,
     "compact_threshold_percent": 5.0,
-    "dirs": ["D:\\TEST"],
+    "index_roots": ["D:\\TEST"],
     "exact_search": true,
-    "exclude_dirs": [],
+    "excluded_subtrees": [],
     "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120,
@@ -318,11 +318,11 @@ file(WRITE "${f}" "${compact_base}")
 assert_validate("settings without Name" "${f}" TRUE)
 
 # ------------------------------------------------------------------
-# 22. dirs containing a number element -> FAIL
+# 22. index_roots containing a number element -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-dirs-element.json")
-write_json_with_field("${compact_base}" "${f}" "dirs" "[\"D:\\\\TEST\", 42]")
-assert_validate("dirs element is number" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-index-roots-element.json")
+write_json_with_field("${compact_base}" "${f}" "index_roots" "[\"D:\\\\TEST\", 42]")
+assert_validate("index_roots element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
 # 23. extensions containing a number element -> FAIL
@@ -332,18 +332,18 @@ write_json_with_field("${compact_base}" "${f}" "extensions" "[\"txt\", 99]")
 assert_validate("extensions element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 24. exclude_dirs as a plain string (not array) -> FAIL
+# 24. excluded_subtrees as a plain string (not array) -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exclude-dirs-string.json")
-write_json_with_field("${compact_base}" "${f}" "exclude_dirs" "\"oops\"")
-assert_validate("exclude_dirs as string not array" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-excluded-subtrees-string.json")
+write_json_with_field("${compact_base}" "${f}" "excluded_subtrees" "\"oops\"")
+assert_validate("excluded_subtrees as string not array" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 25. exclude_dirs containing a number element -> FAIL
+# 25. excluded_subtrees containing a number element -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exclude-dirs-element.json")
-write_json_with_field("${compact_base}" "${f}" "exclude_dirs" "[\"C:/ok\", 123]")
-assert_validate("exclude_dirs element is number" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-excluded-subtrees-element.json")
+write_json_with_field("${compact_base}" "${f}" "excluded_subtrees" "[\"C:/ok\", 123]")
+assert_validate("excluded_subtrees element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
 # 26. Retired top-level Files with invalid type -> PASS (legacy ignored)
@@ -353,8 +353,8 @@ set(legacy_files_str [=[{"Files": "oops", "config": {
     "asio_port": 15006,
     "batch_indexer_threads": 0, "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1, "compact_threshold_percent": 5.0,
-    "dirs": ["D:\\TEST"], "exact_search": true,
-    "exclude_dirs": [], "extensions": ["txt"],
+    "index_roots": ["D:\\TEST"], "exact_search": true,
+    "excluded_subtrees": [], "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120, "full_index_strategy": "batch",
     "document_catalog_storage": "memory", "hide_console_window": false,
@@ -378,8 +378,8 @@ set(legacy_files_el_str [=[{"Files": ["ok.txt", 42], "config": {
     "asio_port": 15006,
     "batch_indexer_threads": 0, "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1, "compact_threshold_percent": 5.0,
-    "dirs": ["D:\\TEST"], "exact_search": true,
-    "exclude_dirs": [], "extensions": ["txt"],
+    "index_roots": ["D:\\TEST"], "exact_search": true,
+    "excluded_subtrees": [], "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120, "full_index_strategy": "batch",
     "document_catalog_storage": "memory", "hide_console_window": false,

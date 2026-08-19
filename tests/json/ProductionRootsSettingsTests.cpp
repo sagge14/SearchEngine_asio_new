@@ -59,7 +59,7 @@ namespace
             {"config",
              {
                  {"year", "2026"},
-                 {"dirs", nh::json::array({"D:\\JANUARY"})},
+                 {"index_roots", nh::json::array({"D:\\JANUARY"})},
                  {"extensions", nh::json::array({"txt"})},
                  {"prm_base_dir", ""},
                  {"prd_base_dir", ""}
@@ -74,7 +74,7 @@ TEST(ProductionRootsSettingsTest, CustomValuesRoundtrip)
     const fs::path settingsPath = temporary.path() / "Settings.json";
     search_server::Settings original;
     original.year = "2026";
-    original.dirs = {"D:\\JANUARY"};
+    original.indexRoots = {"D:\\JANUARY"};
     original.extensions = {"txt"};
     original.prm_base_dir = "";
     original.prd_base_dir = "";

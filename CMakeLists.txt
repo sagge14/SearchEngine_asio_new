@@ -1062,7 +1062,9 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaWay/GetTelegaWayCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
+            "${PROJECT_SOURCE_DIR}/src/MyUtils/FileScanner.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
+            "${PROJECT_SOURCE_DIR}/src/MyUtils/PathExclusion.cpp"
             "${PROJECT_SOURCE_DIR}/src/SQLite/SQLiteConnectionManager.cpp"
             "${PROJECT_SOURCE_DIR}/src/SQLite/mySQLite.cpp"
             "${PROJECT_SOURCE_DIR}/src/Utils/portable_binary_iarchive.cpp"
@@ -1223,5 +1225,15 @@ if(TARGET SearchEngineConfig)
             "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-block1-legacy-test"
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock1Legacy.cmake"
+    )
+    add_test(
+            NAME SearchEngineConfigBlock2IndexRoots_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-block2-index-roots-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock2IndexRoots.cmake"
     )
 endif()

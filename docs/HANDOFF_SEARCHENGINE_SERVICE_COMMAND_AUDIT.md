@@ -562,8 +562,8 @@ GET_ATTACHMENTS: not configured
    - `sqlite_precount_postings`: boolean.
    - `exact_search`, `hide_mode`, `text_request`, `save_dictionary_to_file`: boolean.
    - `config.Version`, `config.dir`: string если присутствует.
-   - `config.dirs`, `config.extensions`: non-empty array of strings (проверяются элементы).
-   - `config.exclude_dirs`: array of strings если присутствует (проверяется контейнер и элементы).
+   - `config.index_roots`, `config.extensions`: non-empty array of strings (проверяются элементы). Legacy alias при чтении/upgrade: `config.dirs`.
+   - `config.excluded_subtrees`: array of strings если присутствует (проверяется контейнер и элементы). Legacy alias: `config.exclude_dirs`.
    - `Files` (top-level): array of strings если присутствует.
    - Port precedence: `port` предпочтительнее `asio_port` (соответствует runtime).
 

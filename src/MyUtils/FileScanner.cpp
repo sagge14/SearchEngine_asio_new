@@ -1,6 +1,7 @@
 #include "FileScanner.h"
 #include "Encoding.h"
 #include "LogFile.h"
+#include "PathExclusion.h"
 #include <mutex>
 #include <cwctype>
 
@@ -52,7 +53,7 @@ namespace
 std::list<std::wstring>
 FileScanner::scanDirectory(const std::string& dir,
                            const std::vector<std::string>& extensions,
-                           const std::vector<std::string>& excludeDirs)
+                           const std::vector<std::string>& excludedSubtrees)
 {
     std::list<std::wstring> out;
     fs::path root = fs::u8path(dir);
@@ -79,20 +80,15 @@ FileScanner::scanDirectory(const std::string& dir,
         }
 
         const auto& de = *it;
+        const fs::path currentPath = de.path();
 
         if (de.is_directory(ec))
         {
             if (ec) { ec.clear(); continue; }
 
-            const std::wstring wDir = de.path().wstring();
-
-            for (const auto& exclUtf8 : excludeDirs)
+            if (path_exclusion::isPathExcluded(currentPath, excludedSubtrees))
             {
-                if (wDir.find(fs::u8path(exclUtf8).wstring()) != std::wstring::npos)
-                {
-                    it.disable_recursion_pending();
-                    break;
-                }
+                it.disable_recursion_pending();
             }
             continue;
         }
@@ -103,6 +99,11 @@ FileScanner::scanDirectory(const std::string& dir,
             continue;
         }
 
+        if (path_exclusion::isPathExcluded(currentPath, excludedSubtrees))
+        {
+            continue;
+        }
+
         auto size = de.file_size(ec);
         if (ec || size < 10)
         {
@@ -110,11 +111,11 @@ FileScanner::scanDirectory(const std::string& dir,
             continue;
         }
 
-        const std::wstring fname = de.path().filename().wstring();
+        const std::wstring fname = currentPath.filename().wstring();
         if (!matchExtension(fname, extensions))
             continue;
 
-        out.push_back(de.path().wstring());
+        out.push_back(currentPath.wstring());
     }
 
     return out;
@@ -122,15 +123,15 @@ FileScanner::scanDirectory(const std::string& dir,
 
 
 std::vector<std::wstring>
-FileScanner::scanDirectories(const std::vector<std::string>& dirs,
+FileScanner::scanDirectories(const std::vector<std::string>& indexRoots,
                              const std::vector<std::string>& extensions,
-                             const std::vector<std::string>& excludeDirs)
+                             const std::vector<std::string>& excludedSubtrees)
 {
     std::vector<std::wstring> result;
 
-    for (const auto& dir : dirs)
+    for (const auto& dir : indexRoots)
     {
-        auto list = scanDirectory(dir, extensions, excludeDirs);
+        auto list = scanDirectory(dir, extensions, excludedSubtrees);
 
         result.insert(result.end(),
                       std::make_move_iterator(list.begin()),

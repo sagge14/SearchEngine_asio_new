@@ -112,9 +112,9 @@ namespace search_server {
         int port = 15001;
         size_t indTime{};
         int maxResponse = 30;
-        std::vector<std::string> dirs;
+        std::vector<std::string> indexRoots;
         std::vector<std::string> extensions;
-        std::vector<std::string> excludeDirs;
+        std::vector<std::string> excludedSubtrees;
         double compactThresholdPercent = 5.0;  // Порог для compact (%)
         /// Запускать полный scan/updateStep сразу после старта (после загрузки словаря).
         /// false = только по таймеру ind_time.

@@ -14,7 +14,9 @@ public:
 
     using CommandMap = std::unordered_map<FileEvent, std::unique_ptr<IFileEventCommand>>;
 
-    explicit FileEventDispatcher(const std::vector<std::string>& dirs, const std::vector<std::string>& ext,
+    explicit FileEventDispatcher(const std::vector<std::string>& indexRoots,
+                                 const std::vector<std::string>& extensions,
+                                 const std::vector<std::string>& excludedSubtrees,
                                  boost::asio::io_context& io);
     void flushPending();
 
@@ -32,11 +34,12 @@ private:
     };
 
     [[nodiscard]] bool matchByExtensions(const std::wstring& path) const;
-    void initWatchers(const std::vector<std::string>& dirs);
+    void initWatchers(const std::vector<std::string>& indexRoots);
     void pushFileEvent(FileEvent evt,  const std::wstring& path);
 
-    std::vector<std::string> dirs_;
+    std::vector<std::string> indexRoots_;
     std::vector<std::string> ext_;
+    std::vector<std::string> excludedSubtrees_;
     std::unordered_map<size_t, EventState> evtMap_;
     std::queue<size_t> pendingQ_;
     std::mutex mtx_;

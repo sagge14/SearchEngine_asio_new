@@ -356,7 +356,7 @@ restart и задаёт длительный preshutdown timeout. Firewall не 
 
 Для сетевых каталогов используйте UNC, а не mapped drive. Аккаунту нужны:
 
-- Read/List/Traverse и `ReadDirectoryChangesW` для всех `config.dirs`;
+- Read/List/Traverse и `ReadDirectoryChangesW` для всех `config.index_roots` (legacy alias: `config.dirs`);
 - доступ к PRM/PRD/F12 и прочим путям бизнес-команд;
 - Create/Write/Delete/Rename в data-dir;
 - сетевые права и Kerberos/SMB-доступ, если используются UNC-пути.

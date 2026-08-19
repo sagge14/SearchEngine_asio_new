@@ -162,8 +162,15 @@ $oemPath = Resolve-RequiredPath $oemPath Leaf
 
 $settings = Read-JsonFile $settingsPath
 $config = $settings.config
+$indexRoots = if ($config.index_roots) {
+    @($config.index_roots)
+} elseif ($config.dirs) {
+    @($config.dirs)
+} else {
+    @()
+}
 if (-not $config -or -not $config.year -or
-    -not $config.dirs -or $config.dirs.Count -eq 0 -or
+    $indexRoots.Count -eq 0 -or
     -not $config.extensions -or $config.extensions.Count -eq 0) {
     throw "Settings.json is missing required config fields: $settingsPath"
 }
@@ -188,7 +195,7 @@ if ($AddFirewallRule -and
     throw "Firewall rule already exists: $firewallRuleName"
 }
 
-foreach ($configuredPath in @($config.dirs)) {
+foreach ($configuredPath in @($indexRoots)) {
     if (Test-MappedDrivePath ([string]$configuredPath)) {
         throw "Mapped drives are not visible to services: $configuredPath. Use a local path or UNC path."
     }

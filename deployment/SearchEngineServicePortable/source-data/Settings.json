@@ -5,7 +5,7 @@
     "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1,
     "compact_threshold_percent": 5.0,
-    "dirs": [
+    "index_roots": [
       "D:\\ЯНВАРЬ",
       "D:\\ФЕВРАЛЬ",
       "D:\\МАРТ",
@@ -21,7 +21,7 @@
       "D:\\TLG"
     ],
     "exact_search": true,
-    "exclude_dirs": [],
+    "excluded_subtrees": [],
     "extensions": [
       "txt",
       "atl",

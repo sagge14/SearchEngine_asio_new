@@ -561,9 +561,9 @@ void search_server::SearchServer::updateStep()
     addToLog("updateStep() → scan start");
 
     const std::vector<std::wstring> scannedPaths = FileScanner::scanDirectories(
-            settings.dirs,
+            settings.indexRoots,
             settings.extensions,
-            settings.excludeDirs
+            settings.excludedSubtrees
     );
 
     addToLog("updateStep() → scan done, files=" +

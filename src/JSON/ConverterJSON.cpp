@@ -51,11 +51,11 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["asio_port"] = val.port;
     jsonSettings["config"]["ind_time"] = val.indTime;
     jsonSettings["config"]["exact_search"] = val.exactSearch;
-    jsonSettings["config"]["dirs"] = val.dirs;
+    jsonSettings["config"]["index_roots"] = val.indexRoots;
     jsonSettings["config"]["extensions"] = val.extensions;
     jsonSettings["config"]["year"] = val.year;
     jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
-    jsonSettings["config"]["exclude_dirs"] = val.excludeDirs;
+    jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
     jsonSettings["config"]["tlg_send_root"] = val.tlg_send_root;
@@ -145,11 +145,18 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         }
 
         // === КРИТИЧЕСКИЕ ПОЛЯ (обязательные) ===
-        // dirs - директории для индексации (не могут быть пустыми)
-        if (config.contains("dirs") && config["dirs"].is_array() && !config["dirs"].empty()) {
-            config.at("dirs").get_to(s.dirs);
+        // index_roots (legacy dirs alias) — корни рекурсивной индексации
+        const bool hasIndexRoots = config.contains("index_roots") &&
+            config["index_roots"].is_array() && !config["index_roots"].empty();
+        const bool hasLegacyDirs = config.contains("dirs") &&
+            config["dirs"].is_array() && !config["dirs"].empty();
+        if (hasIndexRoots) {
+            config.at("index_roots").get_to(s.indexRoots);
+        } else if (hasLegacyDirs) {
+            config.at("dirs").get_to(s.indexRoots);
+            needsResave = true;
         } else {
-            criticalErrors.push_back("config.dirs (must be non-empty array)");
+            criticalErrors.push_back("config.index_roots (must be non-empty array)");
         }
 
         // extensions - расширения файлов (не могут быть пустыми)
@@ -248,11 +255,16 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // exclude_dirs
-        if (config.contains("exclude_dirs")) {
-            config.at("exclude_dirs").get_to(s.excludeDirs);
+        // excluded_subtrees (legacy exclude_dirs alias)
+        const bool hasExcludedSubtrees = config.contains("excluded_subtrees");
+        const bool hasLegacyExcludeDirs = config.contains("exclude_dirs");
+        if (hasExcludedSubtrees) {
+            config.at("excluded_subtrees").get_to(s.excludedSubtrees);
+        } else if (hasLegacyExcludeDirs) {
+            config.at("exclude_dirs").get_to(s.excludedSubtrees);
+            needsResave = true;
         } else {
-            addedFields.push_back("config.exclude_dirs");
+            addedFields.push_back("config.excluded_subtrees");
             needsResave = true;
         }
 
