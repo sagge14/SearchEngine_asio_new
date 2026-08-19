@@ -173,6 +173,13 @@ if errorlevel 1 (
     goto :CLEANUP_TEMPS_ERR
 )
 
+rem --- Step 3b: Pretty-format temp copy once for Notepad readability ---
+"%HELPER%" format-json --settings "%EDIT_TEMP%"
+if errorlevel 1 (
+    echo ERROR: Cannot format Settings.json because the temporary copy contains invalid JSON.
+    goto :CLEANUP_TEMPS_ERR
+)
+
 rem --- Step 4: Open temp file for editing; loop until valid ---
 :EDIT_LOOP
 notepad.exe "%EDIT_TEMP%"

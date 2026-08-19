@@ -415,13 +415,17 @@ Workflow (требует Administrator):
 2. Автоматически получает фактический `data-dir` из SCM ImagePath через
    `SearchEngineConfig inspect-installed` — не зависит от `%ProgramData%`.
    Разрешает relative `--data-dir` относительно каталога EXE.
-3. Открывает временную копию `Settings.json` в Notepad; валидирует перед применением.
-4. Останавливает службу (ожидание до 1800 секунд).
-5. Атомарно заменяет `Settings.json` (и `client-endpoint.txt` при изменении порта)
+3. Копирует active `Settings.json` во временный файл; временная копия
+   pretty-format (4-space indent) для удобного чтения в Notepad перед
+   редактированием. Production `Settings.json` не изменяется до validation
+   и подтверждённого apply.
+4. Открывает временную копию `Settings.json` в Notepad; валидирует перед применением.
+5. Останавливает службу (ожидание до 1800 секунд).
+6. Атомарно заменяет `Settings.json` (и `client-endpoint.txt` при изменении порта)
    через `settings-transaction-apply`.
-6. Обновляет правило брандмауэра (если требуется). Failure прерывает apply.
-7. Запускает службу, проверяет `RUNNING` + PING/PONG на новом порту.
-8. При успехе: `settings-transaction-commit` удаляет rollback-dir.
+7. Обновляет правило брандмауэра (если требуется). Failure прерывает apply.
+8. Запускает службу, проверяет `RUNNING` + PING/PONG на новом порту.
+9. При успехе: `settings-transaction-commit` удаляет rollback-dir.
 
 **Rollback contract (при любом failure после apply):**
 - Файлы восстанавливаются **только** после подтверждённого SCM state = STOPPED.
