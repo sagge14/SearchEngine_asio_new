@@ -415,7 +415,7 @@ Assert-True ($configureText.Contains('--purpose configure')) (
     '9. Configure-SearchEngineService.bat passes --purpose configure to picker'
 )
 
-# 9a. SVC-001 configure picker: Register BAT parity and Win7 chcp regression.
+# 9a. SVC-001 configure picker: common installed-instance selection (Register BAT parity).
 Assert-True ($configureText.Contains('if errorlevel 3 goto :PICKER_NO_INSTALLED')) (
     '9a. Configure picker distinguishes helper exit code 3 (no installed services)'
 )
@@ -475,6 +475,19 @@ Assert-True (-not $configureText.Contains('2026-prd')) (
 )
 Assert-True (-not $configureText.Contains('2026-prm')) (
     '9a. Configure-SearchEngineService.bat does not hardcode instance 2026-prm'
+)
+Assert-True (-not $configureText.Contains('Windows 7')) (
+    '9a. Configure-SearchEngineService.bat has no Windows 7-specific picker branch'
+)
+Assert-True (-not $configureText.Contains('win7')) (
+    '9a. Configure-SearchEngineService.bat has no win7-specific picker branch'
+)
+Assert-True (-not $configureText.Contains('6.1')) (
+    '9a. Configure-SearchEngineService.bat has no version 6.1 OS gate'
+)
+$osBranchPattern = '(?im)^\s*ver(\s|$)|Windows\s*7|win7|OSVERSION|wmic\s+os'
+Assert-True (-not [regex]::IsMatch($configureText, $osBranchPattern)) (
+    '9a. Configure-SearchEngineService.bat has no OS-version-specific picker branching'
 )
 
 Assert-True ($configureText.Contains('ROLLBACK_DO_FILES')) (
