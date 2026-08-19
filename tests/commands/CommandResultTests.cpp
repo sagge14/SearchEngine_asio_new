@@ -277,3 +277,21 @@ TEST(TypedMapping, ErrorResponsePreservesSpecificCode)
             static_cast<std::uint32_t>(error));
     }
 }
+
+TEST(GetBinFileDisabled, InvalidCommandKeepsTypedAndLegacyContracts)
+{
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GETBINFILE));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::FILETEXT));
+    EXPECT_EQ(
+        asio_server::legacyErrorCommand(command_execution::ErrorCode::InvalidCommand),
+        COMMAND::SOMEERROR);
+
+    const auto typed = asio_server::makeTypedErrorResponse(
+        command_execution::ErrorCode::InvalidCommand);
+    EXPECT_EQ(
+        typed.version,
+        asio_server::search_protocol::ERROR_RESPONSE_VERSION);
+    EXPECT_EQ(
+        typed.errorCode,
+        static_cast<std::uint32_t>(command_execution::ErrorCode::InvalidCommand));
+}

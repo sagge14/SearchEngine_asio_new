@@ -146,4 +146,12 @@ command_execution::CommandResult GetFileCmd::downloadFileResultByPath(
     return command_execution::CommandResult::success(std::move(fileContent));
 }
 
+command_execution::CommandResult GetFileCmd::rejectRawBinFileDownload(
+    const std::vector<uint8_t>& requestData)
+{
+    (void)requestData;
+    return command_execution::CommandResult::failure(
+        command_execution::ErrorCode::InvalidCommand,
+        "GETBINFILE raw-path download is disabled");
+}
 

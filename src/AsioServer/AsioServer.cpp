@@ -495,62 +495,14 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
 
         if (requestHeader.command == COMMAND::GETBINFILE)
         {
-            // answer содержит путь к файлу (в виде std::vector<BYTE>, но это строка пути)
-            std::string pathStr(requestData.begin(), requestData.end());
-            personalRequest.request = pathStr;
-            std::filesystem::path file_path(pathStr);
-
-            std::error_code fileError;
-            const bool fileExists = std::filesystem::exists(file_path, fileError);
-            if (fileError) {
-                co_await queueError(
-                    command_execution::ErrorCode::FileMetadataFailed,
-                    fileError.message(),
-                    false,
-                    requestHeader.command);
-                co_return;
-            }
-            if (!fileExists) {
-                co_await queueError(
-                    command_execution::ErrorCode::FileNotFound,
-                    file_path.string(),
-                    false,
-                    requestHeader.command);
-                co_return;
-            }
-
-            auto fileStream = std::make_shared<std::ifstream>(
-                file_path,
-                std::ios::binary);
-            if (!fileStream->is_open()) {
-                co_await queueError(
-                    command_execution::ErrorCode::FileOpenFailed,
-                    file_path.string(),
-                    false,
-                    requestHeader.command);
-                co_return;
-            }
-
-            fileStream->seekg(0, std::ios::end);
-            const auto endPosition = fileStream->tellg();
-            const auto endOffset = static_cast<std::streamoff>(endPosition);
-            fileStream->seekg(0, std::ios::beg);
-            if (endOffset < 0 || !*fileStream) {
-                co_await queueError(
-                    command_execution::ErrorCode::FileMetadataFailed,
-                    file_path.string(),
-                    false,
-                    requestHeader.command);
-                co_return;
-            }
-
-            requestHeader.size = static_cast<uint_fast64_t>(endOffset);
-
-            co_await write_channel_.async_send(
-                ec,
-                WriteItem{FileTransfer{requestHeader, std::move(fileStream)}},
-                boost::asio::use_awaitable);
-            responseQueued = true;
+            const auto rejected = GetFileCmd::rejectRawBinFileDownload(requestData);
+            co_await queueError(
+                rejected.error.value_or(
+                    command_execution::ErrorCode::InvalidCommand),
+                std::move(rejected.diagnostic),
+                false,
+                requestHeader.command);
+            co_return;
         }
         else if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
                  requestHeader.command == COMMAND::GET_TELEGA_TEXT)
@@ -865,7 +817,6 @@ void asio_server::Interface::setSearchServer(
     cmdMap[COMMAND::LOAD_RAZN] =
         std::make_unique<SaveFileDefaultCmd>(paths.razn_output_dir);
     cmdMap[COMMAND::FILETEXT] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileResultByPath(v);});
-    cmdMap[COMMAND::GETBINFILE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileResultByPath(v);});
     cmdMap[COMMAND::GET_VH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaVhCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaIshCmd>();
     cmdMap[COMMAND::GETSQLJSONANSWEAR] = std::make_unique<GetSqlJsonAnswearCmd>(searchServer_);

@@ -26,6 +26,8 @@ public:
         const std::string& data);
     [[nodiscard]] static command_execution::CommandResult downloadFileResultByPath(
         const std::filesystem::path& filePath);
+    [[nodiscard]] static command_execution::CommandResult rejectRawBinFileDownload(
+        const std::vector<uint8_t>& requestData);
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
     [[nodiscard]] command_execution::CommandResult executeResult(
         const std::vector<uint8_t>& data) override;
