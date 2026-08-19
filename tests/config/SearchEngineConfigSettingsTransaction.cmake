@@ -247,4 +247,52 @@ if(NOT commit2_rc EQUAL 0)
 endif()
 
 message(STATUS "Settings-only apply/commit: OK")
+
+# ---------------------------------------------------------------
+# Step 5: Negative scenario — rollback with corrupt/missing snapshot
+# Apply succeeds; then delete the Settings snapshot to simulate
+# a partially-corrupt rollback-dir; rollback must fail (non-zero).
+# Rollback-dir must NOT be cleaned up by the helper on failure.
+# ---------------------------------------------------------------
+set(rollback_dir3 "${TEST_ROOT}/rollback3")
+file(WRITE "${data_dir}/Settings.json" "${old_settings_content}")
+
+execute_process(
+    COMMAND "${CONFIG_EXE}" settings-transaction-apply
+        --data-dir "${data_dir}"
+        --settings-temp "${TEST_ROOT}/new-settings.json"
+        --rollback-dir "${rollback_dir3}"
+    RESULT_VARIABLE apply3_rc TIMEOUT 30)
+if(NOT apply3_rc EQUAL 0)
+    message(FATAL_ERROR "Negative-scenario apply failed unexpectedly (rc=${apply3_rc})")
+endif()
+
+# Corrupt the rollback-dir by removing the snapshot
+file(REMOVE "${rollback_dir3}/Settings.json.snapshot")
+
+execute_process(
+    COMMAND "${CONFIG_EXE}" settings-transaction-rollback
+        --data-dir "${data_dir}"
+        --rollback-dir "${rollback_dir3}"
+    RESULT_VARIABLE rollback3_rc
+    OUTPUT_VARIABLE rollback3_out
+    ERROR_VARIABLE  rollback3_err
+    TIMEOUT 30)
+
+if(rollback3_rc EQUAL 0)
+    message(FATAL_ERROR
+        "Negative rollback should have FAILED but returned 0\n"
+        "stdout: ${rollback3_out}\nstderr: ${rollback3_err}")
+endif()
+
+# Rollback-dir must still exist (snapshots preserved for manual recovery)
+if(NOT EXISTS "${rollback_dir3}")
+    message(FATAL_ERROR "rollback-dir was removed after failed rollback; snapshots must be preserved")
+endif()
+
+message(STATUS "Negative rollback scenario: OK (rollback-dir preserved on failure)")
+
+# Cleanup the corrupt rollback-dir for test isolation
+file(REMOVE_RECURSE "${rollback_dir3}")
+
 message(STATUS "SearchEngineConfigSettingsTransaction: all checks passed")

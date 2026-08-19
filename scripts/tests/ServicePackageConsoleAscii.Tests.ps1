@@ -408,6 +408,21 @@ Assert-True ($configureText.Contains('health --port')) (
 Assert-True ($configureText.Contains('DisableDelayedExpansion')) (
     '9. Configure-SearchEngineService.bat starts with DisableDelayedExpansion'
 )
+Assert-True ($configureText.Contains('choose-installed-instance')) (
+    '9. Configure-SearchEngineService.bat uses choose-installed-instance picker'
+)
+Assert-True ($configureText.Contains('--purpose configure')) (
+    '9. Configure-SearchEngineService.bat passes --purpose configure to picker'
+)
+Assert-True ($configureText.Contains('ROLLBACK_DO_FILES')) (
+    '9. Configure-SearchEngineService.bat has rollback exit-code gate label (ROLLBACK_DO_FILES)'
+)
+Assert-True ($configureText.Contains('ROLLBACK_CANNOT_STOP')) (
+    '9. Configure-SearchEngineService.bat refuses file rollback without confirmed STOPPED'
+)
+Assert-True ($configureText.Contains('ROLLBACK_HEALTH')) (
+    '9. Configure-SearchEngineService.bat checks old health before commit after rollback'
+)
 
 # Verify packager includes Configure-SearchEngineService.bat
 Assert-True ($packagerText.Contains("'Configure-SearchEngineService.bat'")) (

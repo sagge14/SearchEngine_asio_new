@@ -1703,10 +1703,14 @@ int settingsRollbackCommand(const std::vector<std::wstring>& args)
                     joinPath(dataDir, kEndpointName),
                     dataDir);
             } else {
-                // It did not exist before; remove if we created it
+                // It did not exist before; remove if we created it.
                 const std::wstring live = joinPath(dataDir, kEndpointName);
                 if (classifyPath(live) == PathKind::File) {
-                    DeleteFileW(live.c_str());
+                    if (!DeleteFileW(live.c_str())) {
+                        throw std::runtime_error(
+                            "failed to remove created endpoint file during rollback: " +
+                            utf8(live));
+                    }
                 }
             }
         }

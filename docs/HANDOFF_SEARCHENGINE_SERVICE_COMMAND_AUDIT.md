@@ -526,22 +526,63 @@ GET_ATTACHMENTS: not configured
 5. **`settings-transaction-commit --data-dir DIR --rollback-dir DIR`** —
    удаление rollback-dir после успешного PING/PONG.
 
-6. **`validateJson()` (расширена)** — дополнительные type/range checks для полей:
-   `max_response` (>= 1), `ind_time` (>= 1), `max_parallel_readers` (0..65535,
-   0 = no limit), `compact_threshold_percent` (0..100), `sqlite_mirror_flush_interval_sec`
-   (number > 0), `sqlite_mirror_max_pending_ops` (>= 1), `sqlite_load_threads` (1..64),
-   `sqlite_precount_postings` (boolean).
+6. **`validateJson()` (расширена и скорректирована)** — type/range checks для полей,
+   выровненные с runtime `ConverterJSON::getSettings`:
+   - `max_response`: non-negative integer; 0 возвращает 0 результатов (допустимое
+     операционное значение, не "без ограничений").
+   - `ind_time`: integer >= 1.
+   - `max_parallel_readers`: non-negative integer (0 = без ограничения, runtime default).
+   - `compact_threshold_percent`: number 0..100.
+   - `sqlite_mirror_flush_interval_sec`: number > 0 (принимает float).
+   - `sqlite_mirror_max_pending_ops`: non-negative integer; 0 = flush только по таймеру
+     (задокументированное операционное значение).
+   - `sqlite_load_threads`: integer >= 1.
+   - `sqlite_precount_postings`: boolean.
+   - `exact_search`, `hide_mode`, `text_request`, `save_dictionary_to_file`: boolean.
+   - `config.Version`, `config.dir`: string если присутствует.
+   - `config.dirs`, `config.extensions`: non-empty array of strings (проверяются элементы).
+   - `config.exclude_dirs`: array of strings если присутствует (проверяется контейнер и элементы).
+   - `Files` (top-level): array of strings если присутствует.
+   - Port precedence: `port` предпочтительнее `asio_port` (соответствует runtime).
 
-7. **`Configure-SearchEngineService.bat`** — portable entrypoint:
-   - Resolves `data_dir` через `inspect-installed` (не `%ProgramData%`).
-   - Копирует `Settings.json` в `%TEMP%` для редактирования.
-   - Проходит через `validate` как обязательный gate.
-   - Stop → `settings-transaction-apply` → firewall update (если нужно) → Start →
-     wait RUNNING → `health --port NEW` → PING/PONG.
-   - При failure: `settings-transaction-rollback` → restore firewall → Start на
-     старом порту → `health --port OLD`.
-   - Endpoint temp генерируется локально BAT-скриптом, если `oldPort != newPort`.
+7. **`inspect-installed` (скорректирован)**:
+   - Проверяет instanceId через `isValidInstanceId()` до обращения к SCM.
+   - Использует `utf8()` для wide paths вместо lossy `std::string(begin, end)`.
+   - Разрешает relative `--data-dir` относительно каталога EXE (соответствует runtime).
+   - Ошибки выводятся через utf8() без потери символов.
+
+8. **`Configure-SearchEngineService.bat`** — portable entrypoint (скорректирован):
+   - **Instance picker**: без аргумента вызывает `choose-installed-instance --purpose configure`;
+     парсит ответ `instance=...` (не bare значение). HELPER определяется до picker.
+   - **Graceful stop**: STOP_TIMEOUT_SECONDS=1800 (соответствует Stop-SearchEngineService).
+   - **Rollback STOPPED invariant**: ни один байт Settings.json не восстанавливается без
+     явного подтверждения SCM state = STOPPED. State-aware loop обрабатывает
+     RUNNING/START_PENDING/STOP_PENDING корректно (stop best-effort при необходимости).
+   - **Rollback exit-code gate**: `settings-transaction-rollback` проверяется. При failure —
+     rollback-dir сохраняется, commit не вызывается, workflow завершается ошибкой.
+   - **Commit только после подтверждённого здоровья старого конфига**: последовательность
+     `files restored → firewall restored → old config RUNNING → PING/PONG OLD → commit`.
+   - **Firewall dual-naming**:
+     - Portable rule (`SearchEngineService[-instance] TCP`): только обновляется localport.
+     - PowerShell-installer rule (`<display name> (<port>/TCP)`): старое правило удаляется,
+       создаётся новое с новым именем и портом; rollback симметричен.
+   - **Firewall failure breaks apply**: если найденное installer-owned правило не обновлено —
+     apply не считается успешным, инициируется rollback.
+   - **Firewall restore failure = incomplete rollback**: rollback-dir не commit'тится.
+   - **`chcp 65001`** перед вызовами helper для корректной обработки UTF-8 output.
+   - Endpoint temp генерируется локально BAT-скриптом, если port/year изменились.
    - Hot reload не реализован намеренно (только Stop→Start).
+
+### Известные ограничения и manual recovery paths
+- Cyrillic-path round-trip через `cmd.exe` `for /f`: NOT RUN без integration environment.
+  `chcp 65001` + `utf8()` — best-effort. Не верифицировано на Windows 7 cmd.
+- Если rollback не завершён (STOPPED не достигнут / rollback command failed / firewall
+  restore failed): `rollback-dir` сохраняется в `%TEMP%` для ручного восстановления.
+  Скрипт выводит диагностику: service name, current SCM state, data-dir, rollback-dir,
+  old/new ports.
+- `settings-transaction-commit` failure при успешном новом конфиге: только warning.
+  Rollback-dir остаётся; ручная очистка. Здоровый новый конфиг не откатывается.
+- Disposable integration test: NOT RUN.
 
 ### Scope защиты
 - Нет `Modify` на весь `%ProgramData%`; работает с правами Admin через SCM.
@@ -637,7 +678,7 @@ SVC-006 -> REJECTED
 
 Дальше:
 
-1. **SVC-001** — runtime config UX.
+1. **SVC-001** — runtime config UX (FIXED; correction commit applied).
 2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
 
 ---

@@ -402,18 +402,46 @@ Configure-SearchEngineService.bat
 Configure-SearchEngineService.bat archive
 ```
 
-Workflow (требует Administrator):
-1. Автоматически получает фактический `data-dir` из SCM ImagePath через
-   `SearchEngineConfig inspect-installed` — не зависит от `%ProgramData%`.
-2. Открывает временную копию `Settings.json` в Notepad; валидирует перед применением.
-3. Останавливает службу, атомарно заменяет `Settings.json` (и `client-endpoint.txt`
-   при изменении порта), обновляет правило брандмауэра.
-4. Запускает службу, проверяет `RUNNING` + PING/PONG на новом порту.
-5. При любой неудаче: rollback байт-в-байт, восстановление правила брандмауэра,
-   перезапуск на старом порту, PING/PONG на старом порту.
+Без аргумента скрипт вызывает интерактивный picker установленных instances.
+С аргументом (`archive`) использует его напрямую.
 
-**Ограничения:** hot reload не поддерживается — всегда Stop→Start.
-Не изменяет индексы, auth-базу, логи и другие runtime-данные.
+Workflow (требует Administrator):
+1. Если instance не задан аргументом — показывает picker через
+   `SearchEngineConfig choose-installed-instance --purpose configure`.
+2. Автоматически получает фактический `data-dir` из SCM ImagePath через
+   `SearchEngineConfig inspect-installed` — не зависит от `%ProgramData%`.
+   Разрешает relative `--data-dir` относительно каталога EXE.
+3. Открывает временную копию `Settings.json` в Notepad; валидирует перед применением.
+4. Останавливает службу (ожидание до 1800 секунд).
+5. Атомарно заменяет `Settings.json` (и `client-endpoint.txt` при изменении порта)
+   через `settings-transaction-apply`.
+6. Обновляет правило брандмауэра (если требуется). Failure прерывает apply.
+7. Запускает службу, проверяет `RUNNING` + PING/PONG на новом порту.
+8. При успехе: `settings-transaction-commit` удаляет rollback-dir.
+
+**Rollback contract (при любом failure после apply):**
+- Файлы восстанавливаются **только** после подтверждённого SCM state = STOPPED.
+  State-aware loop обрабатывает RUNNING/START_PENDING/STOP_PENDING корректно.
+- Если STOPPED не достигнут за 1800 секунд — файлы НЕ восстанавливаются;
+  rollback-dir сохраняется для ручного восстановления.
+- Если `settings-transaction-rollback` завершился с ошибкой — commit не вызывается,
+  rollback-dir сохраняется.
+- Если restore правила брандмауэра не удался — rollback-dir сохраняется.
+- `settings-transaction-commit` вызывается только после подтверждённого PING/PONG
+  на старом порту. При failure commit — только предупреждение; здоровый новый конфиг
+  не откатывается.
+
+**Firewall:**
+- Portable-installer rule (`SearchEngineService[-instance] TCP`): только localport.
+- PowerShell-installer rule (`<display name> (<port>/TCP)`): удаляется и создаётся
+  заново с новым именем и портом (имя включает порт). Rollback симметричен.
+
+**Ограничения:**
+- Hot reload не поддерживается — всегда Stop→Start.
+- Не изменяет индексы, auth-базу, логи и другие runtime-данные.
+- Cyrillic-path round-trip через `cmd.exe` не верифицирован без integration test.
+- При manual recovery: rollback-dir находится в `%TEMP%\SE-Configure-*`; скрипт
+  выводит путь при любой неудаче.
 
 Логи находятся под `<data-dir>\logs`; ранние ошибки запуска также отражаются
 ненулевым SCM exit code. Для просмотра последних строк:

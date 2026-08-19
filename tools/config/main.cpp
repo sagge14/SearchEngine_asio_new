@@ -416,6 +416,10 @@ static std::optional<std::wstring> parseDataDirFromImagePath(
 int inspectInstalledCommand(const std::vector<std::wstring>& args)
 {
     const std::wstring instanceId = option(args, L"--instance").value_or(L"default");
+    if (!isValidInstanceId(instanceId)) {
+        std::cerr << "ERROR: invalid instance id '" << utf8(instanceId) << "'\n";
+        return 1;
+    }
     const std::wstring serviceName =
         (instanceId == L"default")
             ? L"SearchEngineService"
@@ -428,7 +432,7 @@ int inspectInstalledCommand(const std::vector<std::wstring>& args)
     if (!hSvc) {
         throw std::runtime_error(
             "service not found or insufficient permissions: " +
-            std::string(serviceName.begin(), serviceName.end()));
+            utf8(serviceName));
     }
     struct SvcGuard { SC_HANDLE h; ~SvcGuard(){ CloseServiceHandle(h); } } guard{hSvc};
 
@@ -458,23 +462,34 @@ int inspectInstalledCommand(const std::vector<std::wstring>& args)
     if (!dataDir) {
         throw std::runtime_error(
             "could not find --data-dir argument in service ImagePath.\n"
-            "ImagePath: " + std::string(imagePath.begin(), imagePath.end()));
+            "ImagePath: " + utf8(imagePath));
+    }
+
+    // If the data-dir is relative, resolve it relative to the exe directory,
+    // matching SearchEngine runtime semantics.
+    if (!dataDir->empty() && (*dataDir)[0] != L'\\' &&
+        !(dataDir->size() >= 2 && (*dataDir)[1] == L':'))
+    {
+        std::wstring exeDir = exePath;
+        const auto lastSlash = exeDir.find_last_of(L"\\/");
+        if (lastSlash != std::wstring::npos)
+            exeDir.resize(lastSlash);
+        *dataDir = exeDir + L"\\" + *dataDir;
     }
 
     const std::wstring settingsPath = *dataDir + L"\\Settings.json";
     const std::wstring endpointPath = *dataDir + L"\\client-endpoint.txt";
 
-    const auto printW = [](const std::wstring& line) {
-        const std::string narrow(line.begin(), line.end());
-        std::cout << narrow << '\n';
+    const auto printLine = [](const std::wstring& line) {
+        std::cout << utf8(line) << '\n';
     };
 
-    printW(L"instance=" + instanceId);
-    printW(L"service_name=" + serviceName);
-    printW(L"data_dir=" + *dataDir);
-    printW(L"settings_path=" + settingsPath);
-    printW(L"endpoint_path=" + endpointPath);
-    printW(L"installed_program_path=" + exePath);
+    printLine(L"instance=" + instanceId);
+    printLine(L"service_name=" + serviceName);
+    printLine(L"data_dir=" + *dataDir);
+    printLine(L"settings_path=" + settingsPath);
+    printLine(L"endpoint_path=" + endpointPath);
+    printLine(L"installed_program_path=" + exePath);
     return 0;
 }
 
@@ -873,11 +888,11 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         errors.emplace_back("config.extensions must be a non-empty array");
     }
 
-    const char* portName = config.contains("asio_port") ? "asio_port" : "port";
+    const char* portName = config.contains("port") ? "port" : "asio_port";
     const auto port = config.contains(portName)
         ? jsonInteger(config[portName]) : std::nullopt;
     if (!port || *port < 1 || *port > 65535) {
-        errors.emplace_back("config.asio_port must be inside 1..65535");
+        errors.emplace_back("config port (or asio_port) must be inside 1..65535");
     }
 
     if (config.contains("year") && config["year"].is_string()) {
@@ -973,11 +988,68 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     }
 
     // SVC-001: validate additional fields deserialized by ConverterJSON
+
+    // Optional string fields: if present must be strings.
+    if (config.contains("Version") && !config["Version"].is_string())
+        errors.emplace_back("config.Version must be a string");
+    if (config.contains("dir") && !config["dir"].is_string())
+        errors.emplace_back("config.dir must be a string");
+
+    // Boolean fields: if present must be booleans (get_to<bool> would throw otherwise).
+    for (const char* boolField : {
+        "exact_search", "hide_mode", "text_request", "save_dictionary_to_file"
+    }) {
+        if (config.contains(boolField) && !config[boolField].is_boolean()) {
+            errors.emplace_back(std::string("config.") + boolField + " must be boolean");
+        }
+    }
+
+    // Element type checks for dirs and extensions (already checked non-empty above).
+    for (const char* arrField : {"dirs", "extensions"}) {
+        if (config.contains(arrField) && config[arrField].is_array()) {
+            for (const auto& el : config[arrField]) {
+                if (!el.is_string()) {
+                    errors.emplace_back(
+                        std::string("config.") + arrField + " must contain only strings");
+                    break;
+                }
+            }
+        }
+    }
+
+    // exclude_dirs: if present must be array of strings.
+    if (config.contains("exclude_dirs")) {
+        if (!config["exclude_dirs"].is_array()) {
+            errors.emplace_back("config.exclude_dirs must be an array");
+        } else {
+            for (const auto& el : config["exclude_dirs"]) {
+                if (!el.is_string()) {
+                    errors.emplace_back("config.exclude_dirs must contain only strings");
+                    break;
+                }
+            }
+        }
+    }
+
+    // Top-level Files: if present must be array of strings.
+    if (root.contains("Files")) {
+        if (!root["Files"].is_array()) {
+            errors.emplace_back("Files must be an array");
+        } else {
+            for (const auto& el : root["Files"]) {
+                if (!el.is_string()) {
+                    errors.emplace_back("Files must contain only strings");
+                    break;
+                }
+            }
+        }
+    }
+
+    // max_response: runtime uses it as-is; 0 returns 0 results (valid operational value).
     if (config.contains("max_response")) {
-        // No documented upper limit; just require a positive integer (type safety).
         const auto v = jsonInteger(config["max_response"]);
-        if (!v || *v < 1) {
-            errors.emplace_back("config.max_response must be a positive integer");
+        if (!v || *v < 0) {
+            errors.emplace_back("config.max_response must be a non-negative integer");
         }
     }
 
@@ -990,11 +1062,11 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     }
 
     if (config.contains("max_parallel_readers")) {
-        // 0 = no limit (valid default); positive values cap concurrency.
+        // 0 = no limit (runtime default); positive values cap concurrency.
         const auto v = jsonInteger(config["max_parallel_readers"]);
-        if (!v || *v < 0 || *v > 65535) {
+        if (!v || *v < 0) {
             errors.emplace_back(
-                "config.max_parallel_readers must be non-negative integer");
+                "config.max_parallel_readers must be a non-negative integer");
         }
     }
 
@@ -1023,17 +1095,19 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     }
 
     if (config.contains("sqlite_mirror_max_pending_ops")) {
+        // 0 = flush by timer only (documented operational value).
         const auto v = jsonInteger(config["sqlite_mirror_max_pending_ops"]);
-        if (!v || *v < 1) {
+        if (!v || *v < 0) {
             errors.emplace_back(
-                "config.sqlite_mirror_max_pending_ops must be integer >= 1");
+                "config.sqlite_mirror_max_pending_ops must be a non-negative integer");
         }
     }
 
     if (config.contains("sqlite_load_threads")) {
+        // Must be >= 1 (0 has no defined runtime semantics for parallelism degree).
         const auto v = jsonInteger(config["sqlite_load_threads"]);
-        if (!v || *v < 1 || *v > 64) {
-            errors.emplace_back("config.sqlite_load_threads must be integer inside 1..64");
+        if (!v || *v < 1) {
+            errors.emplace_back("config.sqlite_load_threads must be integer >= 1");
         }
     }
 
@@ -1169,7 +1243,7 @@ int inspectCommand(const std::vector<std::wstring>& args)
         return validateCommand(args);
     }
     const json& config = root["config"];
-    const char* portName = config.contains("asio_port") ? "asio_port" : "port";
+    const char* portName = config.contains("port") ? "port" : "asio_port";
     std::cout << "port=" << config.value(portName, 0) << '\n'
               << "year=" << config.value("year", std::string()) << '\n'
               << "threads=" << config.value("thread_count", 0) << '\n'
