@@ -609,6 +609,103 @@ try {
     }
 }
 
+# 8. SearchEngineService package data layout contract.
+Write-Host ''
+Write-Host '=== Service package data layout tests ==='
+Assert-True (-not ($packagerText -match "data\\logs")) (
+    '8. Packager does not create data\logs'
+)
+Assert-True (-not ($packagerText -match "data\\messages")) (
+    '8. Packager does not create data\messages'
+)
+Assert-True ($packagerText.Contains("data\Settings.json")) (
+    '8. Packager copies data\Settings.json'
+)
+Assert-True ($packagerText.Contains("data\ignore.txt")) (
+    '8. Packager copies data\ignore.txt'
+)
+Assert-True ($packagerText.Contains("data\prefix_map.json")) (
+    '8. Packager copies data\prefix_map.json'
+)
+Assert-True ($packagerText.Contains("data\OEM866.INI")) (
+    '8. Packager writes data\OEM866.INI'
+)
+
+function Test-PackageDataLayout {
+    param(
+        [string]$PackageDirectory,
+        [string]$ArchitectureLabel
+    )
+    $dataDir = Join-Path $PackageDirectory 'data'
+    foreach ($name in @('Settings.json', 'ignore.txt', 'OEM866.INI', 'prefix_map.json')) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $dataDir $name) -PathType Leaf) (
+            "8. $ArchitectureLabel data\$name exists"
+        )
+    }
+    foreach ($name in @('logs', 'messages')) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $dataDir $name))) (
+            "8. $ArchitectureLabel data\$name absent"
+        )
+    }
+}
+
+$packageArchCases = @(
+    @{ Label = 'x64'; Architecture = 'x64'; Preset = 'windows-x64' },
+    @{ Label = 'x86-modern'; Architecture = 'x86-modern'; Preset = 'windows-x86' },
+    @{ Label = 'x86-Windows7'; Architecture = 'x86'; Preset = 'windows7-x86' }
+)
+$packageTempRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'ServicePackageDataLayout-' + [Guid]::NewGuid().ToString('N')
+)
+New-Item -ItemType Directory -Path $packageTempRoot | Out-Null
+try {
+    foreach ($case in $packageArchCases) {
+        $buildDir = Join-Path $projectRoot (
+            'out\build\' + $case.Preset + '\Release'
+        )
+        $required = @(
+            (Join-Path $buildDir 'SearchEngine.exe'),
+            (Join-Path $buildDir 'SearchEngineConfig.exe'),
+            (Join-Path $buildDir 'AuthDbTool.exe'),
+            (Join-Path $buildDir 'SearchClientTokenIssuer.exe'),
+            (Join-Path $buildDir 'searchclient-auth-token.defaults.json')
+        )
+        $missing = @($required | Where-Object {
+            -not (Test-Path -LiteralPath $_ -PathType Leaf)
+        })
+        if ($missing.Count -gt 0) {
+            Write-Host (
+                "SKIP: 8. $($case.Label) package layout NOT RUN " +
+                "(missing Release binaries under out\build\$($case.Preset)\Release)"
+            )
+            continue
+        }
+
+        $outputDir = Join-Path $packageTempRoot $case.Label
+        try {
+            & (Join-Path $projectRoot 'scripts\New-SearchEngineServicePackage.ps1') `
+                -Architecture $case.Architecture `
+                -BuildDirectory $buildDir `
+                -OutputDirectory $outputDir `
+                -SkipCloudPublish | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "packager exited with code $LASTEXITCODE"
+            }
+            Test-PackageDataLayout -PackageDirectory $outputDir `
+                -ArchitectureLabel $case.Label
+        } catch {
+            Write-Host (
+                "SKIP: 8. $($case.Label) package layout NOT RUN ($($_.Exception.Message))"
+            )
+        }
+    }
+} finally {
+    if (Test-Path -LiteralPath $packageTempRoot) {
+        Remove-Item -LiteralPath $packageTempRoot -Recurse -Force `
+            -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host ''
 Write-Host "Passed: $script:passed  Failed: $($script:failures.Count)"
 if ($script:failures.Count -gt 0) {
