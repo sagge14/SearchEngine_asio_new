@@ -31,6 +31,7 @@ constexpr int kMaxYear = 2099;
 constexpr int kMinFileTimeout = 10;
 constexpr int kMaxFileTimeout = 600;
 constexpr int kRecommendedFileTimeout = 120;
+constexpr int kFormatJsonIndent = 4;
 constexpr std::uint64_t kPingCommand = 18;
 
 enum class UiLanguage {
@@ -780,7 +781,10 @@ void mergeJson(json& destination, const json& source)
     }
 }
 
-void writeJsonAtomically(const fs::path& output, const json& value)
+void writeJsonAtomically(
+    const fs::path& output,
+    const json& value,
+    int indent = 2)
 {
     fs::path temporary = output;
     temporary += L".tmp-" + std::to_wstring(GetCurrentProcessId());
@@ -790,7 +794,7 @@ void writeJsonAtomically(const fs::path& output, const json& value)
         if (!stream) {
             throw std::runtime_error("cannot create temporary settings file");
         }
-        stream << value.dump(2) << '\n';
+        stream << value.dump(indent) << '\n';
         stream.flush();
         if (!stream) {
             throw std::runtime_error("cannot write temporary settings file");
@@ -1173,6 +1177,21 @@ void printSystemInfo()
               << "current_year=" << info.currentYear << '\n'
               << "year_min=" << kMinYear << '\n'
               << "year_max=" << kMaxYear << '\n';
+}
+
+int formatJsonCommand(const std::vector<std::wstring>& args)
+{
+    const fs::path settings = requiredOption(args, L"--settings");
+    const json root = readJson(settings);
+    writeJsonAtomically(settings, root, kFormatJsonIndent);
+    return 0;
+}
+
+int compareJsonCommand(const std::vector<std::wstring>& args)
+{
+    const fs::path left = requiredOption(args, L"--left");
+    const fs::path right = requiredOption(args, L"--right");
+    return readJson(left) == readJson(right) ? 0 : 1;
 }
 
 int validateCommand(const std::vector<std::wstring>& args)
@@ -2001,6 +2020,8 @@ void printUsage()
         << "  system-info\n"
         << "  inspect --settings FILE\n"
         << "  validate --settings FILE [--check-dirs]\n"
+        << "  format-json --settings FILE\n"
+        << "  compare-json --left FILE --right FILE\n"
         << "  validate-prefix-map --path FILE\n"
         << "  configure --template FILE --output FILE --port N --year N\n"
         << "            --threads N --file-timeout N --prm-autodetect 0|1\n"
@@ -2053,6 +2074,12 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"validate") {
             return validateCommand(args);
+        }
+        if (command == L"format-json") {
+            return formatJsonCommand(args);
+        }
+        if (command == L"compare-json") {
+            return compareJsonCommand(args);
         }
         if (command == L"validate-prefix-map") {
             return validatePrefixMapCommand(args);

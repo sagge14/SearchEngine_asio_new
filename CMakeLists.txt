@@ -1205,4 +1205,13 @@ if(TARGET SearchEngineConfig)
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigSettingsTransaction.cmake"
     )
+    add_test(
+            NAME SearchEngineConfigFormatJson_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-format-json-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigFormatJson.cmake"
+    )
 endif()

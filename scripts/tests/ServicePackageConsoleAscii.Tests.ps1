@@ -500,6 +500,36 @@ Assert-True ($configureText.Contains('ROLLBACK_HEALTH')) (
     '9. Configure-SearchEngineService.bat checks old health before commit after rollback'
 )
 
+# 9d. Configure pretty-prints TEMP edit copy once before first Notepad open.
+Assert-True ($configureText.Contains('format-json --settings "%EDIT_TEMP%"')) (
+    '9d. Configure-SearchEngineService.bat formats EDIT_TEMP with format-json'
+)
+Assert-True (-not $configureText.Contains('format-json --settings "%SETTINGS_PATH%"')) (
+    '9d. Configure-SearchEngineService.bat does not format active SETTINGS_PATH'
+)
+$copyMarker = 'copy /Y "%SETTINGS_PATH%" "%EDIT_TEMP%"'
+$firstNotepad = $configureText.IndexOf('notepad.exe')
+Assert-True ($firstNotepad -ge 0) '9d. Configure-SearchEngineService.bat opens Notepad'
+$copyStart = $configureText.IndexOf($copyMarker)
+Assert-True ($copyStart -ge 0) '9d. Configure copy-to-EDIT_TEMP step is present'
+$preEditorSlice = $configureText.Substring($copyStart, $firstNotepad - $copyStart)
+Assert-True ($preEditorSlice.Contains('format-json --settings "%EDIT_TEMP%"')) (
+    '9d. format-json runs after copy and before first Notepad open'
+)
+$validateMarker = 'validate --settings "%EDIT_TEMP%"'
+$validatePos = $configureText.IndexOf($validateMarker)
+Assert-True ($validatePos -gt $firstNotepad) (
+    '9d. validate --settings "%EDIT_TEMP%" runs after first Notepad open'
+)
+$editLoopStart = $configureText.IndexOf(':EDIT_LOOP')
+Assert-True ($editLoopStart -ge 0) '9d. Configure EDIT_LOOP label is present'
+$editLoopEnd = $configureText.IndexOf(':EDIT_VALID', $editLoopStart)
+if ($editLoopEnd -lt 0) { $editLoopEnd = $configureText.Length }
+$editLoopSlice = $configureText.Substring($editLoopStart, $editLoopEnd - $editLoopStart)
+Assert-True (-not $editLoopSlice.Contains('format-json')) (
+    '9d. EDIT_LOOP does not re-run format-json on validation retry'
+)
+
 # 9b. SVC-001 firewall contract: preserve installer-owned program binding.
 Assert-True ($configureText.Contains('program="%PROGRAM_PATH%" enable=yes')) (
     '9b. PS-style firewall add/restore uses exact program="%PROGRAM_PATH%" enable=yes'
