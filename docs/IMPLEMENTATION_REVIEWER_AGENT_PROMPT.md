@@ -377,11 +377,11 @@ SCM RUNNING + PING/PONG
 
 # OPEN-пункты
 
-Эти пункты **НЕ реализовывать**, пока пользователь отдельно не примет по ним решение:
+На текущий момент открытых protocol/service пунктов из handoff нет.
 
-```text
-SVC-014
-```
+SVC-014 реализован (VERIFIED): historical slots 3..9 задокументированы,
+`static_assert`/regression tests добавлены, unreachable legacy upload classes
+удалены. Контракт — `HANDOFF`, секция SVC-014.
 
 SVC-013 уже реализован как retirement legacy message queue. Для всех будущих
 этапов это обязательный контракт:

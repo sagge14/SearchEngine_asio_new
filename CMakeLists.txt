@@ -1046,8 +1046,6 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/AttachmentPackage.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"
-            "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveTlgToSend.cpp"
-            "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveDefaultCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/JSON/ConverterJSON.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/ServiceCommands/PingCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaAttachments/GetTelegaAttachments.cpp"

@@ -60,7 +60,7 @@ VERIFIED    — реализовано и проверено
 | SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
 | SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | FIXED |
-| SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
+| SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | VERIFIED |
 
 ---
 
@@ -625,22 +625,43 @@ SAVE_MESSAGE_TO = 2781032419 (historical composite marker)
 ## SVC-014 — enum содержит unsupported historical commands
 
 **Приоритет:** P2  
-**Статус:** OPEN
+**Статус:** VERIFIED
 
-Остаются исторические wire slots без активного handler:
+Исторические wire slots **3..9** сохранены без перенумерации и **не имеют
+production handler**. Принятый контракт (Option C: docs/tests, без rename на
+server):
 
 ```text
-JSONREGUEST
-ADDRESOLUTION
-UPDATE
-GETRESOLUTIONS
-GETRESOLUTION
-GETDOCS
-GETDOC
+3  JSONREGUEST
+4  ADDRESOLUTION
+5  UPDATE            (≠ START_UPDATE_BASE=14)
+6  GETRESOLUTIONS
+7  GETRESOLUTION
+8  GETDOCS
+9  GETDOC
 ```
 
-Нельзя удалять их из середины последовательного enum с перенумерацией остальных.
-Нужно позже закрепить explicit/reserved ordinals и cross-repo tests/docs.
+**Server:** `isRequestCommand=false` → `trustCommand` отклоняет до auth gate и
+до чтения body → `InvalidCommand` (`ERROR_RESPONSE` после negotiate, иначе
+`SOMEERROR`) с diagnostic `wire_command=N` → **TCP session закрывается**
+(`closeAfterWrite=true`). Никогда не доходит до `CommandNotRegistered`.
+
+**Client:** production SearchClient не отправляет 3..9. Имена: slot 3 =
+`JSONREGUEST`; slots 4..9 = `RESERVED_COMMAND_*` (wire IDs совпадают с server).
+
+**SOLOREQUEST=1** остаётся **active** на server (`SoloRequestCmd` в cmdMap) для
+legacy/third-party клиентов; текущий SearchClient использует 10/12/13.
+
+**Cleanup:** удалены unreachable `SaveTlgToSendCmd` / `SaveFileDefaultCmd`
+(SVC-010 legacy upload classes). Stale `AsioServer/` в client repo помечен
+archive-only (не в `SearchClient_asio.cbproj`).
+
+**Tests:** `tests/commands/HistoricalCommandSlotTests.cpp`,
+`static_assert` ordinals 3..9 на server и client,
+расширен `CommandResultTests` allowlist check.
+
+Не переоткрывать: reject semantics для 3..9 (session close), wire ordinals,
+SVC-013/009/010/012 contracts.
 
 ---
 
@@ -652,11 +673,12 @@ GETDOC
 | `PING` | core installer readiness; SVC-006 |
 | `AUTHENTICATE_V1` | persistent auth state; SVC-005 |
 | `USER_REGISTRY` | legacy localhost-admin path |
-| `SOLOREQUEST` | index + configured `dirs` |
+| `SOLOREQUEST` | index + configured `dirs`; server-only legacy (client uses 10/12/13) |
 | `GETSQLJSONANSWEAR` | index + configured `dirs` |
 | `START_UPDATE_BASE` | full scan/index update |
 | `FILETEXT` | reserved / raw request rejected; SVC-009 |
 | `GETBINFILE` | reserved / raw request rejected; SVC-009/012 |
+| `JSONREGUEST..GETDOC` | historical slots 3..9; trustCommand reject; SVC-014 |
 | `GET_VH_TELEGI_FROM_SQL` | `prm_base_dir` |
 | `GET_ISH_TELEGI_FROM_SQL` | `prd_base_dir` |
 | `GET_ISH_PDTV` | `prd_base_dir`, strict id/read-only lookup |
@@ -696,7 +718,7 @@ SVC-006 -> REJECTED
 Дальше:
 
 1. **SVC-001** — runtime config UX (FIXED; correction commit applied).
-2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
+2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots (VERIFIED).
 
 ---
 
@@ -747,9 +769,8 @@ Migration/update impact: None for current production client. Old clients will se
 Tests/build/smoke:
   x64 Debug SearchEngine — build: OK
   SearchEngine_test — 116 passed, 3 skipped (symlink); StreamingUploadContract: PASS
-Remaining limitations:  SaveTlgToSendCmd and SaveFileDefaultCmd classes remain in
-                        source but are unreachable — removal is SVC-011/SVC-013 scope.
-                        tlg_send_root/razn_output_dir still stored in setSearchServer
+Remaining limitations:  Legacy upload command classes removed in SVC-014;
+                        `tlg_send_root`/`razn_output_dir` still stored in setSearchServer
                         paths struct for future use by SVC-011.
 ```
 

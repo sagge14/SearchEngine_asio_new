@@ -136,6 +136,10 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SOMEERROR));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::JSONREGUEST));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::ADDRESOLUTION));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::UPDATE));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GETRESOLUTIONS));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GETRESOLUTION));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GETDOCS));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GETDOC));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SERVER_BUSY_ERROR));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::END_COMMAND));

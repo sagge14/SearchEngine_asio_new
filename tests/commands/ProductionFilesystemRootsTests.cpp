@@ -2,8 +2,6 @@
 #include "Commands/GetFile/GetFileCmd.h"
 #include "Commands/GetTelegaWay/GetTelegaWayCmd.h"
 #include "Commands/GetTelegaWay/TelegaWay.h"
-#include "Commands/SaveFile/SaveDefaultCmd.h"
-#include "Commands/SaveFile/SaveTlgToSend.h"
 #include "MyUtils/Utf8Path.h"
 
 #include <gtest/gtest.h>
@@ -47,35 +45,10 @@ namespace
         fs::path path_;
     };
 
-    std::filesystem::path callGetBasePath(SaveFileCmd& command)
-    {
-        return command.getBasePath();
-    }
-
     std::vector<std::uint8_t> bytesOf(const std::string& text)
     {
         return {text.begin(), text.end()};
     }
-}
-
-TEST(ProductionFilesystemRootsTest, SaveTlgToSendUsesCustomRoot)
-{
-    const std::string customRoot = "E:\\tlg-custom-root";
-    SaveTlgToSendCmd command(customRoot);
-    const auto actual = encoding::path_to_utf8(callGetBasePath(command));
-    EXPECT_NE(actual.find("tlg-custom-root"), std::string::npos);
-    EXPECT_EQ(actual.find("D:\\"), std::string::npos);
-    EXPECT_EQ(actual.find("D:/"), std::string::npos);
-}
-
-TEST(ProductionFilesystemRootsTest, SaveFileDefaultUsesCustomRoot)
-{
-    const std::string customRoot = "E:\\razn-custom";
-    SaveFileDefaultCmd command(customRoot);
-    const auto actual = encoding::path_to_utf8(callGetBasePath(command));
-    EXPECT_NE(actual.find("razn-custom"), std::string::npos);
-    EXPECT_EQ(actual.find("D:\\"), std::string::npos);
-    EXPECT_EQ(actual.find("D:/"), std::string::npos);
 }
 
 TEST(ProductionFilesystemRootsTest, JoinHelperBuildsF12AndOpisContracts)

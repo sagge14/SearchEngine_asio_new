@@ -41,6 +41,7 @@ namespace asio_server
     X(SOMEERROR) \
     X(SOLOREQUEST) \
     X(FILETEXT) \
+    /* LEGACY HISTORICAL/RESERVED slots 3..9: no handler, trustCommand rejects. */ \
     X(JSONREGUEST) \
     X(ADDRESOLUTION) \
     X(UPDATE) \
@@ -293,6 +294,13 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::SOMEERROR) == 0);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SOLOREQUEST) == 1);
     static_assert(static_cast<uint_fast64_t>(COMMAND::FILETEXT) == 2);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::JSONREGUEST) == 3);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::ADDRESOLUTION) == 4);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::UPDATE) == 5);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GETRESOLUTIONS) == 6);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GETRESOLUTION) == 7);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GETDOCS) == 8);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GETDOC) == 9);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GETBINFILE) == 11);
     static_assert(static_cast<uint_fast64_t>(COMMAND::PING) == 18);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT) == 26);
