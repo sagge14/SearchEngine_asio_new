@@ -98,6 +98,7 @@ set "MATCHED_FIREWALL_TYPE="
 set "OLD_PS_RULE_NAME="
 set "NEW_PS_RULE_NAME="
 set "FIREWALL_MODIFIED="
+set "FIREWALL_MUTATION_STARTED="
 
 rem Rollback tracking
 set "ROLLBACK_APPLIED="
@@ -393,7 +394,7 @@ if errorlevel 1 (
 echo Files restored to old configuration.
 
 rem --- Restore firewall if it was modified ---
-if not defined FIREWALL_MODIFIED goto :ROLLBACK_FIREWALL_DONE
+if not defined FIREWALL_MODIFIED if not defined FIREWALL_MUTATION_STARTED goto :ROLLBACK_FIREWALL_DONE
 call :RESTORE_FIREWALL_CHECKED
 if errorlevel 1 (
     echo ERROR: Firewall restore failed for installer-owned rule.
@@ -561,17 +562,20 @@ if /I "%MATCHED_FIREWALL_TYPE%"=="portable" (
 rem PowerShell-style rule: delete old name, create new name with new port
 echo Renaming firewall rule: "%OLD_PS_RULE_NAME%" -^> "%NEW_PS_RULE_NAME%"
 rem Export the existing rule's remoteport/protocol/direction before deletion
-rem (simplified: re-create as inbound TCP on new port, matching PS installer contract)
+rem (contract baseline preserved: inbound TCP allow, new TCP port, exact SearchEngine.exe program binding, enabled)
+if not defined PROGRAM_PATH (
+    echo ERROR: PROGRAM_PATH is empty; cannot safely recreate PowerShell-owned firewall rule.
+    exit /b 1
+)
 netsh.exe advfirewall firewall delete rule name="%OLD_PS_RULE_NAME%" >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Could not delete old PowerShell firewall rule "%OLD_PS_RULE_NAME%".
     exit /b 1
 )
-netsh.exe advfirewall firewall add rule name="%NEW_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%NEW_PORT% >nul 2>&1
+set "FIREWALL_MUTATION_STARTED=1"
+netsh.exe advfirewall firewall add rule name="%NEW_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%NEW_PORT% program="%PROGRAM_PATH%" enable=yes >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Could not create new PowerShell firewall rule "%NEW_PS_RULE_NAME%".
-    rem Attempt to restore old rule
-    netsh.exe advfirewall firewall add rule name="%OLD_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%OLD_PORT% >nul 2>&1
     exit /b 1
 )
 set "FIREWALL_MODIFIED=1"
@@ -591,10 +595,36 @@ if /I "%MATCHED_FIREWALL_TYPE%"=="portable" (
 
 if /I "%MATCHED_FIREWALL_TYPE%"=="ps" (
     echo Restoring firewall rule: "%NEW_PS_RULE_NAME%" -^> "%OLD_PS_RULE_NAME%"
-    netsh.exe advfirewall firewall delete rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
-    netsh.exe advfirewall firewall add rule name="%OLD_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%OLD_PORT% >nul 2>&1
+    if not defined PROGRAM_PATH (
+        echo ERROR: PROGRAM_PATH is empty; cannot safely restore PowerShell-owned firewall rule.
+        exit /b 1
+    )
+    rem NEW-rule: delete only if it exists; always check delete errorlevel.
+    netsh.exe advfirewall firewall show rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
+    if not errorlevel 1 (
+        netsh.exe advfirewall firewall delete rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
+        if errorlevel 1 (
+            echo ERROR: Could not delete NEW PowerShell firewall rule "%NEW_PS_RULE_NAME%".
+            exit /b 1
+        )
+    )
+
+    rem OLD-rule: create/restore with checked errorlevel.
+    netsh.exe advfirewall firewall add rule name="%OLD_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%OLD_PORT% program="%PROGRAM_PATH%" enable=yes >nul 2>&1
     if errorlevel 1 (
         echo ERROR: Could not restore PowerShell firewall rule "%OLD_PS_RULE_NAME%".
+        exit /b 1
+    )
+
+    rem Contract check: OLD must exist; NEW must not exist after restore.
+    netsh.exe advfirewall firewall show rule name="%OLD_PS_RULE_NAME%" >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: Firewall restore verification failed: OLD rule "%OLD_PS_RULE_NAME%" not found.
+        exit /b 1
+    )
+    netsh.exe advfirewall firewall show rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
+    if not errorlevel 1 (
+        echo ERROR: Firewall restore verification failed: NEW rule "%NEW_PS_RULE_NAME%" still exists.
         exit /b 1
     )
     exit /b 0

@@ -434,12 +434,18 @@ Workflow (требует Administrator):
 **Firewall:**
 - Portable-installer rule (`SearchEngineService[-instance] TCP`): только localport.
 - PowerShell-installer rule (`<display name> (<port>/TCP)`): удаляется и создаётся
-  заново с новым именем и портом (имя включает порт). Rollback симметричен.
+  заново с новым именем и портом (имя включает порт), при этом сохраняется
+  baseline, определённый установщиком репозитория: inbound allow, TCP port,
+  привязка `SearchEngine.exe` (program) и enabled. Rollback симметричен.
 
 **Ограничения:**
 - Hot reload не поддерживается — всегда Stop→Start.
 - Не изменяет индексы, auth-базу, логи и другие runtime-данные.
 - Cyrillic-path round-trip через `cmd.exe` не верифицирован без integration test.
+- Для PowerShell-style delete/recreate firewall-rule гарантируется сохранение
+  только baseline параметров установщика (имя/display-name, inbound allow,
+  TCP port, `SearchEngine.exe` program binding, enabled). Дополнительные
+  вручную заданные свойства после установки не гарантированы к сохранению.
 - При manual recovery: rollback-dir находится в `%TEMP%\SE-Configure-*`; скрипт
   выводит путь при любой неудаче.
 

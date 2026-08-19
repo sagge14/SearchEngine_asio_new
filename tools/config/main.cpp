@@ -1048,7 +1048,7 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     // max_response: runtime uses it as-is; 0 returns 0 results (valid operational value).
     if (config.contains("max_response")) {
         const auto v = jsonInteger(config["max_response"]);
-        if (!v || *v < 0) {
+        if (!v || *v < 0 || *v > std::numeric_limits<int>::max()) {
             errors.emplace_back("config.max_response must be a non-negative integer");
         }
     }
@@ -1058,13 +1058,23 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         const auto v = jsonInteger(config["ind_time"]);
         if (!v || *v < 1) {
             errors.emplace_back("config.ind_time must be integer >= 1");
+        } else {
+            // ind_time is parsed into size_t at runtime. Validate representable range.
+            const unsigned long long uv =
+                static_cast<unsigned long long>(*v);
+            const unsigned long long maxSizeT =
+                static_cast<unsigned long long>(
+                    std::numeric_limits<size_t>::max());
+            if (uv > maxSizeT) {
+                errors.emplace_back("config.ind_time is out of representable size_t range");
+            }
         }
     }
 
     if (config.contains("max_parallel_readers")) {
         // 0 = no limit (runtime default); positive values cap concurrency.
         const auto v = jsonInteger(config["max_parallel_readers"]);
-        if (!v || *v < 0) {
+        if (!v || *v < 0 || *v > std::numeric_limits<int>::max()) {
             errors.emplace_back(
                 "config.max_parallel_readers must be a non-negative integer");
         }
@@ -1097,7 +1107,7 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     if (config.contains("sqlite_mirror_max_pending_ops")) {
         // 0 = flush by timer only (documented operational value).
         const auto v = jsonInteger(config["sqlite_mirror_max_pending_ops"]);
-        if (!v || *v < 0) {
+        if (!v || *v < 0 || *v > std::numeric_limits<int>::max()) {
             errors.emplace_back(
                 "config.sqlite_mirror_max_pending_ops must be a non-negative integer");
         }
@@ -1106,7 +1116,7 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     if (config.contains("sqlite_load_threads")) {
         // Must be >= 1 (0 has no defined runtime semantics for parallelism degree).
         const auto v = jsonInteger(config["sqlite_load_threads"]);
-        if (!v || *v < 1) {
+        if (!v || *v < 1 || *v > std::numeric_limits<int>::max()) {
             errors.emplace_back("config.sqlite_load_threads must be integer >= 1");
         }
     }

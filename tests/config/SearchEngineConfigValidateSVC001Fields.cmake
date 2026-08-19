@@ -226,6 +226,63 @@ write_json_with_field("${template_json}" "${f}" "save_dictionary_to_file" "0")
 assert_validate("save_dictionary_to_file as integer" "${f}" FALSE)
 
 # ------------------------------------------------------------------
+# 21b. representable INT_MAX boundaries for int destinations
+# ------------------------------------------------------------------
+math(EXPR INT_MAX "2147483647")
+math(EXPR INT_MAX_PLUS1 "${INT_MAX}+1")
+
+# max_response: 0..INT_MAX allowed
+set(f "${TEST_ROOT}/max-response-intmax-valid.json")
+write_json_with_field("${template_json}" "${f}" "max_response" "${INT_MAX}")
+assert_validate("max_response INT_MAX" "${f}" TRUE)
+
+set(f "${TEST_ROOT}/max-response-intmax-over.json")
+write_json_with_field("${template_json}" "${f}" "max_response" "${INT_MAX_PLUS1}")
+assert_validate("max_response INT_MAX+1" "${f}" FALSE)
+
+# max_parallel_readers: 0..INT_MAX allowed (0 sentinel is already covered)
+set(f "${TEST_ROOT}/max-parallel-readers-intmax-valid.json")
+write_json_with_field("${template_json}" "${f}" "max_parallel_readers" "${INT_MAX}")
+assert_validate("max_parallel_readers INT_MAX" "${f}" TRUE)
+
+set(f "${TEST_ROOT}/max-parallel-readers-intmax-over.json")
+write_json_with_field("${template_json}" "${f}" "max_parallel_readers" "${INT_MAX_PLUS1}")
+assert_validate("max_parallel_readers INT_MAX+1" "${f}" FALSE)
+
+# sqlite_mirror_max_pending_ops: 0..INT_MAX allowed (0 sentinel is already covered)
+set(f "${TEST_ROOT}/pending-ops-intmax-valid.json")
+write_json_with_field("${template_json}" "${f}" "sqlite_mirror_max_pending_ops" "${INT_MAX}")
+assert_validate("sqlite_mirror_max_pending_ops INT_MAX" "${f}" TRUE)
+
+set(f "${TEST_ROOT}/pending-ops-intmax-over.json")
+write_json_with_field("${template_json}" "${f}" "sqlite_mirror_max_pending_ops" "${INT_MAX_PLUS1}")
+assert_validate("sqlite_mirror_max_pending_ops INT_MAX+1" "${f}" FALSE)
+
+# sqlite_load_threads: 1..INT_MAX allowed
+set(f "${TEST_ROOT}/sqlite-load-threads-intmax-valid.json")
+write_json_with_field("${template_json}" "${f}" "sqlite_load_threads" "${INT_MAX}")
+assert_validate("sqlite_load_threads INT_MAX" "${f}" TRUE)
+
+set(f "${TEST_ROOT}/sqlite-load-threads-intmax-over.json")
+write_json_with_field("${template_json}" "${f}" "sqlite_load_threads" "${INT_MAX_PLUS1}")
+assert_validate("sqlite_load_threads INT_MAX+1" "${f}" FALSE)
+
+# ------------------------------------------------------------------
+# 21c. ind_time representable-range checks depend on architecture
+# ------------------------------------------------------------------
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    # x86: ind_time must not exceed SIZE_MAX (2^32-1); overflow fails.
+    set(f "${TEST_ROOT}/ind-time-over-size_t-x86.json")
+    write_json_with_field("${template_json}" "${f}" "ind_time" "4294967296")
+    assert_validate("ind_time over SIZE_MAX (x86)" "${f}" FALSE)
+else()
+    # x64: value within size_t range must PASS.
+    set(f "${TEST_ROOT}/ind-time-within-size_t-x64.json")
+    write_json_with_field("${template_json}" "${f}" "ind_time" "4294967295")
+    assert_validate("ind_time within size_t (x64/other)" "${f}" TRUE)
+endif()
+
+# ------------------------------------------------------------------
 # Build a compact single-line baseline for array element tests.
 # This avoids multi-line regex issues with the template.
 # ------------------------------------------------------------------

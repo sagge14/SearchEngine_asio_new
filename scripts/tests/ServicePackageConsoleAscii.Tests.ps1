@@ -424,6 +424,22 @@ Assert-True ($configureText.Contains('ROLLBACK_HEALTH')) (
     '9. Configure-SearchEngineService.bat checks old health before commit after rollback'
 )
 
+# 9b. SVC-001 firewall contract: preserve installer-owned program binding.
+Assert-True ($configureText.Contains('program="%PROGRAM_PATH%" enable=yes')) (
+    '9b. PS-style firewall add/restore uses exact program="%PROGRAM_PATH%" enable=yes'
+)
+
+# 9c. SVC-001 firewall rollback: NEW delete failure must be checked.
+$restorePatternHasError = '(?s):RESTORE_FIREWALL_CHECKED.*Could not delete NEW PowerShell firewall rule.*exit /b 1'
+Assert-True ([regex]::IsMatch($configureText, $restorePatternHasError)) (
+    '9c. RESTORE_FIREWALL_CHECKED has checked error path for failed delete NEW rule'
+)
+
+$restorePatternOrder = '(?s):RESTORE_FIREWALL_CHECKED.*Could not delete NEW PowerShell firewall rule.*exit /b 1.*exit /b 0'
+Assert-True ([regex]::IsMatch($configureText, $restorePatternOrder)) (
+    '9c. RESTORE_FIREWALL_CHECKED aborts (exit /b 1) before rollback success (exit /b 0)'
+)
+
 # Verify packager includes Configure-SearchEngineService.bat
 Assert-True ($packagerText.Contains("'Configure-SearchEngineService.bat'")) (
     '9. Packager portableBatchFiles includes Configure-SearchEngineService.bat'
