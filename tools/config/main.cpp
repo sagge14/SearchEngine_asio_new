@@ -19,6 +19,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -33,6 +34,11 @@ constexpr int kMaxFileTimeout = 600;
 constexpr int kRecommendedFileTimeout = 120;
 constexpr int kFormatJsonIndent = 4;
 constexpr std::uint64_t kPingCommand = 18;
+
+enum class JsonLineEnding {
+    Lf,
+    CrLf
+};
 
 enum class UiLanguage {
     Russian,
@@ -781,11 +787,67 @@ void mergeJson(json& destination, const json& source)
     }
 }
 
+std::string withTrailingLf(std::string text)
+{
+    if (text.empty() || text.back() != '\n') {
+        text.push_back('\n');
+    }
+    return text;
+}
+
+std::string makeCrLf(std::string_view text)
+{
+    std::string result;
+    result.reserve(text.size() + 16);
+    for (const char ch : text) {
+        if (ch == '\r') {
+            continue;
+        }
+        if (ch == '\n') {
+            result += "\r\n";
+        } else {
+            result.push_back(ch);
+        }
+    }
+    if (result.size() < 2 ||
+        result[result.size() - 2] != '\r' ||
+        result.back() != '\n')
+    {
+        result += "\r\n";
+    }
+    return result;
+}
+
+std::string serializeJsonText(
+    const json& value,
+    int indent,
+    JsonLineEnding lineEnding)
+{
+    const std::string dumped = value.dump(indent);
+    if (lineEnding == JsonLineEnding::CrLf) {
+        return makeCrLf(dumped);
+    }
+    return withTrailingLf(dumped);
+}
+
+JsonLineEnding parseJsonLineEnding(const std::wstring& text)
+{
+    if (text == L"crlf") {
+        return JsonLineEnding::CrLf;
+    }
+    if (text == L"lf") {
+        return JsonLineEnding::Lf;
+    }
+    throw std::runtime_error("line ending must be lf or crlf");
+}
+
 void writeJsonAtomically(
     const fs::path& output,
     const json& value,
-    int indent = 2)
+    int indent = 2,
+    JsonLineEnding lineEnding = JsonLineEnding::Lf)
 {
+    const std::string text = serializeJsonText(value, indent, lineEnding);
     fs::path temporary = output;
     temporary += L".tmp-" + std::to_wstring(GetCurrentProcessId());
 
@@ -794,7 +856,7 @@ void writeJsonAtomically(
         if (!stream) {
             throw std::runtime_error("cannot create temporary settings file");
         }
-        stream << value.dump(indent) << '\n';
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
         stream.flush();
         if (!stream) {
             throw std::runtime_error("cannot write temporary settings file");
@@ -1182,8 +1244,12 @@ void printSystemInfo()
 int formatJsonCommand(const std::vector<std::wstring>& args)
 {
     const fs::path settings = requiredOption(args, L"--settings");
+    JsonLineEnding lineEnding = JsonLineEnding::CrLf;
+    if (const auto value = option(args, L"--line-ending")) {
+        lineEnding = parseJsonLineEnding(*value);
+    }
     const json root = readJson(settings);
-    writeJsonAtomically(settings, root, kFormatJsonIndent);
+    writeJsonAtomically(settings, root, kFormatJsonIndent, lineEnding);
     return 0;
 }
 
@@ -2020,7 +2086,7 @@ void printUsage()
         << "  system-info\n"
         << "  inspect --settings FILE\n"
         << "  validate --settings FILE [--check-dirs]\n"
-        << "  format-json --settings FILE\n"
+        << "  format-json --settings FILE [--line-ending lf|crlf]\n"
         << "  compare-json --left FILE --right FILE\n"
         << "  validate-prefix-map --path FILE\n"
         << "  configure --template FILE --output FILE --port N --year N\n"

@@ -458,11 +458,6 @@ try {
     Copy-Item -LiteralPath $VCRedistPath -Destination `
         (Join-Path $stagingDirectory ('prerequisites\' + $vcRedistName))
 
-    New-Item -ItemType Directory `
-        -Path (Join-Path $stagingDirectory 'data\logs') | Out-Null
-    New-Item -ItemType Directory `
-        -Path (Join-Path $stagingDirectory 'data\messages') | Out-Null
-
     $protectedFiles = @()
     foreach ($relativeRoot in @('app', 'tools', 'prerequisites')) {
         $absoluteRoot = Join-Path $stagingDirectory $relativeRoot

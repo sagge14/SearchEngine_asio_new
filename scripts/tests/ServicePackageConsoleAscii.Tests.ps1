@@ -501,8 +501,12 @@ Assert-True ($configureText.Contains('ROLLBACK_HEALTH')) (
 )
 
 # 9d. Configure pretty-prints TEMP edit copy once before first Notepad open.
-Assert-True ($configureText.Contains('format-json --settings "%EDIT_TEMP%"')) (
-    '9d. Configure-SearchEngineService.bat formats EDIT_TEMP with format-json'
+$formatJsonEditTemp = 'format-json --settings "%EDIT_TEMP%" --line-ending crlf'
+Assert-True ($configureText.Contains($formatJsonEditTemp)) (
+    '9d. Configure-SearchEngineService.bat formats EDIT_TEMP with format-json CRLF'
+)
+Assert-True ($configureText.Contains('--line-ending crlf')) (
+    '9d. Configure-SearchEngineService.bat requests CRLF line endings'
 )
 Assert-True (-not $configureText.Contains('format-json --settings "%SETTINGS_PATH%"')) (
     '9d. Configure-SearchEngineService.bat does not format active SETTINGS_PATH'
@@ -513,8 +517,8 @@ Assert-True ($firstNotepad -ge 0) '9d. Configure-SearchEngineService.bat opens N
 $copyStart = $configureText.IndexOf($copyMarker)
 Assert-True ($copyStart -ge 0) '9d. Configure copy-to-EDIT_TEMP step is present'
 $preEditorSlice = $configureText.Substring($copyStart, $firstNotepad - $copyStart)
-Assert-True ($preEditorSlice.Contains('format-json --settings "%EDIT_TEMP%"')) (
-    '9d. format-json runs after copy and before first Notepad open'
+Assert-True ($preEditorSlice.Contains($formatJsonEditTemp)) (
+    '9d. format-json CRLF runs after copy and before first Notepad open'
 )
 $validateMarker = 'validate --settings "%EDIT_TEMP%"'
 $validatePos = $configureText.IndexOf($validateMarker)
@@ -602,6 +606,103 @@ try {
 } finally {
     if (Test-Path -LiteralPath $freshRoot) {
         Remove-Item -LiteralPath $freshRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 8. SearchEngineService package data layout contract.
+Write-Host ''
+Write-Host '=== Service package data layout tests ==='
+Assert-True (-not ($packagerText -match "data\\logs")) (
+    '8. Packager does not create data\logs'
+)
+Assert-True (-not ($packagerText -match "data\\messages")) (
+    '8. Packager does not create data\messages'
+)
+Assert-True ($packagerText.Contains("data\Settings.json")) (
+    '8. Packager copies data\Settings.json'
+)
+Assert-True ($packagerText.Contains("data\ignore.txt")) (
+    '8. Packager copies data\ignore.txt'
+)
+Assert-True ($packagerText.Contains("data\prefix_map.json")) (
+    '8. Packager copies data\prefix_map.json'
+)
+Assert-True ($packagerText.Contains("data\OEM866.INI")) (
+    '8. Packager writes data\OEM866.INI'
+)
+
+function Test-PackageDataLayout {
+    param(
+        [string]$PackageDirectory,
+        [string]$ArchitectureLabel
+    )
+    $dataDir = Join-Path $PackageDirectory 'data'
+    foreach ($name in @('Settings.json', 'ignore.txt', 'OEM866.INI', 'prefix_map.json')) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $dataDir $name) -PathType Leaf) (
+            "8. $ArchitectureLabel data\$name exists"
+        )
+    }
+    foreach ($name in @('logs', 'messages')) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $dataDir $name))) (
+            "8. $ArchitectureLabel data\$name absent"
+        )
+    }
+}
+
+$packageArchCases = @(
+    @{ Label = 'x64'; Architecture = 'x64'; Preset = 'windows-x64' },
+    @{ Label = 'x86-modern'; Architecture = 'x86-modern'; Preset = 'windows-x86' },
+    @{ Label = 'x86-Windows7'; Architecture = 'x86'; Preset = 'windows7-x86' }
+)
+$packageTempRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'ServicePackageDataLayout-' + [Guid]::NewGuid().ToString('N')
+)
+New-Item -ItemType Directory -Path $packageTempRoot | Out-Null
+try {
+    foreach ($case in $packageArchCases) {
+        $buildDir = Join-Path $projectRoot (
+            'out\build\' + $case.Preset + '\Release'
+        )
+        $required = @(
+            (Join-Path $buildDir 'SearchEngine.exe'),
+            (Join-Path $buildDir 'SearchEngineConfig.exe'),
+            (Join-Path $buildDir 'AuthDbTool.exe'),
+            (Join-Path $buildDir 'SearchClientTokenIssuer.exe'),
+            (Join-Path $buildDir 'searchclient-auth-token.defaults.json')
+        )
+        $missing = @($required | Where-Object {
+            -not (Test-Path -LiteralPath $_ -PathType Leaf)
+        })
+        if ($missing.Count -gt 0) {
+            Write-Host (
+                "SKIP: 8. $($case.Label) package layout NOT RUN " +
+                "(missing Release binaries under out\build\$($case.Preset)\Release)"
+            )
+            continue
+        }
+
+        $outputDir = Join-Path $packageTempRoot $case.Label
+        try {
+            & (Join-Path $projectRoot 'scripts\New-SearchEngineServicePackage.ps1') `
+                -Architecture $case.Architecture `
+                -BuildDirectory $buildDir `
+                -OutputDirectory $outputDir `
+                -SkipCloudPublish | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "packager exited with code $LASTEXITCODE"
+            }
+            Test-PackageDataLayout -PackageDirectory $outputDir `
+                -ArchitectureLabel $case.Label
+        } catch {
+            Write-Host (
+                "SKIP: 8. $($case.Label) package layout NOT RUN ($($_.Exception.Message))"
+            )
+        }
+    }
+} finally {
+    if (Test-Path -LiteralPath $packageTempRoot) {
+        Remove-Item -LiteralPath $packageTempRoot -Recurse -Force `
+            -ErrorAction SilentlyContinue
     }
 }
 

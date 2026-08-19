@@ -210,7 +210,7 @@ out\package\SearchEngineService-x86-Windows7\
 
 - `app\SearchEngine.exe`;
 - `tools\SearchEngineConfig.exe` той же архитектуры;
-- `data\Settings.json`, `OEM866.INI`, `ignore.txt` и пустые runtime-каталоги;
+- `data\Settings.json`, `OEM866.INI`, `ignore.txt`, `prefix_map.json`;
 - соответствующий подписанный Microsoft VC++ Redistributable;
 - BAT-скрипты установки, остановки, запуска, перезапуска и полного удаления;
 - подробная `INSTALLATION_GUIDE_RU.txt` с назначением каждого файла;
@@ -218,8 +218,21 @@ out\package\SearchEngineService-x86-Windows7\
 
 Рабочий индекс, `log.db`, WAL/SHM и логи в комплект намеренно не копируются:
 на новой машине это изменяемые данные, и служба создаёт их в своём data-dir.
-Редактировать `data\Settings.json` в уже собранном комплекте разрешено — это
-целевой конфиг конкретного компьютера.
+`data\Settings.json` в комплекте — **release template** (schema/default values
+текущей версии), а не production-конфиг конкретной машины. Его можно
+подготовить перед установкой; активный `<data-dir>\Settings.json` создаётся
+workflow установки/настройки. При update/reinstall установщик начинает с
+шаблона нового релиза и рекурсивно импортирует существующий installed
+Settings: старые значения сохраняются, новые поля релиза получают defaults
+из template, если их не было в старом конфиге; явные значения диалога имеют
+приоритет. Каталог `logs\` в комплекте отсутствует и создаётся в data-dir при
+нужде. `messages\` в комплекте отсутствует (legacy); новые установки его не
+создают, historical `messages\` в ProgramData при update сохраняется.
+
+При добавлении нового persistent-параметра Settings разработчик задаёт default
+в `deployment\SearchEngineServicePortable\source-data\Settings.json`, чтобы
+upgrade автоматически дополнял старые установки.
+
 Вся папка `data\` намеренно исключена из SHA-256-проверки пакета, включая
 `OEM866.INI` и `ignore.txt`. JSON сформированных настроек валидируется
 установщиком после диалога, а не по шаблону комплекта до установки.

@@ -174,7 +174,7 @@ if errorlevel 1 (
 )
 
 rem --- Step 3b: Pretty-format temp copy once for Notepad readability ---
-"%HELPER%" format-json --settings "%EDIT_TEMP%"
+"%HELPER%" format-json --settings "%EDIT_TEMP%" --line-ending crlf
 if errorlevel 1 (
     echo ERROR: Cannot format Settings.json because the temporary copy contains invalid JSON.
     goto :CLEANUP_TEMPS_ERR

@@ -22,17 +22,25 @@ Register-AuthClient-FromToken.bat.
    default.
 3. Проверьте в data\Settings.json каталоги config.dirs, exclude_dirs,
    prm_base_dir, prd_base_dir, tlg_send_root, razn_output_dir, opis_base_dir
-   и f12_base_dir. Это локальные пути, доступные службе LocalSystem по ACL.
+   и f12_base_dir. data\Settings.json — шаблон релиза (template/default values),
+   не production-конфиг установленной службы. Его можно подготовить под целевой
+   компьютер до установки; активный Settings.json создаётся в ProgramData.
+   Это локальные пути, доступные службе LocalSystem по ACL.
    User mapped drives из обычной пользовательской сессии службе недоступны.
    Отсутствие feature-specific каталога (F12, OPIS, разноска, tlg_send_root)
    не мешает запуску: ошибка появится при вызове соответствующей функции.
 4. У каждого экземпляра должен быть свой свободный TCP-порт.
 5. Запустите Install-SearchEngineService.bat от имени администратора.
 
-data\Settings.json является пользовательским шаблоном конкретного компьютера:
-его разрешено заменять или редактировать. Контроль целостности пакета намеренно
-не проверяет папку data\. Корректность JSON проверяется после диалога настройки,
-на сформированном файле.
+data\Settings.json — шаблон релиза, а не активный production-конфиг. Его
+разрешено редактировать перед установкой как подготовку под целевой компьютер.
+Контроль целостности пакета намеренно не проверяет папку data\. Корректность
+JSON проверяется после диалога настройки на сформированном файле в ProgramData.
+
+Комплект data\ не содержит logs\ и messages\. Каталог logs\ создаётся в
+data-dir при установке/обновлении как runtime-состояние. messages\ больше не
+создаётся на новых установках; historical messages\ в ProgramData при update
+сохраняется.
 
 Служба работает как LocalSystem. Рабочие корни задаются в Settings.json:
 tlg_send_root, razn_output_dir, opis_base_dir и f12_base_dir. Буква диска
@@ -64,9 +72,11 @@ ServiceInstance.cmd или передать первым аргументом, �
   Uninstall-SearchEngineService.bat archive
 
 Повторный запуск установщика заменяет Program Files и публикует новый
-Settings.json из шаблона пакета с импортом поддерживаемых старых значений.
+Settings.json: шаблон нового релиза + импорт существующих установленных
+значений (старые поля сохраняются, новые defaults — из шаблона).
 OEM866.INI и client-endpoint.txt обновляются с малым rollback. ProgramData
-остаётся на месте: индекс, авторизация, messages, logs, prefix_map.json,
+остаётся на месте: индекс, авторизация, historical messages (если был),
+logs, prefix_map.json,
 пользовательский ignore.txt и неизвестные runtime-файлы не переносятся и не
 удаляются. Откат не копирует многогигабайтный индекс. Необязательный export —
 отдельная страховка оператора; отказ от export больше не означает удаление
