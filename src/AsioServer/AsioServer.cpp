@@ -20,6 +20,7 @@
 #include "Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.h"
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
 #include "Commands/TelegramFiles/TelegramFileResolver.h"
+#include "Commands/TelegramFiles/PdtvFileResolver.h"
 #include "Commands/Auth/AuthenticateCmd.h"
 #include "Auth/AuthRuntime.h"
 #include "MyUtils/Utf8Path.h"
@@ -505,15 +506,19 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
         else if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
-                 requestHeader.command == COMMAND::GET_TELEGA_TEXT)
+                 requestHeader.command == COMMAND::GET_TELEGA_TEXT ||
+                 requestHeader.command == COMMAND::GET_ISH_PDTV_TEXT)
         {
             personalRequest.request = std::string(
                 requestData.begin(),
                 requestData.end());
-            auto resolved =
-                requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT
-                    ? TelegramFileResolver::resolveAttachment(requestData)
-                    : TelegramFileResolver::resolveText(requestData);
+            ResolveTelegramFileResult resolved;
+            if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT)
+                resolved = TelegramFileResolver::resolveAttachment(requestData);
+            else if (requestHeader.command == COMMAND::GET_TELEGA_TEXT)
+                resolved = TelegramFileResolver::resolveText(requestData);
+            else
+                resolved = PdtvFileResolver::resolve(requestData);
             if (resolved.failed()) {
                 co_await queueError(
                     resolved.error.value_or(

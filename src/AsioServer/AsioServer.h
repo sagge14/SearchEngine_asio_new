@@ -78,6 +78,7 @@ namespace asio_server
         NEGOTIATE_PROTOCOL_V1 = 30,
         AUTHENTICATE_V1 = 31,
         GET_TELEGA_TEXT = 32,
+        GET_ISH_PDTV_TEXT = 33,
         // LEGACY: специальное составное wire-значение, не расширять.
         SAVE_MESSAGE_TO = 2781032419
     };
@@ -92,6 +93,7 @@ namespace asio_server
                     case COMMAND::NEGOTIATE_PROTOCOL_V1: return "NEGOTIATE_PROTOCOL_V1";
                     case COMMAND::AUTHENTICATE_V1: return "AUTHENTICATE_V1";
                     case COMMAND::GET_TELEGA_TEXT: return "GET_TELEGA_TEXT";
+                    case COMMAND::GET_ISH_PDTV_TEXT: return "GET_ISH_PDTV_TEXT";
                     default:
                 return "UNKNOWN COMMAND";
         }
@@ -152,6 +154,7 @@ namespace asio_server
             case COMMAND::GET_TELEGA_ATACHMENTS:
             case COMMAND::GET_SINGLE_ATACHMENT:
             case COMMAND::GET_TELEGA_TEXT:
+            case COMMAND::GET_ISH_PDTV_TEXT:
             case COMMAND::NEGOTIATE_PROTOCOL_V1:
             case COMMAND::AUTHENTICATE_V1:
                 return true;
@@ -261,6 +264,7 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1) == 30);
     static_assert(static_cast<uint_fast64_t>(COMMAND::AUTHENTICATE_V1) == 31);
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_TELEGA_TEXT) == 32);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GET_ISH_PDTV_TEXT) == 33);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
     static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
     static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);

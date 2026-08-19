@@ -245,11 +245,16 @@ TEST(TelegramStreamingContract, ProductionPathDoesNotSlurpAttachmentIntoVector)
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::GET_TELEGA_TEXT]"),
         std::string::npos);
+    EXPECT_EQ(
+        serverText.find("cmdMap[COMMAND::GET_ISH_PDTV_TEXT]"),
+        std::string::npos);
     EXPECT_NE(serverText.find("COMMAND::GET_SINGLE_ATACHMENT"), std::string::npos);
     EXPECT_NE(serverText.find("COMMAND::GET_TELEGA_TEXT"), std::string::npos);
+    EXPECT_NE(serverText.find("COMMAND::GET_ISH_PDTV_TEXT"), std::string::npos);
     EXPECT_NE(serverText.find("FileTransfer"), std::string::npos);
     EXPECT_NE(serverText.find("TelegramFileResolver::resolveAttachment"), std::string::npos);
     EXPECT_NE(serverText.find("TelegramFileResolver::resolveText"), std::string::npos);
+    EXPECT_NE(serverText.find("PdtvFileResolver::resolve"), std::string::npos);
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::GETBINFILE]"),
         std::string::npos);
@@ -271,9 +276,12 @@ TEST(TelegramProtocolOrdinals, ScopedTelegramCommandsKeepStableWireValues)
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1), 30u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::AUTHENTICATE_V1), 31u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_TELEGA_TEXT), 32u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_ISH_PDTV_TEXT), 33u);
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_SINGLE_ATACHMENT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_TELEGA_TEXT));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_ISH_PDTV_TEXT));
     EXPECT_FALSE(asio_server::isSessionBootstrapCommand(COMMAND::GET_TELEGA_TEXT));
+    EXPECT_FALSE(asio_server::isSessionBootstrapCommand(COMMAND::GET_ISH_PDTV_TEXT));
 }
 
 TEST_F(TelegramFileResolverTest, ResolvesAdvertisedVhodAttachment)

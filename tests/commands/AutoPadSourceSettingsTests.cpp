@@ -14,6 +14,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,75 @@ namespace
                 "'blank','blank2','edit','gde')");
         }
 
+        ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
+    }
+
+    void closeCachedConnections(const fs::path& databasePath)
+    {
+        SQLiteConnectionManager::instance().closeConnection(databasePath.string());
+        Telega::b_prm.clear();
+        Telega::b_prd.clear();
+    }
+
+    bool sentinelExists(const fs::path& databasePath)
+    {
+        sqlite3* database = nullptr;
+        if (sqlite3_open(databasePath.string().c_str(), &database) != SQLITE_OK)
+            return false;
+
+        sqlite3_stmt* statement = nullptr;
+        const int prepare = sqlite3_prepare_v2(
+            database,
+            "SELECT COUNT(*) FROM sentinel WHERE id = 42",
+            -1,
+            &statement,
+            nullptr);
+        int count = 0;
+        if (prepare == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW)
+            count = sqlite3_column_int(statement, 0);
+        sqlite3_finalize(statement);
+        sqlite3_close(database);
+        return count == 1;
+    }
+
+    void createPdtvArchive(
+        const fs::path& databasePath,
+        const std::string& pdtv,
+        const std::string& allPdtv1)
+    {
+        sqlite3* database = nullptr;
+        ASSERT_EQ(sqlite3_open(databasePath.string().c_str(), &database), SQLITE_OK);
+        ASSERT_NE(database, nullptr);
+        executeSql(database, "DROP TABLE IF EXISTS ARCHIVE");
+        executeSql(
+            database,
+            "CREATE TABLE ARCHIVE ("
+            "`index` TEXT, pdtv TEXT, allpdtv1 TEXT)");
+        sqlite3_stmt* statement = nullptr;
+        ASSERT_EQ(
+            sqlite3_prepare_v2(
+                database,
+                "INSERT INTO ARCHIVE (`index`, pdtv, allpdtv1) VALUES (?, ?, ?)",
+                -1,
+                &statement,
+                nullptr),
+            SQLITE_OK);
+        ASSERT_EQ(sqlite3_bind_text(statement, 1, "7", -1, SQLITE_TRANSIENT), SQLITE_OK);
+        ASSERT_EQ(
+            sqlite3_bind_text(statement, 2, pdtv.c_str(), -1, SQLITE_TRANSIENT),
+            SQLITE_OK);
+        ASSERT_EQ(
+            sqlite3_bind_text(
+                statement,
+                3,
+                allPdtv1.c_str(),
+                -1,
+                SQLITE_TRANSIENT),
+            SQLITE_OK);
+        ASSERT_EQ(sqlite3_step(statement), SQLITE_DONE);
+        ASSERT_EQ(sqlite3_finalize(statement), SQLITE_OK);
+        executeSql(database, "CREATE TABLE sentinel (id INTEGER)");
+        executeSql(database, "INSERT INTO sentinel VALUES (42)");
         ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
     }
 
@@ -364,3 +434,78 @@ TEST_F(AutoPadSourceTest, PdtvDisabledReturnsEmptySuccess)
     EXPECT_TRUE(payload.empty());
     EXPECT_TRUE(Telega::b_prd.empty());
 }
+
+TEST_F(AutoPadSourceTest, PdtvMissingSourceReturnsDataSourceUnavailable)
+{
+    Telega::prd_base_dir = (root_ / "missing-prd").string();
+    GetIshTelegaPdtvCommand command;
+    const auto result = command.executeResult(bytesOf("1"));
+    ASSERT_TRUE(result.failed());
+    EXPECT_EQ(result.error, ErrorCode::DataSourceUnavailable);
+}
+
+TEST_F(AutoPadSourceTest, PdtvMissingSchemaReturnsDatabaseSchemaFailed)
+{
+    GetIshTelegaPdtvCommand command;
+    const auto result = command.executeResult(bytesOf("1"));
+    ASSERT_TRUE(result.failed()) << result.diagnostic;
+    EXPECT_EQ(result.error, ErrorCode::DatabaseSchemaFailed);
+}
+
+TEST_F(AutoPadSourceTest, PdtvValidRowReturnsMetadata)
+{
+    closeCachedConnections(prdArchive_);
+    createPdtvArchive(
+        prdArchive_,
+        "confirm.txt|20240101|C:\\tmp\\confirm.txt",
+        "a.txt|20240101|C:\\tmp\\a.txt/b.txt|20240102|C:\\tmp\\b.txt");
+
+    GetIshTelegaPdtvCommand command;
+    const auto result = command.executeResult(bytesOf("7"));
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto payload = nh::json::parse(
+        std::string(result.payload.begin(), result.payload.end()));
+    ASSERT_TRUE(payload.is_array());
+    ASSERT_EQ(payload.size(), 1u);
+    const auto& row = payload.front();
+    ASSERT_TRUE(row.is_object());
+    const bool hasPdtv = row.contains("pdtv") || row.contains("PDTV");
+    const bool hasAll = row.contains("allpdtv1") || row.contains("AllPDTV1");
+    EXPECT_TRUE(hasPdtv);
+    EXPECT_TRUE(hasAll);
+}
+
+TEST_F(AutoPadSourceTest, PdtvRejectsNonCanonicalIdsAndKeepsSentinel)
+{
+    closeCachedConnections(prdArchive_);
+    createPdtvArchive(prdArchive_, "file|dt|C:\\tmp\\file", "");
+
+    GetIshTelegaPdtvCommand command;
+    const std::vector<std::string> badRequests = {
+        "",
+        "-1",
+        "2147483648",
+        "12a",
+        "1 OR 1=1",
+        "1'; DELETE FROM sentinel; --",
+        " 7",
+        "7 ",
+        "'7'",
+    };
+
+    for (const auto& request : badRequests) {
+        const auto result = command.executeResult(bytesOf(request));
+        ASSERT_TRUE(result.failed()) << request << " " << result.diagnostic;
+        EXPECT_EQ(result.error, ErrorCode::InvalidRequest) << request;
+        closeCachedConnections(prdArchive_);
+        EXPECT_TRUE(sentinelExists(prdArchive_)) << request;
+    }
+
+    std::vector<std::uint8_t> embeddedNul{'7', 0, '1'};
+    const auto nulResult = command.executeResult(embeddedNul);
+    ASSERT_TRUE(nulResult.failed());
+    EXPECT_EQ(nulResult.error, ErrorCode::InvalidRequest);
+    closeCachedConnections(prdArchive_);
+    EXPECT_TRUE(sentinelExists(prdArchive_));
+}
+

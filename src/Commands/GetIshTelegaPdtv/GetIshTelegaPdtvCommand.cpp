@@ -6,7 +6,61 @@
 #include "Commands/GetJsonTelega/GetJsonTelegaCmd.h"
 #include "Commands/GetJsonTelega/Telega.h"
 #include "SQLite/SQLiteConnectionManager.h"
+#include "SQLite/mySQLite.h"
+
+#include <charconv>
+#include <limits>
+#include <optional>
 #include <string>
+#include <system_error>
+
+namespace
+{
+    using command_execution::ErrorCode;
+
+    [[nodiscard]] std::optional<int> parseCanonicalNonNegativeInt(
+        const std::vector<std::uint8_t>& data)
+    {
+        if (data.empty())
+            return std::nullopt;
+
+        for (const auto byte : data) {
+            if (byte < static_cast<std::uint8_t>('0') ||
+                byte > static_cast<std::uint8_t>('9')) {
+                return std::nullopt;
+            }
+        }
+
+        unsigned long long value = 0;
+        const auto* begin = reinterpret_cast<const char*>(data.data());
+        const auto* end = begin + data.size();
+        const auto parsed = std::from_chars(begin, end, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != end)
+            return std::nullopt;
+        if (value > static_cast<unsigned long long>((std::numeric_limits<int>::max)()))
+            return std::nullopt;
+
+        return static_cast<int>(value);
+    }
+
+    [[nodiscard]] command_execution::CommandResult mapSqliteOpenError(
+        const std::exception& error)
+    {
+        return command_execution::CommandResult::failure(
+            ErrorCode::DatabaseOpenFailed,
+            error.what());
+    }
+
+    [[nodiscard]] command_execution::CommandResult mapSqliteQueryError(
+        const SQLiteQueryError& error)
+    {
+        return command_execution::CommandResult::failure(
+            error.isSchemaFailure()
+                ? ErrorCode::DatabaseSchemaFailed
+                : ErrorCode::DatabaseQueryFailed,
+            error.what());
+    }
+}
 
 std::vector<uint8_t> GetIshTelegaPdtvCommand::execute(const std::vector<uint8_t>& data)
 {
@@ -35,28 +89,45 @@ command_execution::CommandResult GetIshTelegaPdtvCommand::executeResult(
         return mapAutoPadSourceError(error);
     }
 
-    const std::string request(data.begin(), data.end());
+    const auto telegramId = parseCanonicalNonNegativeInt(data);
+    if (!telegramId.has_value()) {
+        return command_execution::CommandResult::failure(
+            ErrorCode::InvalidRequest,
+            "GET_ISH_PDTV requires a canonical non-negative integer id");
+    }
+
     const auto sql_qry =
-        "select `index`, pdtv, allpdtv1 from archive where `index` = '" +
-        request + "'";
+        "select `index`, pdtv, allpdtv1 from archive where `index` = " +
+        std::to_string(*telegramId);
 
     std::list<std::map<std::string, std::string>> result{};
-    try {
-        for (const auto& base_name : Telega::b_prd) {
-            auto db = SQLiteConnectionManager::instance().getConnection(base_name);
-            db->execSql(sql_qry);
-
-            if (!db->empty()) {
-                for (const auto& row : *db) {
-                    result.push_back(row);
-                }
-            }
+    for (const auto& base_name : Telega::b_prd) {
+        std::shared_ptr<mySQLite> db;
+        try {
+            db = SQLiteConnectionManager::instance().getReadOnlyConnection(base_name);
         }
-    }
-    catch (const std::exception& error) {
-        return command_execution::CommandResult::failure(
-            command_execution::ErrorCode::DataSourceUnavailable,
-            std::string("PRD data source is unavailable: ") + error.what());
+        catch (const SQLiteOpenError& error) {
+            return mapSqliteOpenError(error);
+        }
+        catch (const std::exception& error) {
+            return mapSqliteOpenError(error);
+        }
+
+        mySQLite::RowList rows;
+        try {
+            rows = db->queryRows(sql_qry);
+        }
+        catch (const SQLiteQueryError& error) {
+            return mapSqliteQueryError(error);
+        }
+        catch (const std::exception& error) {
+            return command_execution::CommandResult::failure(
+                ErrorCode::DatabaseQueryFailed,
+                error.what());
+        }
+
+        for (auto& row : rows)
+            result.push_back(std::move(row));
     }
 
     nh::json jsonTelegi = result;

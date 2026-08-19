@@ -99,6 +99,7 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::FILETEXT), 2u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GETBINFILE), 11u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::PING), 18u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_ISH_PDTV), 24u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_TELEGA_ATACHMENTS), 25u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_SINGLE_ATACHMENT), 26u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::SERVER_BUSY_ERROR), 27u);
@@ -107,6 +108,7 @@ TEST(ProtocolWireOrdinals, ExistingCommandValuesRemainStable)
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::NEGOTIATE_PROTOCOL_V1), 30u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::AUTHENTICATE_V1), 31u);
     EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_TELEGA_TEXT), 32u);
+    EXPECT_EQ(static_cast<std::uint_fast64_t>(COMMAND::GET_ISH_PDTV_TEXT), 33u);
     EXPECT_EQ(
         static_cast<std::uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO),
         2781032419ULL);
@@ -124,6 +126,7 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GETBINFILE));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_SINGLE_ATACHMENT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_TELEGA_TEXT));
+    EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::GET_ISH_PDTV_TEXT));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::USER_REGISTRY));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::NEGOTIATE_PROTOCOL_V1));
     EXPECT_TRUE(asio_server::isRequestCommand(COMMAND::AUTHENTICATE_V1));
