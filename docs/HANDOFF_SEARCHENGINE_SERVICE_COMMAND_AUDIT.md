@@ -15,11 +15,13 @@
 ```text
 server: sagge14/SearchEngine_asio_new
 branch: main
-server audit baseline: 07c7fa49b6e09b0fc4259ea590ac3635232d61ee
+server audit baseline: 59c03b25799da0435edda5ecafd9b3f764a9cfa3
 
 client: myLitleWork/SearchEngine-client
 branch: main
-client audit baseline: 07b16d1f6d578544ce842693ddddf35514dbf424
+client audit baseline: 6c2167a2fb885f921c89b40f23e687ab0fef8a46
+
+final cross-repo audit: 2026-08-19 CLEAN
 ```
 
 После существенных изменений service lifecycle, filesystem/protocol, installer,
@@ -48,18 +50,18 @@ VERIFIED    — реализовано и проверено
 | ID | Приоритет | Тема | Статус |
 |---|---:|---|---|
 | SVC-001 | P1 | Runtime-root и редактирование настроек | VERIFIED |
-| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | DECIDED |
-| SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
-| SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
-| SVC-005 | P0 | Update/reinstall теряет runtime-state | DECIDED |
+| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | VERIFIED |
+| SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | VERIFIED |
+| SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | VERIFIED |
+| SVC-005 | P0 | Update/reinstall теряет runtime-state | VERIFIED |
 | SVC-006 | P0/P1 | `PING/PONG` как core health-check | REJECTED |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | REJECTED |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | VERIFIED |
 | SVC-010 | P0 security | Upload path escape и upload целиком в RAM | VERIFIED |
-| SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
+| SVC-011 | P1 | Жёсткие production paths `D:\...` | VERIFIED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
-| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | FIXED |
+| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | VERIFIED |
 | SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | VERIFIED |
 
 ---
@@ -68,7 +70,7 @@ VERIFIED    — реализовано и проверено
 
 ## SVC-005 — ProgramData является persistent state
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 ```text
 Program Files = заменяемое приложение.
@@ -98,14 +100,21 @@ resource и может обновляться, сохраняя rollback-коп�
 
 Rollback откатывает прежде всего `Program Files` и небольшие installer-owned
 config/auth-файлы. Копировать многогигабайтный индекс перед каждым update не
-требуется. Полное удаление ProgramData допускается только при явном full
-uninstall/reset с предупреждением.
+требуется.
+
+При обычном update/reinstall автоматического destructive cleanup ProgramData
+нет. Historical `messages\` сохраняются; runtime их больше не использует и
+автоматически не удаляет.
+
+Полное удаление ProgramData допускается только через явно подтверждённый
+destructive uninstall/reset/leftover-cleanup workflow (включая случай, когда SCM
+service отсутствует и оператор подтверждает удаление остатков).
 
 ---
 
 ## SVC-003 — `prefix_map.json` входит в release и настраивается installer
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 `GET_ATTACHMENTS` остаётся рабочей функцией. Активный файл в service mode:
 
@@ -129,7 +138,7 @@ Installer спрашивает, используется ли на этом inst
 
 ## SVC-004 — текущая семантика `GET_ATTACHMENTS` сохраняется
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 Оставить текущий сценарий:
 
@@ -141,6 +150,9 @@ Installer спрашивает, используется ли на этом inst
 
 Не вводить сейчас ACK/quarantine/processed-folder. Риск удаления буфера до
 окончательной доставки принят как часть текущей legacy-семантики.
+
+Final cross-repo audit на baseline `59c03b257` / `6c2167a2` подтвердил, что
+production server/client соответствуют этому destructive-контракту.
 
 ---
 
@@ -344,14 +356,20 @@ SearchEngine и SearchClient.
 
 ---
 
-## SVC-002 — service account: LocalSystem остаётся поддерживаемым режимом
+## SVC-002 — service account: production portable contract = LocalSystem
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
-Installer сейчас создаёт/configure службу без `obj=`, поэтому Windows запускает
-её под `LocalSystem`. Это поведение оставить.
+Production portable package contract:
 
-На текущем этапе официальный эксплуатационный контракт:
+```text
+SearchEngineService runs as LocalSystem.
+Portable installer явно показывает:
+  Service account: LocalSystem
+и не поддерживает user mapped drives.
+```
+
+На текущем этапе официальный эксплуатационный контракт portable release:
 
 ```text
 SearchEngineService работает как LocalSystem.
@@ -359,9 +377,13 @@ SearchEngineService работает как LocalSystem.
 доступных этому service account по ACL.
 ```
 
-Сейчас не добавлять:
+Generic `scripts/Install-SearchEngineService.ps1` имеет отдельный explicit
+выбор `-Credential` или `-UseLocalSystem`; это не меняет production portable
+contract и не расширяет его на user mapped drives / UNC без отдельной задачи.
 
-- выбор service account в installer;
+Portable installer сейчас не добавляет:
+
+- выбор service account в interactive portable flow;
 - логин/пароль службы;
 - автоматический `net use`;
 - поддержку user mapped drives;
@@ -371,14 +393,14 @@ SearchEngineService работает как LocalSystem.
 Если позже понадобится сетевое хранилище, это отдельная задача по service
 account/UNC и credential model.
 
-Installer/config diagnostics должны явно показывать:
+Portable installer/config diagnostics должны явно показывать:
 
 ```text
 Service account: LocalSystem
 ```
 
 и документация не должна создавать впечатление, что пользовательские mapped
-drives автоматически видны службе.
+drives автоматически видны production portable service.
 
 Отсутствие/недоступность будущих monthly roots не является startup-fatal само по
 себе — это остаётся решением SVC-007.
@@ -387,7 +409,7 @@ drives автоматически видны службе.
 
 ## SVC-011 — все скрытые production roots выносятся в Settings
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 Жёсткие production paths в C++ убрать. В `Settings.json` добавить отдельные
 настройки назначения, как минимум:
@@ -423,8 +445,8 @@ f12_base_dir
 
 Перевести на эти настройки текущие hardcoded consumers:
 
-- `LOAD_TLG_TO_SEND`;
-- `LOAD_RAZN`;
+- `LOAD_TLG_TO_SEND` / live `UPLOAD_TLG_TO_SEND_V1=34` (15 reserved/rejected);
+- `LOAD_RAZN` / live `UPLOAD_RAZN_V1=35` (22 reserved/rejected);
 - `GET_OPIS_BASE`;
 - `RecordProcessor`;
 - `GET_VH_TELEGA_WAY` / `GET_ISH_TELEGA_WAY` (`TelegaWay`).
@@ -494,7 +516,7 @@ GET_ATTACHMENTS: not configured
 
 ---
 
-# Открытые пункты
+# Реализованные пункты
 
 ## SVC-001 — runtime-root службы и управление настройками
 
@@ -594,7 +616,7 @@ GET_ATTACHMENTS: not configured
 ## SVC-013 — legacy state и диагностика service mode
 
 **Приоритет:** P2  
-**Статус:** FIXED
+**Статус:** VERIFIED
 
 Реализован retirement legacy message queue без изменения wire-слотов:
 
@@ -687,38 +709,33 @@ SVC-013/009/010/012 contracts.
 | `GET_VH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_ISH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_OPIS_BASE` | configurable `opis_base_dir`; SVC-011 |
-| `LOAD_TLG_TO_SEND` | configurable `tlg_send_root`, safe streaming upload; SVC-010/011 |
-| `LOAD_RAZN` | configurable `razn_output_dir`, safe streaming upload; SVC-010/011 |
+| `LOAD_TLG_TO_SEND` | reserved slot 15; server rejects InvalidCommand; SVC-010 |
+| `LOAD_RAZN` | reserved slot 22; server rejects InvalidCommand; SVC-010 |
+| `UPLOAD_TLG_TO_SEND_V1` | streaming V1; Settings `tlg_send_root`; SVC-010/011 |
+| `UPLOAD_RAZN_V1` | streaming V1; Settings `razn_output_dir`; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
-| `GET_SINGLE_ATACHMENT` | scoped attachment flow; SVC-009/012 |
+| `GET_SINGLE_ATACHMENT` / `GET_TELEGA_SINGLE_ATACHMENT` | slot 26; naming differs (server/client), wire ordinal один; scoped streaming attachment flow; SVC-009/012 |
 | `SAVE_MESSAGE_TO` | historical reserved composite marker; rejected InvalidCommand |
 | `GET_MESSAGE` | historical reserved slot 16; rejected InvalidCommand |
 
 ---
 
-# Текущий порядок дальнейшего разбора
-
-Уже разобраны:
+# Финальный статус service/command audit
 
 ```text
-SVC-005 -> DECIDED
-SVC-003 -> DECIDED
-SVC-004 -> DECIDED
-SVC-007 -> REJECTED
-SVC-008 -> REJECTED
-SVC-009 -> VERIFIED
-SVC-010 -> VERIFIED
-SVC-012 -> VERIFIED
-SVC-002 -> DECIDED
-SVC-011 -> DECIDED
-SVC-006 -> REJECTED
+FINAL CROSS-REPO AUDIT: CLEAN
+server baseline: 59c03b25799da0435edda5ecafd9b3f764a9cfa3
+client baseline: 6c2167a2fb885f921c89b40f23e687ab0fef8a46
+audit date:      2026-08-19
 ```
 
-Дальше:
+Все зарегистрированные SVC-001..014 имеют финальный статус VERIFIED или
+REJECTED. Новых OPEN service/protocol issues на проверенных baseline нет.
 
-1. **SVC-001** — runtime config UX (FIXED; correction commit applied).
-2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots (VERIFIED).
+Это закрывает данный service/command audit, а не утверждает, что проект не
+может иметь будущих bugs/features вне этой области. Не переоткрывать
+VERIFIED/REJECTED без нового material fact.
 
 ---
 

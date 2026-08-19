@@ -26,23 +26,33 @@ SearchEngine_asio_new/docs/HANDOFF_SEARCHENGINE_SERVICE_COMMAND_AUDIT.md
 
 # Твоя роль
 
-Ты являешься именно **ведущей умной моделью**.
+Ты являешься **ведущей review-моделью** для SearchEngine/SearchClient.
 
-Более слабые/быстрые модели будут:
+SVC-001..014 audit завершён (**CLEAN**). По умолчанию работай в режиме
+reviewer/audit, а не planner нового refactor.
 
-- получать от тебя один подробный implementation prompt;
-- вносить изменения;
-- запускать доступные тесты/build;
-- делать commit;
-- возвращать пользователю отчёт.
+В каждом цикле:
 
-Затем пользователь будет приносить тебе их результат.
+```text
+проверить actual HEAD обоих repos и handoff
+→ если пользователь принёс новый commit — review его
+→ если есть новый явно поставленный issue — исследовать его
+→ если OPEN implementation issue отсутствует — не придумывать новый refactor
+```
+
+Когда пользователь поручает implementation слабой модели, она:
+
+- получает от тебя один подробный implementation prompt;
+- вносит изменения;
+- запускает доступные тесты/build;
+- делает commit;
+- возвращает пользователю отчёт.
 
 После этого ты обязан:
 
 1. самостоятельно открыть фактический commit/diff;
 2. проверить изменённые файлы, а не доверять отчёту исполнителя;
-3. сверить реализацию с handoff и своим исходным prompt;
+3. сверить реализацию с handoff и исходным prompt;
 4. проверить отсутствие регрессий и случайного scope creep;
 5. проверить тесты и то, что заявленные тесты действительно относятся к изменению;
 6. вынести один из двух вердиктов:
@@ -59,7 +69,8 @@ NEEDS CORRECTION
 
 Во втором случае дай **новый конкретный correction prompt** той же слабой модели. Не переходи к следующей задаче.
 
-Только после `APPROVED` можно выдавать prompt на следующий пункт.
+Только после `APPROVED` можно выдавать prompt на следующий пункт (если пользователь
+явно открыл новую DECIDED-задачу).
 
 ---
 
@@ -67,7 +78,7 @@ NEEDS CORRECTION
 
 **Никогда не выдавай сразу пачку implementation prompts.**
 
-В каждом своём рабочем цикле:
+Если пользователь явно открыл новую DECIDED-задачу, в рабочем цикле:
 
 ```text
 проверить актуальное состояние
@@ -80,11 +91,16 @@ NEEDS CORRECTION
 
 Не выполнять следующий этап заранее.
 
+Если OPEN implementation issue отсутствует — не выдавай implementation prompt.
+
 ---
 
-# Перед первым implementation prompt
+# Перед новым implementation prompt
 
-Перепроверь актуальный handoff.
+Перепроверь актуальный handoff и actual HEAD обоих repos.
+
+SVC-001..014 audit завершён (**CLEAN**). Не переоткрывай VERIFIED/REJECTED
+без нового material fact.
 
 По SVC-008 пользователем уже принято решение:
 
@@ -136,7 +152,11 @@ logs\
 
 `Settings.json` обновляется через новый template + import старых пользовательских значений.
 
-Полный reset ProgramData — только отдельный explicit uninstall/reset.
+Historical `messages\` сохраняются; runtime их больше не использует.
+
+При обычном update/reinstall автоматического destructive cleanup ProgramData нет.
+Полное удаление ProgramData — только через явно подтверждённый destructive
+uninstall/reset/leftover-cleanup workflow.
 
 ---
 
@@ -298,22 +318,27 @@ client disk
 
 ## SVC-002
 
-Windows-служба остаётся под:
+Production portable package contract:
 
 ```text
-LocalSystem
+SearchEngineService runs as LocalSystem
+Portable installer показывает: Service account: LocalSystem
+user mapped drives не поддерживаются
 ```
 
-Не внедрять сейчас:
+Generic `scripts/Install-SearchEngineService.ps1` имеет `-Credential` /
+`-UseLocalSystem`; это не меняет production portable contract.
 
-- custom service accounts;
+Portable installer сейчас не внедряет:
+
+- custom service accounts в interactive portable flow;
 - service passwords;
 - `net use`;
 - user mapped drives;
 - `subst`;
 - UNC credentials.
 
-Installer/config diagnostics должны явно сообщать:
+Portable installer/config diagnostics должны явно сообщать:
 
 ```text
 Service account: LocalSystem
@@ -375,15 +400,17 @@ SCM RUNNING + PING/PONG
 
 ---
 
-# OPEN-пункты
+# Закрытые пункты
 
 На текущий момент открытых protocol/service пунктов из handoff нет.
+
+Финальный cross-repo audit 2026-08-19: **CLEAN**.
 
 SVC-014 реализован (VERIFIED): historical slots 3..9 задокументированы,
 `static_assert`/regression tests добавлены, unreachable legacy upload classes
 удалены. Контракт — `HANDOFF`, секция SVC-014.
 
-SVC-013 уже реализован как retirement legacy message queue. Для всех будущих
+SVC-013 реализован (VERIFIED): retirement legacy message queue. Для всех будущих
 этапов это обязательный контракт:
 
 - не воскрешать `MessageQueue`, `GetMessageCmd`, `SaveMessageCmd`;
@@ -393,7 +420,7 @@ SVC-013 уже реализован как retirement legacy message queue. Дл
   `AttachmentPackage`);
 - не удалять автоматически historical `%ProgramData%\\...\\messages`.
 
-SVC-001 реализован (FIXED): `Configure-SearchEngineService.bat`, `inspect-installed`,
+SVC-001 реализован (VERIFIED): `Configure-SearchEngineService.bat`, `inspect-installed`,
 `settings-transaction-apply/rollback/commit`, расширенный `validateJson()`. Подробнее —
 в `HANDOFF_SEARCHENGINE_SERVICE_COMMAND_AUDIT.md`, секция SVC-001.
 
@@ -403,32 +430,22 @@ SVC-001 реализован (FIXED): `Configure-SearchEngineService.bat`, `insp
 
 # Рекомендуемый порядок реализации
 
-Перед началом сам перепроверь зависимости и при необходимости слегка измени порядок, но объясни причину.
+Порядок SVC-001..014 **выполнен**. Финальный cross-repo audit 2026-08-19
+(`59c03b257` / `6c2167a2`): **CLEAN**.
 
-Базовый порядок:
+Не выдавать implementation prompts на уже VERIFIED/REJECTED пункты без нового
+material fact и отдельного решения пользователя.
+
+Исторический порядок (завершён):
 
 ```text
-1. SVC-008 — только финальная фиксация REJECTED в handoff, если ещё не записано.
-
-2. SVC-005
-   Исправить update/reinstall persistence ProgramData.
-
-3. SVC-003
-   Package/installer prefix_map.json.
-
-4. SVC-002 + SVC-011
-   Settings roots + config helper/installer/docs +
-   убрать hardcoded D:\ consumers.
-
-5. SVC-009 + SVC-012
-   Scoped text/download protocol и end-to-end streaming.
-   Делить на безопасные подэтапы, если один prompt получится слишком большим.
-
-6. SVC-010
-   Safe streaming uploads.
-   Делать после появления configurable upload roots из SVC-011.
-
-7. Финальный cross-repo regression/audit accepted решений.
+1. SVC-008 — REJECTED зафиксирован в handoff.
+2. SVC-005 — ProgramData persistence.
+3. SVC-003 — package/installer prefix_map.json.
+4. SVC-002 + SVC-011 — LocalSystem + Settings roots.
+5. SVC-009 + SVC-012 — scoped text/download + streaming.
+6. SVC-010 — safe streaming uploads 34/35; legacy 15/22 rejected.
+7. Финальный cross-repo regression/audit — CLEAN.
 ```
 
 `SVC-004`, `SVC-006`, `SVC-007`, `SVC-008` не требуют production-code implementation в рамках принятых решений.
@@ -602,18 +619,16 @@ forged id/type/file_name
 
 # Формат твоего первого ответа
 
-После получения этого задания:
+Implementation sequence SVC-001..014 завершена. Финальный audit: **CLEAN**.
+
+После получения нового задания:
 
 1. изучи актуальные HEAD обоих repos и handoff;
-2. проверь, не реализована ли уже часть решений;
-3. проверь статус SVC-008;
-4. составь актуальную dependency/order карту;
-5. **не выдавай сразу все prompts**;
-6. выдай только **первый подробный implementation prompt** для слабой модели;
-7. после него напиши кратко:
+2. не переоткрывай VERIFIED/REJECTED без нового material fact;
+3. если OPEN пунктов нет — не выдавай implementation prompt;
+4. работай в режиме reviewer/audit, пока пользователь отдельно не примет новый пункт.
 
-```text
-Следующий этап не начинаю до проверки результата этого prompt.
-```
+Не используй шаблон «выдай первый implementation prompt», пока пользователь
+явно не откроет новую DECIDED-задачу.
 
-Когда пользователь принесёт результат — переходи в режим reviewer, а не продолжай план автоматически.
+Когда пользователь принесёт результат отдельной будущей задачи — переходи в режим reviewer, а не продолжай план автоматически.
