@@ -501,8 +501,12 @@ Assert-True ($configureText.Contains('ROLLBACK_HEALTH')) (
 )
 
 # 9d. Configure pretty-prints TEMP edit copy once before first Notepad open.
-Assert-True ($configureText.Contains('format-json --settings "%EDIT_TEMP%"')) (
-    '9d. Configure-SearchEngineService.bat formats EDIT_TEMP with format-json'
+$formatJsonEditTemp = 'format-json --settings "%EDIT_TEMP%" --line-ending crlf'
+Assert-True ($configureText.Contains($formatJsonEditTemp)) (
+    '9d. Configure-SearchEngineService.bat formats EDIT_TEMP with format-json CRLF'
+)
+Assert-True ($configureText.Contains('--line-ending crlf')) (
+    '9d. Configure-SearchEngineService.bat requests CRLF line endings'
 )
 Assert-True (-not $configureText.Contains('format-json --settings "%SETTINGS_PATH%"')) (
     '9d. Configure-SearchEngineService.bat does not format active SETTINGS_PATH'
@@ -513,8 +517,8 @@ Assert-True ($firstNotepad -ge 0) '9d. Configure-SearchEngineService.bat opens N
 $copyStart = $configureText.IndexOf($copyMarker)
 Assert-True ($copyStart -ge 0) '9d. Configure copy-to-EDIT_TEMP step is present'
 $preEditorSlice = $configureText.Substring($copyStart, $firstNotepad - $copyStart)
-Assert-True ($preEditorSlice.Contains('format-json --settings "%EDIT_TEMP%"')) (
-    '9d. format-json runs after copy and before first Notepad open'
+Assert-True ($preEditorSlice.Contains($formatJsonEditTemp)) (
+    '9d. format-json CRLF runs after copy and before first Notepad open'
 )
 $validateMarker = 'validate --settings "%EDIT_TEMP%"'
 $validatePos = $configureText.IndexOf($validateMarker)
