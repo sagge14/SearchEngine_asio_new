@@ -1,5 +1,6 @@
 #include "AsioServer.h"
 #include "SearchServer/SearchServer.h"
+#include <cassert>
 #include "SQLite/SQLiteConnectionManager.h"
 #include "MyUtils/SqlLogger.h"
 #include <iostream>
@@ -169,6 +170,72 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                     true,
                     requestHeader.command);
                 co_return;
+            }
+
+            // Legacy upload commands: reject with bounded drain to preserve framing.
+            // Intercepted here, before generic requestData allocation, so the server
+            // never buffers the full body regardless of advertised payload size.
+            if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND ||
+                requestHeader.command == COMMAND::LOAD_RAZN)
+            {
+                // Auth gate: must fire before touching any body bytes.
+                const auto legacyGate = evaluateSessionCommandGate(
+                    requestHeader.command, authenticated_);
+                if (!legacyGate.allow_execute)
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthRequired,
+                        "session is not authenticated",
+                        legacyGate.close_after_auth_required,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                if (!activity_ || !activity_->tryStartCommand())
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::ServerStopping,
+                        {},
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                // Drain advertised body with a bounded fixed-size buffer.
+                // RAM cost: O(kLegacyDiscardChunk), not O(payload_size).
+                constexpr std::size_t kLegacyDiscardChunk = 64 * 1024;
+                std::array<BYTE, kLegacyDiscardChunk> discardBuffer{};
+                std::uint64_t remaining = requestHeader.size;
+                bool drainOk = true;
+                while (remaining > 0)
+                {
+                    const std::size_t toRead = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kLegacyDiscardChunk, remaining));
+                    boost::system::error_code drainEc;
+                    const std::size_t got = co_await boost::asio::async_read(
+                        socket_,
+                        boost::asio::buffer(discardBuffer.data(), toRead),
+                        boost::asio::transfer_exactly(toRead),
+                        boost::asio::redirect_error(boost::asio::use_awaitable, drainEc));
+                    if (drainEc || got != toRead)
+                    {
+                        drainOk = false;
+                        break;
+                    }
+                    remaining -= toRead;
+                }
+
+                activity_->finishCommand();
+
+                if (!drainOk)
+                    co_return; // client closed mid-body; session framing is broken
+
+                co_await queueError(
+                    command_execution::ErrorCode::InvalidCommand,
+                    "legacy upload is disabled; use streaming V1",
+                    false,
+                    requestHeader.command);
+                continue; // framing intact; keep session alive
             }
 
             std::vector<BYTE> requestData(requestHeader.size, 0);
@@ -797,16 +864,11 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
-        if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND ||
-            requestHeader.command == COMMAND::LOAD_RAZN)
-        {
-            co_await queueError(
-                command_execution::ErrorCode::InvalidCommand,
-                "legacy upload is disabled; use streaming V1",
-                false,
-                requestHeader.command);
-            co_return;
-        }
+        // LOAD_TLG_TO_SEND=15 and LOAD_RAZN=22 are intercepted in readLoop
+        // before the generic requestData allocation. Reaching commandExec
+        // with these commands is a defensive invariant violation.
+        assert(requestHeader.command != COMMAND::LOAD_TLG_TO_SEND);
+        assert(requestHeader.command != COMMAND::LOAD_RAZN);
 
         if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
                  requestHeader.command == COMMAND::GET_TELEGA_TEXT ||

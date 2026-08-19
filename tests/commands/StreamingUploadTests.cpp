@@ -180,6 +180,7 @@ TEST(StreamingUploadContract, SourceHandlesCommandsBeforeGenericPayloadAlloc)
     ASSERT_NE(genericPos, std::string::npos);
     EXPECT_LT(callPos, genericPos);
 
+    // Legacy 15/22 must not be in cmdMap.
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::LOAD_TLG_TO_SEND]"),
         std::string::npos);
@@ -192,9 +193,20 @@ TEST(StreamingUploadContract, SourceHandlesCommandsBeforeGenericPayloadAlloc)
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::UPLOAD_RAZN_V1]"),
         std::string::npos);
-    EXPECT_NE(
-        serverText.find("legacy upload is disabled"),
-        std::string::npos);
+
+    // The legacy early-reject branch must appear in readLoop, strictly
+    // before the generic requestData allocation.
+    // The readLoop branch uses "== COMMAND::LOAD_TLG_TO_SEND" (equality
+    // check); the commandExec defensive asserts use "!=" (inequality),
+    // so this token is unique to the readLoop if-branch.
+    const auto legacyRejectPos = serverText.find(
+        "if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND");
+    ASSERT_NE(legacyRejectPos, std::string::npos);
+    EXPECT_LT(legacyRejectPos, genericPos); // must be before vector<BYTE> alloc
+
+    // Verify the bounded discard-drain constant is present (no full-size alloc).
+    EXPECT_NE(serverText.find("kLegacyDiscardChunk"), std::string::npos);
+    EXPECT_NE(serverText.find("legacy upload is disabled"), std::string::npos);
 
     EXPECT_EQ(helperText.find("FileData"), std::string::npos);
     EXPECT_EQ(helperText.find("deserializeFromBytes"), std::string::npos);
