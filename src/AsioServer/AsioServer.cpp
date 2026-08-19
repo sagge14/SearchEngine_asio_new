@@ -796,7 +796,19 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 requestHeader.command);
             co_return;
         }
-        else if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
+
+        if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND ||
+            requestHeader.command == COMMAND::LOAD_RAZN)
+        {
+            co_await queueError(
+                command_execution::ErrorCode::InvalidCommand,
+                "legacy upload is disabled; use streaming V1",
+                false,
+                requestHeader.command);
+            co_return;
+        }
+
+        if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
                  requestHeader.command == COMMAND::GET_TELEGA_TEXT ||
                  requestHeader.command == COMMAND::GET_ISH_PDTV_TEXT)
         {
@@ -988,11 +1000,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
 
             auto request = std::string(requestData.begin(), requestData.end());
-            if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND ||
-                requestHeader.command == COMMAND::LOAD_RAZN)
-                personalRequest.request = getTextCommand(requestHeader.command);
-            else
-                personalRequest.request  = request.empty() ? "EMPTY" : request;
+            personalRequest.request = request.empty() ? "EMPTY" : request;
 
             requestHeader.size = answer.size();
 
@@ -1110,10 +1118,6 @@ void asio_server::Interface::setSearchServer(
         paths.attachmentsConfigPath;
 
     cmdMap[COMMAND::SOLOREQUEST] = std::make_unique<SoloRequestCmd>(searchServer_);
-    cmdMap[COMMAND::LOAD_TLG_TO_SEND] =
-        std::make_unique<SaveTlgToSendCmd>(paths.tlg_send_root);
-    cmdMap[COMMAND::LOAD_RAZN] =
-        std::make_unique<SaveFileDefaultCmd>(paths.razn_output_dir);
     cmdMap[COMMAND::GET_VH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaVhCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaIshCmd>();
     cmdMap[COMMAND::GETSQLJSONANSWEAR] = std::make_unique<GetSqlJsonAnswearCmd>(searchServer_);

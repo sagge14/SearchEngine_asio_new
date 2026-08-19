@@ -56,7 +56,7 @@ VERIFIED    — реализовано и проверено
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | REJECTED |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | VERIFIED |
-| SVC-010 | P0 security | Upload path escape и upload целиком в RAM | DECIDED |
+| SVC-010 | P0 security | Upload path escape и upload целиком в RAM | VERIFIED |
 | SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
 | SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | OPEN |
@@ -267,15 +267,22 @@ Raw server filesystem paths через клиентский протокол б�
 
 ## SVC-010 — безопасная server-side маршрутизация upload и streaming
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
-Streaming V1 foundation commands 34/35 implemented.
-Production SearchClient migrated to 34/35.
-Legacy server commands 15/22 remain temporarily enabled only for rollout
-compatibility and are the final remaining SVC-010 blocker.
+Фактический итог:
 
-This item is not VERIFIED until the final server reject of legacy
-`LOAD_TLG_TO_SEND = 15` and `LOAD_RAZN = 22`.
+```text
+UPLOAD_TLG_TO_SEND_V1 = 34  (streaming V1 — active)
+UPLOAD_RAZN_V1        = 35  (streaming V1 — active)
+
+LOAD_TLG_TO_SEND = 15  (legacy/reserved, server rejects: InvalidCommand)
+LOAD_RAZN        = 22  (legacy/reserved, server rejects: InvalidCommand)
+```
+
+Сервер отклоняет любой запрос с командой 15 или 22 до выполнения handler-а,
+возвращая typed `InvalidCommand` с диагностикой
+`"legacy upload is disabled; use streaming V1"`.
+Wire ordinals 15 и 22 сохранены (не удалены, не перенумерованы).
 
 `LOAD_TLG_TO_SEND` и `LOAD_RAZN` больше не должны использовать клиентский
 `filename` как относительный server path и не должны передавать весь файл внутри
@@ -581,7 +588,7 @@ SVC-004 -> DECIDED
 SVC-007 -> REJECTED
 SVC-008 -> REJECTED
 SVC-009 -> VERIFIED
-SVC-010 -> DECIDED
+SVC-010 -> VERIFIED
 SVC-012 -> VERIFIED
 SVC-002 -> DECIDED
 SVC-011 -> DECIDED
@@ -609,6 +616,46 @@ SVC-006 -> REJECTED
 ---
 
 # Итоговый отчёт по реализованному пункту
+
+## SVC-010 Part C — Final Reject of Legacy Upload Commands
+
+```text
+Issue ID:              SVC-010 (Part C)
+Final status:          VERIFIED
+Decision:              Legacy commands LOAD_TLG_TO_SEND=15 and LOAD_RAZN=22 are
+                       permanently rejected at the server. Wire ordinals preserved.
+Server branch/commit:  fix/svc-005-preserve-programdata
+                       (Part A: e7c2d6abead99209521a99f3975a8cd9affca32a)
+                       (Part C: this commit — see git log)
+Client branch/commit:  main / 28af3bd892db0396597c86ad9ad1dddecb88a962
+                       (already migrated to 34/35 in Part B)
+Changed files (server):
+  src/AsioServer/AsioServer.cpp
+    — removed cmdMap[COMMAND::LOAD_TLG_TO_SEND] registration
+    — removed cmdMap[COMMAND::LOAD_RAZN] registration
+    — added reject block: InvalidCommand + "legacy upload is disabled; use streaming V1"
+    — removed dead binary-payload log-mask branch for the two legacy commands
+  tests/commands/StreamingUploadTests.cpp
+    — StreamingUploadContract: cmdMap presence checks flipped from EXPECT_NE to EXPECT_EQ
+    — StreamingUploadContract: added sentinel presence check for reject diagnostic string
+  docs/HANDOFF_SEARCHENGINE_SERVICE_COMMAND_AUDIT.md
+    — SVC-010 status updated DECIDED → VERIFIED
+Compatibility impact:  Any client still sending LOAD_TLG_TO_SEND=15 or LOAD_RAZN=22
+                       receives typed InvalidCommand (after NEGOTIATE_PROTOCOL_V1)
+                       or legacy SOMEERROR (pre-negotiate). Production SearchClient
+                       uses 34/35 exclusively since Part B.
+Migration/update impact: None for current production client. Old clients will see an
+                         error response and must upgrade to streaming V1.
+Tests/build/smoke:
+  x64 Debug SearchEngine — build: OK
+  SearchEngine_test — 116 passed, 3 skipped (symlink); StreamingUploadContract: PASS
+Remaining limitations:  SaveTlgToSendCmd and SaveFileDefaultCmd classes remain in
+                        source but are unreachable — removal is SVC-011/SVC-013 scope.
+                        tlg_send_root/razn_output_dir still stored in setSearchServer
+                        paths struct for future use by SVC-011.
+```
+
+---
 
 ```text
 Issue ID:

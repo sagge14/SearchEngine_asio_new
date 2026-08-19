@@ -180,10 +180,10 @@ TEST(StreamingUploadContract, SourceHandlesCommandsBeforeGenericPayloadAlloc)
     ASSERT_NE(genericPos, std::string::npos);
     EXPECT_LT(callPos, genericPos);
 
-    EXPECT_NE(
+    EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::LOAD_TLG_TO_SEND]"),
         std::string::npos);
-    EXPECT_NE(
+    EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::LOAD_RAZN]"),
         std::string::npos);
     EXPECT_EQ(
@@ -191,6 +191,9 @@ TEST(StreamingUploadContract, SourceHandlesCommandsBeforeGenericPayloadAlloc)
         std::string::npos);
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::UPLOAD_RAZN_V1]"),
+        std::string::npos);
+    EXPECT_NE(
+        serverText.find("legacy upload is disabled"),
         std::string::npos);
 
     EXPECT_EQ(helperText.find("FileData"), std::string::npos);
