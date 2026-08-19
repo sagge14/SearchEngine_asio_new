@@ -379,6 +379,105 @@ std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
     return instances;
 }
 
+// Parse --data-dir <value> from the SCM ImagePath (binary path name).
+// Supports both quoted and unquoted argument values.
+static std::optional<std::wstring> parseDataDirFromImagePath(
+    const std::wstring& imagePath)
+{
+    // Walk tokens after the executable; find "--data-dir" then grab next token.
+    // Simple tokeniser: respect double-quoted tokens.
+    std::vector<std::wstring> tokens;
+    std::size_t pos = 0;
+    const std::size_t len = imagePath.size();
+    // Skip the executable token first (may be quoted).
+    bool inExe = true;
+    while (pos < len) {
+        while (pos < len && imagePath[pos] == L' ') ++pos;
+        if (pos >= len) break;
+        std::wstring tok;
+        if (imagePath[pos] == L'"') {
+            ++pos;
+            while (pos < len && imagePath[pos] != L'"') tok += imagePath[pos++];
+            if (pos < len) ++pos; // closing quote
+        } else {
+            while (pos < len && imagePath[pos] != L' ') tok += imagePath[pos++];
+        }
+        if (inExe) { inExe = false; continue; } // skip exe path
+        tokens.push_back(tok);
+    }
+    for (std::size_t i = 0; i + 1 < tokens.size(); ++i) {
+        if (tokens[i] == L"--data-dir") {
+            return tokens[i + 1];
+        }
+    }
+    return std::nullopt;
+}
+
+int inspectInstalledCommand(const std::vector<std::wstring>& args)
+{
+    const std::wstring instanceId = option(args, L"--instance").value_or(L"default");
+    const std::wstring serviceName =
+        (instanceId == L"default")
+            ? L"SearchEngineService"
+            : (L"SearchEngineService-" + instanceId);
+
+    ScManager manager;
+    SC_HANDLE hSvc = OpenServiceW(
+        manager.get(), serviceName.c_str(),
+        SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS);
+    if (!hSvc) {
+        throw std::runtime_error(
+            "service not found or insufficient permissions: " +
+            std::string(serviceName.begin(), serviceName.end()));
+    }
+    struct SvcGuard { SC_HANDLE h; ~SvcGuard(){ CloseServiceHandle(h); } } guard{hSvc};
+
+    DWORD bytesNeeded = 0;
+    QueryServiceConfigW(hSvc, nullptr, 0, &bytesNeeded);
+    std::vector<unsigned char> cfgBuf(bytesNeeded);
+    auto* cfg = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(cfgBuf.data());
+    if (!QueryServiceConfigW(hSvc, cfg, bytesNeeded, &bytesNeeded)) {
+        throw std::runtime_error("QueryServiceConfig failed");
+    }
+
+    const std::wstring imagePath = cfg->lpBinaryPathName ? cfg->lpBinaryPathName : L"";
+
+    // Extract the exe path (first token, possibly quoted).
+    std::wstring exePath;
+    {
+        std::size_t p = 0;
+        if (!imagePath.empty() && imagePath[p] == L'"') {
+            ++p;
+            while (p < imagePath.size() && imagePath[p] != L'"') exePath += imagePath[p++];
+        } else {
+            while (p < imagePath.size() && imagePath[p] != L' ') exePath += imagePath[p++];
+        }
+    }
+
+    auto dataDir = parseDataDirFromImagePath(imagePath);
+    if (!dataDir) {
+        throw std::runtime_error(
+            "could not find --data-dir argument in service ImagePath.\n"
+            "ImagePath: " + std::string(imagePath.begin(), imagePath.end()));
+    }
+
+    const std::wstring settingsPath = *dataDir + L"\\Settings.json";
+    const std::wstring endpointPath = *dataDir + L"\\client-endpoint.txt";
+
+    const auto printW = [](const std::wstring& line) {
+        const std::string narrow(line.begin(), line.end());
+        std::cout << narrow << '\n';
+    };
+
+    printW(L"instance=" + instanceId);
+    printW(L"service_name=" + serviceName);
+    printW(L"data_dir=" + *dataDir);
+    printW(L"settings_path=" + settingsPath);
+    printW(L"endpoint_path=" + endpointPath);
+    printW(L"installed_program_path=" + exePath);
+    return 0;
+}
+
 int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
 {
     const fs::path outputPath = requiredOption(args, L"--output");
@@ -389,9 +488,10 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
         std::transform(value.begin(), value.end(), value.begin(), towlower);
         return value;
     }();
-    if (purpose != L"uninstall" && purpose != L"register-auth") {
+    if (purpose != L"uninstall" && purpose != L"register-auth" &&
+        purpose != L"configure") {
         throw std::runtime_error(
-            "choose-installed-instance --purpose must be uninstall or register-auth");
+            "choose-installed-instance --purpose must be uninstall, register-auth, or configure");
     }
 
     const UiLanguage language = chooseLanguage();
@@ -404,12 +504,18 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
         return 3;
     }
 
-    const wchar_t* promptRu = purpose == L"register-auth"
-        ? L"\nВыберите службу SearchEngine для регистрации auth-клиента:\n"
-        : L"\nВыберите службу SearchEngine для полного удаления:\n";
-    const wchar_t* promptEn = purpose == L"register-auth"
-        ? L"\nSelect the SearchEngine service to register the auth client:\n"
-        : L"\nSelect the SearchEngine service to remove completely:\n";
+    const wchar_t* promptRu =
+        purpose == L"register-auth"
+            ? L"\nВыберите службу SearchEngine для регистрации auth-клиента:\n"
+        : purpose == L"configure"
+            ? L"\nВыберите службу SearchEngine для изменения конфигурации:\n"
+            : L"\nВыберите службу SearchEngine для полного удаления:\n";
+    const wchar_t* promptEn =
+        purpose == L"register-auth"
+            ? L"\nSelect the SearchEngine service to register the auth client:\n"
+        : purpose == L"configure"
+            ? L"\nSelect the SearchEngine service to configure:\n"
+            : L"\nSelect the SearchEngine service to remove completely:\n";
     writeInteractive(language == UiLanguage::Russian ? promptRu : promptEn);
     for (std::size_t index = 0; index < instances.size(); ++index) {
         writeInteractive(
@@ -864,6 +970,77 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         !config["scan_on_startup"].is_boolean())
     {
         errors.emplace_back("config.scan_on_startup must be boolean");
+    }
+
+    // SVC-001: validate additional fields deserialized by ConverterJSON
+    if (config.contains("max_response")) {
+        // No documented upper limit; just require a positive integer (type safety).
+        const auto v = jsonInteger(config["max_response"]);
+        if (!v || *v < 1) {
+            errors.emplace_back("config.max_response must be a positive integer");
+        }
+    }
+
+    if (config.contains("ind_time")) {
+        // Re-index period in seconds; 0 is not valid at runtime.
+        const auto v = jsonInteger(config["ind_time"]);
+        if (!v || *v < 1) {
+            errors.emplace_back("config.ind_time must be integer >= 1");
+        }
+    }
+
+    if (config.contains("max_parallel_readers")) {
+        // 0 = no limit (valid default); positive values cap concurrency.
+        const auto v = jsonInteger(config["max_parallel_readers"]);
+        if (!v || *v < 0 || *v > 65535) {
+            errors.emplace_back(
+                "config.max_parallel_readers must be non-negative integer");
+        }
+    }
+
+    if (config.contains("compact_threshold_percent")) {
+        const auto& fld = config["compact_threshold_percent"];
+        if (!fld.is_number()) {
+            errors.emplace_back("config.compact_threshold_percent must be a number");
+        } else {
+            const double pct = fld.get<double>();
+            if (pct < 0.0 || pct > 100.0) {
+                errors.emplace_back("config.compact_threshold_percent must be inside 0..100");
+            }
+        }
+    }
+
+    if (config.contains("sqlite_mirror_flush_interval_sec")) {
+        // Accepts float (e.g. 2.0); must be a positive number.
+        const auto& fld = config["sqlite_mirror_flush_interval_sec"];
+        if (!fld.is_number()) {
+            errors.emplace_back(
+                "config.sqlite_mirror_flush_interval_sec must be a number");
+        } else if (fld.get<double>() <= 0.0) {
+            errors.emplace_back(
+                "config.sqlite_mirror_flush_interval_sec must be > 0");
+        }
+    }
+
+    if (config.contains("sqlite_mirror_max_pending_ops")) {
+        const auto v = jsonInteger(config["sqlite_mirror_max_pending_ops"]);
+        if (!v || *v < 1) {
+            errors.emplace_back(
+                "config.sqlite_mirror_max_pending_ops must be integer >= 1");
+        }
+    }
+
+    if (config.contains("sqlite_load_threads")) {
+        const auto v = jsonInteger(config["sqlite_load_threads"]);
+        if (!v || *v < 1 || *v > 64) {
+            errors.emplace_back("config.sqlite_load_threads must be integer inside 1..64");
+        }
+    }
+
+    if (config.contains("sqlite_precount_postings") &&
+        !config["sqlite_precount_postings"].is_boolean())
+    {
+        errors.emplace_back("config.sqlite_precount_postings must be boolean");
     }
 
     if (checkDirectories && config.contains("dirs") &&
@@ -1752,7 +1929,8 @@ void printUsage()
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
         << "  choose-instance --default ID --output FILE\n"
         << "  choose-installed-instance --output FILE\n"
-        << "            [--purpose uninstall|register-auth]\n"
+        << "            [--purpose uninstall|register-auth|configure]\n"
+        << "  inspect-installed [--instance ID]\n"
         << "  check-port --port N\n"
         << "  health --port N [--timeout-ms N]\n"
         << "  backup --install-root DIR --data-dir DIR --destination DIR\n"
@@ -1761,7 +1939,11 @@ void printUsage()
         << "            --generated-settings FILE --generated-endpoint FILE\n"
         << "            --rollback-dir DIR\n"
         << "  runtime-update-rollback --data-dir DIR --rollback-dir DIR\n"
-        << "  runtime-update-commit --data-dir DIR --rollback-dir DIR\n";
+        << "  runtime-update-commit --data-dir DIR --rollback-dir DIR\n"
+        << "  settings-transaction-apply --data-dir DIR --settings-temp FILE\n"
+        << "            --rollback-dir DIR [--endpoint-temp FILE]\n"
+        << "  settings-transaction-rollback --data-dir DIR --rollback-dir DIR\n"
+        << "  settings-transaction-commit --data-dir DIR --rollback-dir DIR\n";
 }
 
 } // namespace
@@ -1803,6 +1985,9 @@ int wmain(int argc, wchar_t* argv[])
         if (command == L"choose-installed-instance") {
             return chooseInstalledInstanceCommand(args);
         }
+        if (command == L"inspect-installed") {
+            return inspectInstalledCommand(args);
+        }
         if (command == L"check-port") {
             return checkPortCommand(args);
         }
@@ -1820,6 +2005,15 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"runtime-update-commit") {
             return runtime_data_transaction::commitCommand(args);
+        }
+        if (command == L"settings-transaction-apply") {
+            return runtime_data_transaction::settingsApplyCommand(args);
+        }
+        if (command == L"settings-transaction-rollback") {
+            return runtime_data_transaction::settingsRollbackCommand(args);
+        }
+        if (command == L"settings-transaction-commit") {
+            return runtime_data_transaction::settingsCommitCommand(args);
         }
         printUsage();
         return 1;

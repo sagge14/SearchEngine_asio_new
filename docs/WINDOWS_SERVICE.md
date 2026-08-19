@@ -392,6 +392,29 @@ Restart-SearchEngineService.bat
 `Settings.json`, дожидается `RUNNING` и выполняет PING/PONG; при уже
 `RUNNING` готовность всё равно проверяется.
 
+### Изменение конфигурации установленной службы (SVC-001)
+
+Для безопасного редактирования production `Settings.json` используйте
+`Configure-SearchEngineService.bat` из переносимого комплекта:
+
+```bat
+Configure-SearchEngineService.bat
+Configure-SearchEngineService.bat archive
+```
+
+Workflow (требует Administrator):
+1. Автоматически получает фактический `data-dir` из SCM ImagePath через
+   `SearchEngineConfig inspect-installed` — не зависит от `%ProgramData%`.
+2. Открывает временную копию `Settings.json` в Notepad; валидирует перед применением.
+3. Останавливает службу, атомарно заменяет `Settings.json` (и `client-endpoint.txt`
+   при изменении порта), обновляет правило брандмауэра.
+4. Запускает службу, проверяет `RUNNING` + PING/PONG на новом порту.
+5. При любой неудаче: rollback байт-в-байт, восстановление правила брандмауэра,
+   перезапуск на старом порту, PING/PONG на старом порту.
+
+**Ограничения:** hot reload не поддерживается — всегда Stop→Start.
+Не изменяет индексы, auth-базу, логи и другие runtime-данные.
+
 Логи находятся под `<data-dir>\logs`; ранние ошибки запуска также отражаются
 ненулевым SCM exit code. Для просмотра последних строк:
 

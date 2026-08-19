@@ -1446,4 +1446,314 @@ int commitCommand(const std::vector<std::wstring>& args)
     }
 }
 
+// ---- Settings-only config transaction (SVC-001) ----
+// Manages only Settings.json + optionally client-endpoint.txt.
+// rollback-dir may reside in %TEMP% (different parent than data-dir).
+// Marker file distinguishes this transaction kind from runtime-update.
+
+namespace {
+
+constexpr wchar_t kCfgMarkerContent[] =
+    L"SearchEngineService settings-transaction\r\n";
+constexpr wchar_t kCfgMarkerName[] = L".searchengine-settings-cfg-marker";
+constexpr wchar_t kCfgManifestName[] = L"cfg-manifest.json";
+constexpr wchar_t kCfgPhaseName[] = L".searchengine-settings-cfg-phase";
+constexpr wchar_t kCfgSettingsSnapshot[] = L"Settings.json.snapshot";
+constexpr wchar_t kCfgEndpointSnapshot[] = L"client-endpoint.txt.snapshot";
+
+void validateSettingsRollbackDir(const std::wstring& rollbackDir, bool mustExist)
+{
+    if (classifyPath(rollbackDir) == PathKind::Reparse) {
+        throw std::runtime_error("rollback-dir is a reparse point");
+    }
+    if (isDriveRoot(rollbackDir)) {
+        throw std::runtime_error("rollback-dir must not be a drive root");
+    }
+    const PathKind kind = classifyPath(rollbackDir);
+    if (mustExist) {
+        if (kind != PathKind::Directory) {
+            throw std::runtime_error(
+                "rollback-dir must be an existing regular directory");
+        }
+    } else {
+        if (kind != PathKind::Missing) {
+            throw std::runtime_error("rollback-dir already exists");
+        }
+    }
+}
+
+struct CfgManifest {
+    std::wstring dataDir;
+    bool settingsExisted = false;
+    bool endpointManaged = false;
+    bool endpointExisted = false;
+};
+
+void writeCfgManifest(
+    const std::wstring& rollbackDir,
+    const CfgManifest& m,
+    std::vector<std::wstring>& owned)
+{
+    json root = json::object();
+    root["data_dir"] = utf8(m.dataDir);
+    root["settings_existed"] = m.settingsExisted;
+    root["endpoint_managed"] = m.endpointManaged;
+    root["endpoint_existed"] = m.endpointExisted;
+
+    const std::string body = root.dump(2) + "\n";
+    const std::wstring staging = uniqueStagingPath(rollbackDir);
+    UniqueHandle handle = createOwnedFile(staging, owned);
+    writeAll(handle.get(), body.data(), static_cast<DWORD>(body.size()));
+    handle.reset();
+    const std::wstring manifestPath = joinPath(rollbackDir, kCfgManifestName);
+    if (!MoveFileExW(
+            staging.c_str(),
+            manifestPath.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        throw std::runtime_error(
+            "cannot publish cfg manifest; Win32 error " +
+            std::to_string(GetLastError()));
+    }
+    recordOwned(owned, kCfgManifestName);
+}
+
+CfgManifest loadCfgManifest(const std::wstring& rollbackDir)
+{
+    const std::wstring markerPath = joinPath(rollbackDir, kCfgMarkerName);
+    const std::wstring manifestPath = joinPath(rollbackDir, kCfgManifestName);
+    requireRegularFile(markerPath, "cfg transaction marker");
+    requireRegularFile(manifestPath, "cfg transaction manifest");
+
+    json root;
+    try {
+        root = json::parse(readAllUtf8(manifestPath));
+    } catch (const std::exception&) {
+        throw std::runtime_error("cfg transaction manifest is damaged");
+    }
+    if (!root.is_object()) {
+        throw std::runtime_error("cfg transaction manifest is damaged");
+    }
+    CfgManifest m;
+    if (!root.contains("data_dir") || !root["data_dir"].is_string()) {
+        throw std::runtime_error("cfg manifest missing data_dir");
+    }
+    m.dataDir = utf16(root["data_dir"].get<std::string>());
+    m.settingsExisted =
+        root.value("settings_existed", false);
+    m.endpointManaged =
+        root.value("endpoint_managed", false);
+    m.endpointExisted =
+        root.value("endpoint_existed", false);
+    return m;
+}
+
+std::vector<std::wstring> cfgExpectedFiles(const CfgManifest& m)
+{
+    std::vector<std::wstring> names;
+    names.emplace_back(kCfgMarkerName);
+    names.emplace_back(kCfgManifestName);
+    if (m.settingsExisted) {
+        names.emplace_back(kCfgSettingsSnapshot);
+    }
+    if (m.endpointManaged && m.endpointExisted) {
+        names.emplace_back(kCfgEndpointSnapshot);
+    }
+    return names;
+}
+
+} // anonymous namespace
+
+int settingsApplyCommand(const std::vector<std::wstring>& args)
+{
+    const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
+    const std::wstring settingsTemp = canonicalPath(requiredOption(args, L"--settings-temp"));
+    const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
+    const auto endpointTempOpt = option(args, L"--endpoint-temp");
+
+    requireDirectory(dataDir, "data-dir");
+    requireRegularFile(settingsTemp, "settings-temp");
+    validateSettingsRollbackDir(rollbackDir, false);
+
+    std::wstring endpointTemp;
+    const bool manageEndpoint = endpointTempOpt.has_value();
+    if (manageEndpoint) {
+        endpointTemp = canonicalPath(*endpointTempOpt);
+        requireRegularFile(endpointTemp, "endpoint-temp");
+    }
+
+    bool createdRollback = false;
+    bool mutationStarted = false;
+    CfgManifest manifest;
+    manifest.dataDir = dataDir;
+    manifest.endpointManaged = manageEndpoint;
+    std::vector<std::wstring> ownedRollbackNames;
+
+    try {
+        createDirectoryExclusive(rollbackDir);
+        createdRollback = true;
+
+        // Write marker (identifies this as a settings-transaction rollback dir)
+        {
+            const std::wstring markerPath = joinPath(rollbackDir, kCfgMarkerName);
+            UniqueHandle h = createOwnedFile(markerPath, ownedRollbackNames);
+            const std::string body = "SearchEngineService settings-transaction\r\n";
+            writeAll(h.get(), body.data(), static_cast<DWORD>(body.size()));
+        }
+
+        // Snapshot Settings.json -- must exist
+        const std::wstring settingsLive = joinPath(dataDir, kSettingsName);
+        if (classifyPath(settingsLive) != PathKind::File) {
+            throw std::runtime_error(
+                "Settings.json not found in data-dir; cannot apply config transaction");
+        }
+        copyFileCreateNew(
+            settingsLive,
+            joinPath(rollbackDir, kCfgSettingsSnapshot),
+            ownedRollbackNames);
+        manifest.settingsExisted = true;
+
+        // Snapshot client-endpoint.txt (optional)
+        if (manageEndpoint) {
+            const std::wstring endpointLive = joinPath(dataDir, kEndpointName);
+            if (classifyPath(endpointLive) == PathKind::File) {
+                copyFileCreateNew(
+                    endpointLive,
+                    joinPath(rollbackDir, kCfgEndpointSnapshot),
+                    ownedRollbackNames);
+                manifest.endpointExisted = true;
+            } else {
+                manifest.endpointExisted = false;
+            }
+        }
+
+        writeCfgManifest(rollbackDir, manifest, ownedRollbackNames);
+        mutationStarted = true;
+
+        // Atomic replacements
+        stageAndAtomicallyReplace(settingsTemp, settingsLive, dataDir);
+        if (manageEndpoint) {
+            stageAndAtomicallyReplace(
+                endpointTemp,
+                joinPath(dataDir, kEndpointName),
+                dataDir);
+        }
+        return 0;
+    } catch (const std::exception& ex) {
+        if (mutationStarted) {
+            try {
+                // Restore Settings.json byte-for-byte
+                const std::wstring snap =
+                    joinPath(rollbackDir, kCfgSettingsSnapshot);
+                stageAndAtomicallyReplace(snap, joinPath(dataDir, kSettingsName), dataDir);
+                // Restore endpoint if managed and had a snapshot
+                if (manageEndpoint && manifest.endpointExisted) {
+                    stageAndAtomicallyReplace(
+                        joinPath(rollbackDir, kCfgEndpointSnapshot),
+                        joinPath(dataDir, kEndpointName),
+                        dataDir);
+                }
+                std::cerr << "ERROR: " << ex.what() << '\n';
+                std::cerr << "settings-transaction apply failed; files were rolled back\n";
+                return 1;
+            } catch (const std::exception& rollbackErr) {
+                std::cerr << "ERROR: " << ex.what() << '\n';
+                std::cerr << "ERROR: settings-transaction rollback incomplete: "
+                          << rollbackErr.what() << '\n';
+                std::cerr << "rollback_dir=" << utf8(rollbackDir) << '\n';
+                return 1;
+            }
+        }
+        if (createdRollback) {
+            bestEffortDeleteCreatedDirectory(rollbackDir, ownedRollbackNames);
+        }
+        std::cerr << "ERROR: " << ex.what() << '\n';
+        std::cerr << "settings-transaction apply failed before mutation\n";
+        return kApplyFailedBeforeMutation;
+    }
+}
+
+int settingsRollbackCommand(const std::vector<std::wstring>& args)
+{
+    try {
+        const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
+        const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
+        requireDirectory(dataDir, "data-dir");
+        validateSettingsRollbackDir(rollbackDir, true);
+
+        CfgManifest manifest = loadCfgManifest(rollbackDir);
+        const std::wstring manifestDataDir = canonicalPath(manifest.dataDir);
+        if (!equalPath(manifestDataDir, dataDir)) {
+            throw std::runtime_error(
+                "cfg manifest data-dir does not match --data-dir");
+        }
+
+        // Restore Settings.json
+        if (manifest.settingsExisted) {
+            stageAndAtomicallyReplace(
+                joinPath(rollbackDir, kCfgSettingsSnapshot),
+                joinPath(dataDir, kSettingsName),
+                dataDir);
+        }
+        // Restore endpoint
+        if (manifest.endpointManaged) {
+            if (manifest.endpointExisted) {
+                stageAndAtomicallyReplace(
+                    joinPath(rollbackDir, kCfgEndpointSnapshot),
+                    joinPath(dataDir, kEndpointName),
+                    dataDir);
+            } else {
+                // It did not exist before; remove if we created it
+                const std::wstring live = joinPath(dataDir, kEndpointName);
+                if (classifyPath(live) == PathKind::File) {
+                    DeleteFileW(live.c_str());
+                }
+            }
+        }
+        std::cout << "settings-transaction rollback completed\n";
+        return 0;
+    } catch (const std::exception& ex) {
+        std::cerr << "ERROR: " << ex.what() << '\n';
+        if (const auto rollback = option(args, L"--rollback-dir")) {
+            try {
+                std::cerr << "rollback_dir=" << utf8(canonicalPath(*rollback)) << '\n';
+            } catch (...) {
+                std::cerr << "rollback_dir=" << utf8(*rollback) << '\n';
+            }
+        }
+        return 1;
+    }
+}
+
+int settingsCommitCommand(const std::vector<std::wstring>& args)
+{
+    try {
+        const std::wstring dataDir = canonicalPath(requiredOption(args, L"--data-dir"));
+        const std::wstring rollbackDir = canonicalPath(requiredOption(args, L"--rollback-dir"));
+        requireDirectory(dataDir, "data-dir");
+        validateSettingsRollbackDir(rollbackDir, true);
+
+        CfgManifest manifest = loadCfgManifest(rollbackDir);
+        const std::wstring manifestDataDir = canonicalPath(manifest.dataDir);
+        if (!equalPath(manifestDataDir, dataDir)) {
+            throw std::runtime_error(
+                "cfg manifest data-dir does not match --data-dir");
+        }
+
+        deleteTransactionFiles(rollbackDir, cfgExpectedFiles(manifest));
+        std::cout << "settings-transaction commit completed\n";
+        return 0;
+    } catch (const std::exception& ex) {
+        std::cerr << "ERROR: " << ex.what() << '\n';
+        if (const auto rollback = option(args, L"--rollback-dir")) {
+            try {
+                std::cerr << "rollback_dir=" << utf8(canonicalPath(*rollback)) << '\n';
+            } catch (...) {
+                std::cerr << "rollback_dir=" << utf8(*rollback) << '\n';
+            }
+        }
+        return 1;
+    }
+}
+
 } // namespace runtime_data_transaction

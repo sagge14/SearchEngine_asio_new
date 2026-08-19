@@ -374,6 +374,52 @@ Assert-True ($appCpp.Contains('pending->settings.opis_base_dir')) (
     '8. Application uses configured opis_base_dir'
 )
 
+# 9. SVC-001: Configure-SearchEngineService.bat is present, strict ASCII, and packaged.
+$configureBat = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\Configure-SearchEngineService.bat'
+Assert-True (Test-Path -LiteralPath $configureBat -PathType Leaf) (
+    '9. Configure-SearchEngineService.bat template exists'
+)
+Assert-True (Test-StrictAsciiBytes -Path $configureBat) (
+    '9. Configure-SearchEngineService.bat is strict ASCII'
+)
+$configureText = [IO.File]::ReadAllText($configureBat)
+Assert-True (-not $configureText.Contains('???')) (
+    '9. Configure-SearchEngineService.bat has no ??? replacement cluster'
+)
+Assert-True ($configureText.Contains('inspect-installed')) (
+    '9. Configure-SearchEngineService.bat uses inspect-installed (not %ProgramData%)'
+)
+Assert-True (-not $configureText.Contains('%ProgramData%\%SERVICE_NAME%')) (
+    '9. Configure-SearchEngineService.bat does not hardcode ProgramData as data-dir source'
+)
+Assert-True ($configureText.Contains('settings-transaction-apply')) (
+    '9. Configure-SearchEngineService.bat calls settings-transaction-apply'
+)
+Assert-True ($configureText.Contains('settings-transaction-rollback')) (
+    '9. Configure-SearchEngineService.bat calls settings-transaction-rollback'
+)
+Assert-True ($configureText.Contains('settings-transaction-commit')) (
+    '9. Configure-SearchEngineService.bat calls settings-transaction-commit'
+)
+Assert-True ($configureText.Contains('health --port')) (
+    '9. Configure-SearchEngineService.bat calls health PING/PONG'
+)
+Assert-True ($configureText.Contains('DisableDelayedExpansion')) (
+    '9. Configure-SearchEngineService.bat starts with DisableDelayedExpansion'
+)
+
+# Verify packager includes Configure-SearchEngineService.bat
+Assert-True ($packagerText.Contains("'Configure-SearchEngineService.bat'")) (
+    '9. Packager portableBatchFiles includes Configure-SearchEngineService.bat'
+)
+$protectedSection = $packagerText.Substring(
+    $packagerText.IndexOf("'Install-SearchEngineService.bat'")
+)
+Assert-True ($protectedSection.Contains("'Configure-SearchEngineService.bat'")) (
+    '9. Packager protectedFiles list includes Configure-SearchEngineService.bat'
+)
+
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
 . (Join-Path $scriptsRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $freshRoot = Join-Path ([IO.Path]::GetTempPath()) (

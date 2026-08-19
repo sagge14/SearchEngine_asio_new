@@ -1180,3 +1180,29 @@ if(BUILD_TESTS)
         )
     endif()
 endif()
+
+# SVC-001 config-tool tests: registered whenever SearchEngineConfig is built,
+# independently of BUILD_TESTS (which gates GoogleTest unit tests only).
+if(TARGET SearchEngineConfig)
+    enable_testing()
+    add_test(
+            NAME SearchEngineConfigValidateSVC001Fields_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-validate-svc001-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigValidateSVC001Fields.cmake"
+    )
+    add_test(
+            NAME SearchEngineConfigSettingsTransaction_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-settings-transaction-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigSettingsTransaction.cmake"
+    )
+endif()

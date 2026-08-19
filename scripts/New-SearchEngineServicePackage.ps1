@@ -406,6 +406,10 @@ try {
         @{
             Source = 'Verify-Package-Windows7.bat'
             Destination = 'Verify-Package.bat'
+        },
+        @{
+            Source = 'Configure-SearchEngineService.bat'
+            Destination = 'Configure-SearchEngineService.bat'
         }
     )
     foreach ($batchFile in $portableBatchFiles) {
@@ -473,7 +477,8 @@ try {
         'Uninstall-SearchEngineService.bat',
         'Register-AuthClient-FromToken.bat',
         'Issue-SearchClientToken.bat',
-        'Verify-Package.bat'
+        'Verify-Package.bat',
+        'Configure-SearchEngineService.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `
             (Join-Path $stagingDirectory $name)

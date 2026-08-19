@@ -77,6 +77,7 @@ ProgramData. Полное удаление ProgramData выполняется т
   Stop-SearchEngineService.bat
   Start-SearchEngineService.bat
   Restart-SearchEngineService.bat
+  Configure-SearchEngineService.bat
   Uninstall-SearchEngineService.bat
   Issue-SearchClientToken.bat
   Register-AuthClient-FromToken.bat
@@ -84,13 +85,15 @@ ProgramData. Полное удаление ProgramData выполняется т
 
 Stop и Start — штатная остановка и последующий запуск службы (новый процесс),
 а не Windows Pause/Continue. После Stop → Start служба заново читает
-C:\ProgramData\SearchEngineService[-instance]\Settings.json. Остановленная
-служба с Automatic/Delayed Start снова запустится после перезагрузки Windows;
-для долговременного отключения отдельно переведите Startup Type в Manual или
-Disabled. Изменение порта или document_catalog_storage в Settings.json
-подхватывается новым процессом, но
-правило Windows Firewall, client-endpoint.txt и база клиента этими скриптами
-не обновляются — проверьте их вручную. Start предупреждает о расхождении порта.
+Settings.json из фактического data-dir. Остановленная служба с Automatic/Delayed
+Start снова запустится после перезагрузки Windows; для долговременного отключения
+отдельно переведите Startup Type в Manual или Disabled.
+
+Configure-SearchEngineService.bat — безопасное редактирование Settings.json
+установленной службы с автоматическим rollback при неудаче. Получает фактический
+data-dir через SCM, проводит через валидацию, выполняет Stop → atomic replace →
+Start → PING/PONG. При изменении порта автоматически обновляет client-endpoint.txt
+и правило Windows Firewall. Hot reload не поддерживается. Требует Administrator.
 
 Для именованного экземпляра используйте его имя, например
 sc query SearchEngineService-archive.

@@ -280,7 +280,21 @@ Start-SearchEngineService.bat:
 перезагрузки Windows. Для долговременного отключения отдельно переведите
 Startup Type в Manual или Disabled — Stop/Start это автоматически не делают.
 
-Если изменили порт в Settings.json:
+Configure-SearchEngineService.bat — безопасный способ изменить Settings.json
+установленной службы с полным rollback при неудаче:
+
+- получает фактический data-dir через SCM (не предполагает %ProgramData%);
+- открывает копию Settings.json в Notepad для редактирования;
+- проводит через валидацию (SearchEngineConfig validate) как обязательный шаг;
+- выполняет Stop → атомарная замена → Start → ожидание RUNNING → PING/PONG;
+- при изменении порта автоматически обновляет client-endpoint.txt и правило
+  Windows Firewall;
+- при любой ошибке делает побайтовый rollback настроек, восстанавливает правило
+  брандмауэра и перезапускает службу на старом порту с проверкой PING/PONG.
+
+Hot reload не поддерживается — всегда Stop → Start. Требует Administrator.
+
+Для применения нового порта вручную (без Configure-SearchEngineService.bat):
 
 1) выполните Stop, затем Start (новый процесс слушает новый порт);
 2) проверьте или пересоздайте inbound-правило Windows Firewall;

@@ -47,7 +47,7 @@ VERIFIED    — реализовано и проверено
 
 | ID | Приоритет | Тема | Статус |
 |---|---:|---|---|
-| SVC-001 | P1 | Runtime-root и редактирование настроек | OPEN |
+| SVC-001 | P1 | Runtime-root и редактирование настроек | FIXED |
 | SVC-002 | P0/P1 | Service account и доступ к рабочим путям | DECIDED |
 | SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
 | SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
@@ -499,14 +499,54 @@ GET_ATTACHMENTS: not configured
 ## SVC-001 — runtime-root службы и управление настройками
 
 **Приоритет:** P1  
-**Статус:** OPEN
+**Статус:** FIXED
 
-Service mode использует `%ProgramData%\SearchEngineService[-instance]` как
-`--data-dir` и CWD. Оператор может по привычке редактировать копию Settings рядом
-с EXE, которая не используется.
+### Реализованный контракт
 
-Нужно позже решить UX безопасного редактирования/валидации/reload config без
-выдачи Modify на весь data-dir, где лежат auth DB и индекс.
+Безопасный workflow изменения production `Settings.json` установленной службы
+реализован через:
+
+1. **`SearchEngineConfig inspect-installed [--instance ID]`** — получает фактический
+   `--data-dir` из SCM ImagePath (не из `%ProgramData%`) и возвращает
+   `instance=`, `service_name=`, `data_dir=`, `settings_path=`, `endpoint_path=`,
+   `installed_program_path=` в формате `key=value` stdout.
+
+2. **`choose-installed-instance --purpose configure`** — интерактивный выбор
+   установленного instance для конфигурирования.
+
+3. **`settings-transaction-apply --data-dir DIR --settings-temp FILE --rollback-dir DIR [--endpoint-temp FILE]`** —
+   атомарный apply: snapshot `Settings.json` (обязателен) + `client-endpoint.txt`
+   (опционально), затем atomic replacement через staging+MoveFileExW. Rollback-dir
+   может находиться в `%TEMP%` (без ограничения sibling). Только управляемые файлы
+   изменяются; sentinel-файлы (index, auth, logs, messages) не затрагиваются.
+
+4. **`settings-transaction-rollback --data-dir DIR --rollback-dir DIR`** —
+   побайтовое восстановление snapshot обратно в data-dir.
+
+5. **`settings-transaction-commit --data-dir DIR --rollback-dir DIR`** —
+   удаление rollback-dir после успешного PING/PONG.
+
+6. **`validateJson()` (расширена)** — дополнительные type/range checks для полей:
+   `max_response` (>= 1), `ind_time` (>= 1), `max_parallel_readers` (0..65535,
+   0 = no limit), `compact_threshold_percent` (0..100), `sqlite_mirror_flush_interval_sec`
+   (number > 0), `sqlite_mirror_max_pending_ops` (>= 1), `sqlite_load_threads` (1..64),
+   `sqlite_precount_postings` (boolean).
+
+7. **`Configure-SearchEngineService.bat`** — portable entrypoint:
+   - Resolves `data_dir` через `inspect-installed` (не `%ProgramData%`).
+   - Копирует `Settings.json` в `%TEMP%` для редактирования.
+   - Проходит через `validate` как обязательный gate.
+   - Stop → `settings-transaction-apply` → firewall update (если нужно) → Start →
+     wait RUNNING → `health --port NEW` → PING/PONG.
+   - При failure: `settings-transaction-rollback` → restore firewall → Start на
+     старом порту → `health --port OLD`.
+   - Endpoint temp генерируется локально BAT-скриптом, если `oldPort != newPort`.
+   - Hot reload не реализован намеренно (только Stop→Start).
+
+### Scope защиты
+- Нет `Modify` на весь `%ProgramData%`; работает с правами Admin через SCM.
+- Sentinel-файлы (`inverted_index.sqlite`, `auth_clients.sqlite`, `prefix_map.json`,
+  `logs/`, `messages/`) не входят в managed set и не изменяются при apply/rollback.
 
 ---
 
