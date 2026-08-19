@@ -47,7 +47,7 @@ VERIFIED    — реализовано и проверено
 
 | ID | Приоритет | Тема | Статус |
 |---|---:|---|---|
-| SVC-001 | P1 | Runtime-root и редактирование настроек | FIXED |
+| SVC-001 | P1 | Runtime-root и редактирование настроек | VERIFIED |
 | SVC-002 | P0/P1 | Service account и доступ к рабочим путям | DECIDED |
 | SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
 | SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
@@ -59,7 +59,7 @@ VERIFIED    — реализовано и проверено
 | SVC-010 | P0 security | Upload path escape и upload целиком в RAM | VERIFIED |
 | SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
-| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | OPEN |
+| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | FIXED |
 | SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
 
 ---
@@ -499,7 +499,7 @@ GET_ATTACHMENTS: not configured
 ## SVC-001 — runtime-root службы и управление настройками
 
 **Приоритет:** P1  
-**Статус:** FIXED
+**Статус:** VERIFIED
 
 ### Реализованный контракт
 
@@ -594,14 +594,31 @@ GET_ATTACHMENTS: not configured
 ## SVC-013 — legacy state и диагностика service mode
 
 **Приоритет:** P2  
-**Статус:** OPEN
+**Статус:** FIXED
 
-`MessageQueue` использует `current_path()/messages`; service CWD направляет его в
-active data-dir. Legacy `GET_MESSAGE` использует `user_id=1`. Часть legacy
-ошибок всё ещё идёт только в `cout/cerr`, невидимые оператору службы.
+Реализован retirement legacy message queue без изменения wire-слотов:
 
-Нужно позже решить судьбу legacy endpoints и перевести важные ошибки в structured
-logs/typed responses.
+```text
+GET_MESSAGE = 16
+SAVE_MESSAGE_TO = 2781032419 (historical composite marker)
+```
+
+- Команды сохранены как historical reserved wire slots и отклоняются.
+- Текущий сервер не регистрирует handler для `GET_MESSAGE`.
+- `SAVE_MESSAGE_TO` (exact marker и historical composite form) классифицируется
+  только для безопасного reject.
+- Для authenticated сессии body дренируется bounded-буфером и возвращается
+  `InvalidCommand` с диагностикой `legacy message queue command is disabled`.
+- Для unauthenticated сессии сохранён действующий `AuthRequired` gate.
+- `MessageQueue`, `GetMessageCmd`, `SaveMessageCmd` удалены из production-кода.
+- `GET_ATTACHMENTS` отделён от legacy queue и использует отдельный live-контейнер
+  `AttachmentPackage` с сохранением бинарной совместимости сериализации.
+- `messages\` остаётся historical ProgramData state: runtime его больше не
+  использует и автоматически не удаляет.
+- Ошибки `SqlLogger` insert дублируются в persistent server log
+  (`SqlLogger insert failed: ...`) без сохранения SQL-текста.
+- `GET_ATTACHMENTS` cleanup больше не пишет success/missing в console; failure
+  пишет persistent diagnostic.
 
 ---
 
@@ -653,8 +670,8 @@ GETDOC
 | `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
 | `GET_SINGLE_ATACHMENT` | scoped attachment flow; SVC-009/012 |
-| `SAVE_MESSAGE_TO` | legacy messages state |
-| `GET_MESSAGE` | legacy queue/user 1 |
+| `SAVE_MESSAGE_TO` | historical reserved composite marker; rejected InvalidCommand |
+| `GET_MESSAGE` | historical reserved slot 16; rejected InvalidCommand |
 
 ---
 

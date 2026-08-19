@@ -197,7 +197,7 @@ foreach ($configuredPath in @($config.dirs)) {
     }
 }
 
-foreach ($directory in @('logs', 'messages')) {
+foreach ($directory in @('logs')) {
     $path = Join-Path $data $directory
     if (-not (Test-Path -LiteralPath $path) -and
         $PSCmdlet.ShouldProcess($path, 'Create runtime directory')) {

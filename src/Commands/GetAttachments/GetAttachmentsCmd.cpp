@@ -4,6 +4,7 @@
 
 #include "GetAttachmentsCmd.h"
 #include "MyUtils/Encoding.h"
+#include "MyUtils/LogFile.h"
 #include "PrefixMap.h"
 
 #include "nlohmann/json.hpp"
@@ -62,12 +63,11 @@ void GetAttachmentsCmd::deleteDirectory(const std::filesystem::path& dirPath) {
     try {
         if (std::filesystem::exists(dirPath)) {
             std::filesystem::remove_all(dirPath);
-            std::cout << "Директория удалена успешно: " << dirPath << std::endl;
-        } else {
-            std::cout << "Директория не существует: " << dirPath << std::endl;
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Ошибка при удалении директории: " << e.what() << std::endl;
+        LogFile::getErrors().write(
+            "GET_ATTACHMENTS cleanup failed: " +
+            dirPath.string() + " (" + e.what() + ")");
     }
 }
 
@@ -157,7 +157,7 @@ command_execution::CommandResult GetAttachmentsCmd::executeResult(
             "configured attachment path is not a directory");
     }
 
-    Message message;
+    AttachmentPackage message;
     std::error_code iterationError;
     fs::recursive_directory_iterator entry(
         attachmentDirectory,
@@ -223,7 +223,7 @@ command_execution::CommandResult GetAttachmentsCmd::executeResult(
     deleteDirectory(attachmentDirectory);
 
     try {
-        return CommandResult::success(Message::serializeToBytes(message));
+        return CommandResult::success(AttachmentPackage::serializeToBytes(message));
     }
     catch (const std::exception& error) {
         return CommandResult::failure(

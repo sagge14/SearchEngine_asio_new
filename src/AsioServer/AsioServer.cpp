@@ -11,8 +11,6 @@
 #include "Commands/SaveFile/SaveTlgToSend.h"
 #include "Commands/SaveFile/SaveDefaultCmd.h"
 #include "Commands/GetFile/GetFileCmd.h"
-#include "Commands/SaveMessage/SaveMessageCmd.h"
-#include "Commands/SaveMessage/GetMessageCmd.h"
 #include "Commands/GetJsonTelega/GetJsonTelegaCmd.h"
 #include "Commands/UserRegistry/RegisterUserCmd.h"
 #include "Commands/ServiceCommands/PingCmd.h"
@@ -160,9 +158,60 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                 co_return;
             }
 
+            COMMAND normalizedDisabledLegacyMessageCommand = COMMAND::SOMEERROR;
+            if (isDisabledLegacyMessageWireCommand(
+                    requestHeader.command, normalizedDisabledLegacyMessageCommand))
+            {
+                // Auth gate stays strict: unauthenticated data access is terminal.
+                const auto gate = evaluateSessionCommandGate(
+                    normalizedDisabledLegacyMessageCommand,
+                    authenticated_);
+                if (!gate.allow_execute)
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthRequired,
+                        "session is not authenticated",
+                        gate.close_after_auth_required,
+                        normalizedDisabledLegacyMessageCommand);
+                    co_return;
+                }
+
+                // Drain advertised body with bounded memory to preserve framing.
+                constexpr std::size_t kLegacyDiscardChunk = 64 * 1024;
+                std::array<BYTE, kLegacyDiscardChunk> discardBuffer{};
+                std::uint64_t remaining = requestHeader.size;
+                bool drainOk = true;
+                while (remaining > 0)
+                {
+                    const std::size_t toRead = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kLegacyDiscardChunk, remaining));
+                    boost::system::error_code drainEc;
+                    const std::size_t got = co_await boost::asio::async_read(
+                        socket_,
+                        boost::asio::buffer(discardBuffer.data(), toRead),
+                        boost::asio::transfer_exactly(toRead),
+                        boost::asio::redirect_error(boost::asio::use_awaitable, drainEc));
+                    if (drainEc || got != toRead)
+                    {
+                        drainOk = false;
+                        break;
+                    }
+                    remaining -= toRead;
+                }
+
+                if (!drainOk)
+                    co_return;
+
+                co_await queueError(
+                    command_execution::ErrorCode::InvalidCommand,
+                    "legacy message queue command is disabled",
+                    false,
+                    normalizedDisabledLegacyMessageCommand);
+                continue;
+            }
+
             // 2) валидация команды
-            std::optional<uint_fast32_t> saveMessageUserId;
-            if (!trustCommand(requestHeader, saveMessageUserId)) {
+            if (!trustCommand(requestHeader)) {
                 co_await queueError(
                     command_execution::ErrorCode::InvalidCommand,
                     "wire_command=" + std::to_string(
@@ -265,14 +314,12 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                     cpu_pool_,
                     [self = shared_from_this(),
                      requestHeader,
-                     requestData = std::move(requestData),
-                     saveMessageUserId]() mutable
+                     requestData = std::move(requestData)]() mutable
                         -> boost::asio::awaitable<void>
                     {
                         co_await self->commandExec(
                             requestHeader,
-                            std::move(requestData),
-                            saveMessageUserId);
+                            std::move(requestData));
                         co_return;
                     },
                     boost::asio::use_awaitable);
@@ -560,8 +607,7 @@ boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
         finishCommandIfStarted();
     };
 
-    std::optional<uint_fast32_t> saveMessageUserId;
-    if (!trustCommand(requestHeader, saveMessageUserId)) {
+    if (!trustCommand(requestHeader)) {
         co_await queueError(
             command_execution::ErrorCode::InvalidCommand,
             "wire_command=" + std::to_string(
@@ -802,8 +848,7 @@ boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
 
 boost::asio::awaitable<void> asio_server::session::commandExec(
     Header requestHeader,
-    std::vector<BYTE> requestData,
-    std::optional<uint_fast32_t> saveMessageUserId)
+    std::vector<BYTE> requestData)
 {
     std::optional<command_execution::CommandResult> unexpectedFailure;
     bool responseQueued = false;
@@ -1029,22 +1074,6 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
 
                 answer = std::move(result.payload);
             }
-            else if (requestHeader.command == COMMAND::SAVE_MESSAGE_TO &&
-                     saveMessageUserId)
-            {
-                // LEGACY: поддержка старого специального wire-маршрута.
-                SaveMessageCmd command(*saveMessageUserId);
-                auto result = command.executeResult(requestData);
-                if (result.failed()) {
-                    co_await queueError(
-                        *result.error,
-                        std::move(result.diagnostic),
-                        false,
-                        requestHeader.command);
-                    co_return;
-                }
-                answer = std::move(result.payload);
-            }
             else
             {
                 auto result = Interface::execCommand(
@@ -1140,8 +1169,7 @@ std::string asio_server::session::getRemoteIP() const {
 }
 
 bool asio_server::session::trustCommand(
-    Header& requestHeader,
-    std::optional<uint_fast32_t>& saveMessageUserId)
+    Header& requestHeader)
 {
     try {
         if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
@@ -1149,17 +1177,6 @@ bool asio_server::session::trustCommand(
 
         if (isRequestCommand(requestHeader.command))
             return true;
-
-        if (static_cast<COMMAND>(
-                static_cast<uint64_t>(requestHeader.command) >> 32) ==
-            COMMAND::SAVE_MESSAGE_TO)
-        {
-            // LEGACY: user id закодирован в младших 32 битах команды.
-            saveMessageUserId = static_cast<uint_fast32_t>(
-                static_cast<uint64_t>(requestHeader.command) & 0xFFFFFFFF);
-            requestHeader.command = COMMAND::SAVE_MESSAGE_TO;
-            return true;
-        }
 
         return false;
     } catch (const std::exception& e) {
@@ -1186,8 +1203,6 @@ void asio_server::Interface::setSearchServer(
     cmdMap[COMMAND::START_UPDATE_BASE] = std::make_unique<StartDictionaryUpdateCmd>(searchServer_);
     cmdMap[COMMAND::USER_REGISTRY] = std::make_unique<RegisterUserCmd>();
     cmdMap[COMMAND::PING] = std::make_unique<PingCmd>();
-    // LEGACY: endpoint сохранён только для совместимости старых клиентов.
-    cmdMap[COMMAND::GET_MESSAGE] = std::make_unique<GetMessageCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGA_WAY] = std::make_unique<GetTelegaWayIshCmd>();
     cmdMap[COMMAND::GET_VH_TELEGA_WAY] = std::make_unique<GetTelegaWayVhCmd>();
     cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){

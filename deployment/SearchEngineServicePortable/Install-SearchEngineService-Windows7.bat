@@ -322,7 +322,6 @@ if "%REINSTALL%"=="1" goto :UPDATE_DATA
 echo [5/8] Creating data directory from package...
 md "%DATA_DIR%" >nul 2>&1
 md "%DATA_DIR%\logs" >nul 2>&1
-md "%DATA_DIR%\messages" >nul 2>&1
 if not exist "%DATA_DIR%\" goto :COPY_FAILED
 xcopy.exe "%PACKAGE_ROOT%data\*" "%DATA_DIR%\" /E /I /H /R /Y >nul
 if errorlevel 1 goto :COPY_FAILED

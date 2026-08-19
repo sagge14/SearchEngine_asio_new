@@ -380,9 +380,18 @@ SCM RUNNING + PING/PONG
 Эти пункты **НЕ реализовывать**, пока пользователь отдельно не примет по ним решение:
 
 ```text
-SVC-013
 SVC-014
 ```
+
+SVC-013 уже реализован как retirement legacy message queue. Для всех будущих
+этапов это обязательный контракт:
+
+- не воскрешать `MessageQueue`, `GetMessageCmd`, `SaveMessageCmd`;
+- не переиспользовать wire slot `GET_MESSAGE=16`;
+- не переиспользовать marker `SAVE_MESSAGE_TO=2781032419`;
+- не считать `GET_ATTACHMENTS` частью legacy queue (это отдельный live
+  `AttachmentPackage`);
+- не удалять автоматически historical `%ProgramData%\\...\\messages`.
 
 SVC-001 реализован (FIXED): `Configure-SearchEngineService.bat`, `inspect-installed`,
 `settings-transaction-apply/rollback/commit`, расширенный `validateJson()`. Подробнее —

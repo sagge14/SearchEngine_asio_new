@@ -398,8 +398,9 @@ try {
         '10.3 default ignore created only because it was missing'
     )
     Assert-True (Test-Path -LiteralPath (Join-Path $data3 'logs') -PathType Container) '10.3 logs created'
-    Assert-True (Test-Path -LiteralPath (Join-Path $data3 'messages') -PathType Container) '10.3 messages created'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $data3 'messages'))) '10.3 messages not auto-created'
     New-TextFile -Path (Join-Path $data3 'logs\new-during-update.log') -Text 'keep-me'
+    New-Item -ItemType Directory -Path (Join-Path $data3 'messages') | Out-Null
     New-TextFile -Path (Join-Path $data3 'messages\new-during-update.bin') -Text 'keep-me-too'
     $rollback3 = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
         '--data-dir', $data3,

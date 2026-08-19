@@ -41,10 +41,10 @@ SCM создать файлы в `C:\Windows\System32`.
 | журнал запросов | `<data-dir>\log.db` |
 | старый server log | `<data-dir>\server_log.log` |
 | структурированные логи | `<data-dir>\logs\...` |
-| сообщения | `<data-dir>\messages` |
+| legacy messages state | `<data-dir>\messages` (historical, runtime does not use) |
 
 Аккаунту службы нужны права создания/изменения файлов в data-dir, включая
-SQLite WAL/SHM, `logs` и `messages`.
+SQLite WAL/SHM и `logs`. Каталог `messages` больше не используется runtime.
 
 ## Lifecycle и остановка
 
@@ -261,7 +261,7 @@ SCM `RUNNING`.
 При повторном запуске предлагается полный экспорт, экспорт настроек и логов
 либо явно подтверждённая переустановка без экспорта. Program Files заменяется,
 а ProgramData остаётся persistent state этого instance: индекс, авторизация,
-messages, logs и неизвестные runtime-файлы не переносятся. Settings.json
+historical `messages`, logs и неизвестные runtime-файлы не переносятся. Settings.json
 собирается из нового template с импортом старых значений; OEM866.INI и
 client-endpoint.txt имеют малый rollback. Пользовательский ignore.txt сохраняется.
 Отказ от export больше не удаляет ProgramData после health-check. При ошибке
@@ -466,7 +466,7 @@ Get-ChildItem C:\SearchEngine\runtime\logs -Recurse -Filter *.log |
 ```
 
 Uninstall сначала ждёт `STOPPED`, затем удаляет только SCM-регистрацию. Он не
-удаляет `Settings.json`, индекс, WAL/SHM, базы, сообщения или логи.
+удаляет `Settings.json`, индекс, WAL/SHM, базы, historical `messages` или логи.
 
 ## Диагностика
 

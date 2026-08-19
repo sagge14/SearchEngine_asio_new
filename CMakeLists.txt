@@ -1043,7 +1043,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenAscii.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/ComputerTokenPath.cpp"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer/TokenDocument.cpp"
-            "${PROJECT_SOURCE_DIR}/src/Commands/SaveMessage/Message.cpp"
+            "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/AttachmentPackage.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/FileData.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveFileCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/SaveFile/SaveTlgToSend.cpp"

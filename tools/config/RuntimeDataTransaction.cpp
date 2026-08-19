@@ -33,7 +33,6 @@ constexpr wchar_t kOemName[] = L"OEM866.INI";
 constexpr wchar_t kEndpointName[] = L"client-endpoint.txt";
 constexpr wchar_t kIgnoreName[] = L"ignore.txt";
 constexpr wchar_t kLogsName[] = L"logs";
-constexpr wchar_t kMessagesName[] = L"messages";
 constexpr wchar_t kSettingsSnapshot[] = L"Settings.json.snapshot";
 constexpr wchar_t kOemSnapshot[] = L"OEM866.INI.snapshot";
 constexpr wchar_t kEndpointSnapshot[] = L"client-endpoint.txt.snapshot";
@@ -1335,7 +1334,6 @@ int applyCommand(const std::vector<std::wstring>& args)
         stageAndAtomicallyReplace(generatedEndpoint, joinPath(dataDir, kEndpointName), dataDir);
         installIgnoreIfMissing(dataDir, packageIgnore);
         ensureDirectory(joinPath(dataDir, kLogsName), "logs");
-        ensureDirectory(joinPath(dataDir, kMessagesName), "messages");
         return 0;
     } catch (const std::exception& exception) {
         if (mutationStarted) {

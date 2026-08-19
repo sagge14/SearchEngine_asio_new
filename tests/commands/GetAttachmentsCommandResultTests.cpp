@@ -225,7 +225,8 @@ TEST(GetAttachmentsCommandResult, SerializesFilesAndDeletesLegacyBuffer)
 
     ASSERT_TRUE(result.succeeded()) << result.diagnostic;
     EXPECT_FALSE(fs::exists(bufferPath));
-    const Message message = Message::deserializeFromBytes(result.payload);
+    const AttachmentPackage message =
+        AttachmentPackage::deserializeFromBytes(result.payload);
     ASSERT_EQ(message.getAttachCount(), 2U);
     EXPECT_EQ(message.attachments.at(fs::path("root.bin")), rootBytes);
     EXPECT_EQ(
@@ -249,7 +250,8 @@ TEST(GetAttachmentsCommandResult, EmptyExistingBufferIsSuccessfulAndDeleted)
 
     ASSERT_TRUE(result.succeeded()) << result.diagnostic;
     EXPECT_FALSE(fs::exists(bufferPath));
-    const Message message = Message::deserializeFromBytes(result.payload);
+    const AttachmentPackage message =
+        AttachmentPackage::deserializeFromBytes(result.payload);
     EXPECT_EQ(message.getAttachCount(), 0U);
 }
 
@@ -327,4 +329,18 @@ TEST(GetAttachmentsCommandResult, UsesExplicitConfigPathInsteadOfCwdFile)
     ASSERT_TRUE(explicitOperator.succeeded()) << explicitOperator.diagnostic;
     EXPECT_FALSE(fs::exists(explicitBuffer));
     EXPECT_TRUE(fs::exists(cwdBuffer));
+}
+
+TEST(GetAttachmentsCommandResult, AttachmentPackageFixtureRoundTripIsStable)
+{
+    AttachmentPackage expected;
+    expected.attachments[fs::path("a.txt")] = {0x41, 0x42, 0x43};
+    expected.attachments[fs::path("sub") / "b.bin"] = {0x00, 0x01, 0xFE, 0xFF};
+
+    const auto fixtureBytes = AttachmentPackage::serializeToBytes(expected);
+    const auto restored = AttachmentPackage::deserializeFromBytes(fixtureBytes);
+    EXPECT_EQ(restored.attachments, expected.attachments);
+
+    const auto reserialized = AttachmentPackage::serializeToBytes(restored);
+    EXPECT_EQ(reserialized, fixtureBytes);
 }

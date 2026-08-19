@@ -34,8 +34,9 @@ namespace asio_server
     using namespace std;
 /** ------------------------COMMAND-------------------------- **/
 // Список только имён
-// LEGACY: GET_MESSAGE и SAVE_MESSAGE_TO сохранены только ради совместимости
-// старого wire-протокола. Для новой функциональности их не использовать.
+// LEGACY HISTORICAL/RESERVED/DISABLED: GET_MESSAGE и SAVE_MESSAGE_TO
+// сохранены только ради совместимости старого wire-протокола.
+// DO NOT REUSE эти wire-слоты для новой функциональности.
 #define COMMAND_LIST \
     X(SOMEERROR) \
     X(SOLOREQUEST) \
@@ -81,7 +82,8 @@ namespace asio_server
         GET_ISH_PDTV_TEXT = 33,
         UPLOAD_TLG_TO_SEND_V1 = 34,
         UPLOAD_RAZN_V1 = 35,
-        // LEGACY: специальное составное wire-значение, не расширять.
+        // LEGACY HISTORICAL/RESERVED/DISABLED marker, DO NOT REUSE.
+        // Исторически приходил как composite wire form (marker<<32 | user_id).
         SAVE_MESSAGE_TO = 2781032419
     };
 
@@ -146,7 +148,6 @@ namespace asio_server
             case COMMAND::GET_ISH_TELEGI_FROM_SQL:
             case COMMAND::START_UPDATE_BASE:
             case COMMAND::LOAD_TLG_TO_SEND:
-            case COMMAND::GET_MESSAGE: // LEGACY
             case COMMAND::USER_REGISTRY:
             case COMMAND::PING:
             case COMMAND::GET_VH_TELEGA_WAY:
@@ -167,6 +168,30 @@ namespace asio_server
             default:
                 return false;
         }
+    }
+
+    [[nodiscard]] inline constexpr bool isDisabledLegacyMessageWireCommand(
+        COMMAND rawCommand,
+        COMMAND& normalizedCommand) noexcept
+    {
+        if (rawCommand == COMMAND::GET_MESSAGE) {
+            normalizedCommand = COMMAND::GET_MESSAGE;
+            return true;
+        }
+
+        if (rawCommand == COMMAND::SAVE_MESSAGE_TO) {
+            normalizedCommand = COMMAND::SAVE_MESSAGE_TO;
+            return true;
+        }
+
+        const auto rawValue = static_cast<std::uint64_t>(rawCommand);
+        const auto marker = static_cast<COMMAND>(rawValue >> 32);
+        if (marker == COMMAND::SAVE_MESSAGE_TO) {
+            normalizedCommand = COMMAND::SAVE_MESSAGE_TO;
+            return true;
+        }
+
+        return false;
     }
 
     /// Commands allowed before session authorization (USER_REGISTRY or AUTHENTICATE_V1).
@@ -282,6 +307,7 @@ namespace asio_server
     static_assert(static_cast<uint_fast64_t>(COMMAND::GET_ISH_PDTV_TEXT) == 33);
     static_assert(static_cast<uint_fast64_t>(COMMAND::UPLOAD_TLG_TO_SEND_V1) == 34);
     static_assert(static_cast<uint_fast64_t>(COMMAND::UPLOAD_RAZN_V1) == 35);
+    static_assert(static_cast<uint_fast64_t>(COMMAND::GET_MESSAGE) == 16);
     static_assert(static_cast<uint_fast64_t>(COMMAND::SAVE_MESSAGE_TO) == 2781032419ULL);
     static_assert(sizeof(search_protocol::ErrorResponseV1) == 8);
     static_assert(sizeof(search_protocol::ProtocolCapabilitiesV1) == 8);
@@ -357,15 +383,13 @@ namespace asio_server
 
         boost::asio::awaitable<void> commandExec(
             Header requestHeader,
-            std::vector<BYTE> requestData,
-            std::optional<uint_fast32_t> saveMessageUserId);
+            std::vector<BYTE> requestData);
         boost::asio::awaitable<bool> handleStreamingUpload(Header requestHeader);
         boost::asio::awaitable<bool> queueJsonResponse(
             COMMAND command,
             std::string json);
         bool trustCommand(
-            Header& requestHeader,
-            std::optional<uint_fast32_t>& saveMessageUserId);
+            Header& requestHeader);
         boost::asio::awaitable<bool> queueError(
             command_execution::ErrorCode error,
             std::string diagnostic = {},

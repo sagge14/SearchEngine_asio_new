@@ -198,13 +198,6 @@ bool activateSearchEngineRuntimePaths(
             ": " + ec.message();
         return false;
     }
-    fs::create_directories(paths.messages, ec);
-    if (ec) {
-        error = "cannot create messages directory: " +
-            paths.messages.string() + ": " + ec.message();
-        return false;
-    }
-
     if (!SetCurrentDirectoryW(paths.data_dir.c_str())) {
         error = "SetCurrentDirectoryW failed for " + paths.data_dir.string() +
             ": " + std::to_string(GetLastError());

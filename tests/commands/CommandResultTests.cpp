@@ -140,6 +140,7 @@ TEST(ProtocolNegotiation, RequestAllowlistRejectsLegacyAndResponseOnlySlots)
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::SERVER_BUSY_ERROR));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::END_COMMAND));
     EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::ERROR_RESPONSE));
+    EXPECT_FALSE(asio_server::isRequestCommand(COMMAND::GET_MESSAGE));
 }
 
 TEST(ProtocolNegotiation, CapabilitiesAdvertiseTypedErrorsV1)

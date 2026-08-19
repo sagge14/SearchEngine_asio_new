@@ -6,7 +6,7 @@
 #define SEARCHENGINE_GETATTACHMENTSCMD_H
 
 #include "Commands/Command.h"
-#include "Commands/SaveMessage/Message.h"
+#include "Commands/GetAttachments/AttachmentPackage.h"
 
 class GetAttachmentsCmd : public Command {
     static void deleteDirectory(const std::filesystem::path& dirPath);

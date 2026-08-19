@@ -1,5 +1,6 @@
 #include "SqlLogger.h"
 #include "Encoding.h"
+#include "LogFile.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -155,7 +156,10 @@ void SqlLogger::processQueue() {
             try {
                 db.execSql(insertSQL);
             } catch (const std::exception& e) {
-                std::cerr << "Log DB error: " << e.what() << "\nQuery: " << insertSQL << std::endl;
+                const std::string message =
+                    std::string("SqlLogger insert failed: ") + e.what();
+                std::cerr << message << std::endl;
+                LogFile::getErrors().write(message);
             }
 
             lock.lock();  // Блокируем снова для доступа к очереди
