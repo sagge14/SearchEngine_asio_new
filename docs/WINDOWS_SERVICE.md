@@ -402,8 +402,13 @@ Configure-SearchEngineService.bat
 Configure-SearchEngineService.bat archive
 ```
 
-Без аргумента скрипт вызывает интерактивный picker установленных instances.
-С аргументом (`archive`) использует его напрямую.
+Без аргумента скрипт вызывает интерактивный picker установленных instances
+через тот же механизм, что `Register-AuthClient-FromToken` и uninstall:
+`SearchEngineConfig choose-installed-instance --purpose configure`.
+Список instances формируется динамически по установленным SCM services;
+количество экземпляров не фиксировано. Pre-picker switch code page не требуется —
+helper использует wide-console API (`WriteConsoleW` / `ReadConsoleW`).
+С аргументом (`archive`) использует его напрямую, без picker.
 
 Workflow (требует Administrator):
 1. Если instance не задан аргументом — показывает picker через

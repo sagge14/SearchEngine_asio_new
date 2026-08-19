@@ -414,6 +414,69 @@ Assert-True ($configureText.Contains('choose-installed-instance')) (
 Assert-True ($configureText.Contains('--purpose configure')) (
     '9. Configure-SearchEngineService.bat passes --purpose configure to picker'
 )
+
+# 9a. SVC-001 configure picker: Register BAT parity and Win7 chcp regression.
+Assert-True ($configureText.Contains('if errorlevel 3 goto :PICKER_NO_INSTALLED')) (
+    '9a. Configure picker distinguishes helper exit code 3 (no installed services)'
+)
+Assert-True ($configureText.Contains('if errorlevel 2 goto :PICKER_CANCELLED')) (
+    '9a. Configure picker distinguishes helper exit code 2 (cancelled)'
+)
+Assert-True ($configureText.Contains('if errorlevel 1 goto :PICKER_HELPER_FAILED')) (
+    '9a. Configure picker distinguishes helper exit code 1 (helper failure)'
+)
+Assert-True ($configureText.Contains('No installed SearchEngine services were found.')) (
+    '9a. Configure picker reports no installed services'
+)
+Assert-True ($configureText.Contains('SearchEngineConfig could not list installed services.')) (
+    '9a. Configure picker reports helper failure'
+)
+Assert-True ($configureText.Contains('tokens=1,* delims==')) (
+    '9a. Configure picker parses helper output with tokens=1,* delims=='
+)
+Assert-True ($configureText.Contains('set "SELECTED_%%A=%%B"')) (
+    '9a. Configure picker uses SELECTED_%%A=%%B parsing pattern'
+)
+Assert-True ($configureText.Contains('SELECTED_instance')) (
+    '9a. Configure picker reads SELECTED_instance from helper output'
+)
+
+$pickerBlockStart = $configureText.IndexOf('rem No argument: use interactive picker')
+$pickerBlockEndMarker = ':INSTANCE_RESOLVED'
+$pickerBlockEnd = $configureText.IndexOf(
+    "`r`n$pickerBlockEndMarker`r`n",
+    $pickerBlockStart
+)
+if ($pickerBlockEnd -lt 0) {
+    $pickerBlockEnd = $configureText.IndexOf(
+        "`n$pickerBlockEndMarker`n",
+        $pickerBlockStart
+    )
+}
+Assert-True (($pickerBlockStart -ge 0) -and ($pickerBlockEnd -gt $pickerBlockStart)) (
+    '9a. Configure picker block boundaries are present'
+)
+$pickerBlock = $configureText.Substring(
+    $pickerBlockStart,
+    $pickerBlockEnd - $pickerBlockStart
+)
+Assert-True (-not $pickerBlock.Contains('chcp 65001')) (
+    '9a. Configure picker block does not switch to chcp 65001 before choose-installed-instance'
+)
+Assert-True ($configureText.Contains('chcp 65001')) (
+    '9a. Configure-SearchEngineService.bat still uses chcp 65001 for UTF-8 helper output elsewhere'
+)
+$inspectBlockPattern = '(?s)chcp 65001\s*>nul\s*\r?\n"%HELPER%" inspect-installed'
+Assert-True ([regex]::IsMatch($configureText, $inspectBlockPattern)) (
+    '9a. Configure inspect-installed path keeps chcp 65001 before redirected helper output'
+)
+Assert-True (-not $configureText.Contains('2026-prd')) (
+    '9a. Configure-SearchEngineService.bat does not hardcode instance 2026-prd'
+)
+Assert-True (-not $configureText.Contains('2026-prm')) (
+    '9a. Configure-SearchEngineService.bat does not hardcode instance 2026-prm'
+)
+
 Assert-True ($configureText.Contains('ROLLBACK_DO_FILES')) (
     '9. Configure-SearchEngineService.bat has rollback exit-code gate label (ROLLBACK_DO_FILES)'
 )

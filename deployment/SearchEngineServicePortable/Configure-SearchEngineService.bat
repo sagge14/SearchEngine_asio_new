@@ -41,24 +41,35 @@ if not "%~1"=="" (
 )
 
 rem No argument: use interactive picker
+echo Selecting installed SearchEngine service...
 set "SELECTION_FILE=%TEMP%\SE-Configure-picker-%RANDOM%-%RANDOM%.txt"
-chcp 65001 >nul
 "%HELPER%" choose-installed-instance --purpose configure --output "%SELECTION_FILE%"
-if errorlevel 1 (
-    if exist "%SELECTION_FILE%" del /Q "%SELECTION_FILE%"
-    echo Configuration cancelled.
-    pause
-    exit /b 0
-)
-for /f "usebackq tokens=1,* delims==" %%A in ("%SELECTION_FILE%") do (
-    if /I "%%A"=="instance" set "SERVICE_INSTANCE=%%B"
-)
+if errorlevel 3 goto :PICKER_NO_INSTALLED
+if errorlevel 2 goto :PICKER_CANCELLED
+if errorlevel 1 goto :PICKER_HELPER_FAILED
+for /f "usebackq tokens=1,* delims==" %%A in ("%SELECTION_FILE%") do set "SELECTED_%%A=%%B"
 del /Q "%SELECTION_FILE%" >nul 2>&1
-if not defined SERVICE_INSTANCE (
-    echo Configuration cancelled.
-    pause
-    exit /b 0
-)
+if not defined SELECTED_instance goto :PICKER_HELPER_FAILED
+set "SERVICE_INSTANCE=%SELECTED_instance%"
+goto :INSTANCE_RESOLVED
+
+:PICKER_NO_INSTALLED
+del /Q "%SELECTION_FILE%" >nul 2>&1
+echo ERROR: No installed SearchEngine services were found.
+pause
+exit /b 1
+
+:PICKER_CANCELLED
+del /Q "%SELECTION_FILE%" >nul 2>&1
+echo Configuration cancelled.
+pause
+exit /b 0
+
+:PICKER_HELPER_FAILED
+del /Q "%SELECTION_FILE%" >nul 2>&1
+echo ERROR: SearchEngineConfig could not list installed services.
+pause
+exit /b 1
 
 :INSTANCE_RESOLVED
 echo(%SERVICE_INSTANCE%| findstr.exe /R /X "[A-Za-z0-9][A-Za-z0-9_-]*" >nul
