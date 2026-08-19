@@ -232,7 +232,9 @@ TEST(PdtvStreamingContract, ProductionPathDoesNotSlurpConfirmationIntoVector)
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::GET_ISH_PDTV_TEXT]"),
         std::string::npos);
-    EXPECT_NE(serverText.find("cmdMap[COMMAND::FILETEXT]"), std::string::npos);
+    EXPECT_EQ(
+        serverText.find("cmdMap[COMMAND::FILETEXT]"),
+        std::string::npos);
     EXPECT_NE(serverText.find("COMMAND::GET_ISH_PDTV_TEXT"), std::string::npos);
     EXPECT_NE(serverText.find("PdtvFileResolver::resolve"), std::string::npos);
     EXPECT_NE(serverText.find("FileTransfer"), std::string::npos);

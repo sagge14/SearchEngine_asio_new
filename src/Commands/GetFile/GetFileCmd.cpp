@@ -152,6 +152,6 @@ command_execution::CommandResult GetFileCmd::rejectRawBinFileDownload(
     (void)requestData;
     return command_execution::CommandResult::failure(
         command_execution::ErrorCode::InvalidCommand,
-        "GETBINFILE raw-path download is disabled");
+        "raw-path download is disabled");
 }
 

@@ -166,6 +166,29 @@ TEST(GetBinFileDisabled, DoesNotReturnExistingFileContent)
     EXPECT_EQ(stillReadable.payload, sentinel);
 }
 
+TEST(GetFileTextDisabled, DoesNotReturnExistingFileContent)
+{
+    TemporaryDirectory temporaryDirectory;
+    const fs::path filePath = temporaryDirectory.path() / "sentinel.txt";
+    const std::vector<std::uint8_t> sentinel{
+        'S', 'E', 'N', 'T', 'I', 'N', 'E', 'L', '-', 'F', 'I', 'L', 'E', 'T', 'E', 'X', 'T'};
+    writeBytes(filePath, sentinel);
+
+    const std::string pathStr = filePath.string();
+    const std::vector<std::uint8_t> request{pathStr.begin(), pathStr.end()};
+    const auto rejected = GetFileCmd::rejectRawBinFileDownload(request);
+
+    ASSERT_TRUE(rejected.failed());
+    EXPECT_EQ(rejected.error, command_execution::ErrorCode::InvalidCommand);
+    EXPECT_TRUE(rejected.payload.empty());
+    EXPECT_NE(rejected.payload, sentinel);
+    EXPECT_EQ(readBytes(filePath), sentinel);
+
+    const auto stillReadable = GetFileCmd::downloadFileResultByPath(pathStr);
+    ASSERT_TRUE(stillReadable.succeeded());
+    EXPECT_EQ(stillReadable.payload, sentinel);
+}
+
 TEST(SaveFileCommandResult, RejectsMalformedArchive)
 {
     TemporaryDirectory temporaryDirectory;

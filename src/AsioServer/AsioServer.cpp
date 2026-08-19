@@ -494,7 +494,8 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             co_return;
         }
 
-        if (requestHeader.command == COMMAND::GETBINFILE)
+        if (requestHeader.command == COMMAND::GETBINFILE ||
+            requestHeader.command == COMMAND::FILETEXT)
         {
             const auto rejected = GetFileCmd::rejectRawBinFileDownload(requestData);
             co_await queueError(
@@ -821,7 +822,6 @@ void asio_server::Interface::setSearchServer(
         std::make_unique<SaveTlgToSendCmd>(paths.tlg_send_root);
     cmdMap[COMMAND::LOAD_RAZN] =
         std::make_unique<SaveFileDefaultCmd>(paths.razn_output_dir);
-    cmdMap[COMMAND::FILETEXT] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileResultByPath(v);});
     cmdMap[COMMAND::GET_VH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaVhCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaIshCmd>();
     cmdMap[COMMAND::GETSQLJSONANSWEAR] = std::make_unique<GetSqlJsonAnswearCmd>(searchServer_);

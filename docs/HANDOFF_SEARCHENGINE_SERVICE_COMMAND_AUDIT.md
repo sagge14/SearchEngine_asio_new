@@ -55,10 +55,10 @@ VERIFIED    — реализовано и проверено
 | SVC-006 | P0/P1 | `PING/PONG` как core health-check | REJECTED |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | REJECTED |
-| SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | DECIDED |
+| SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | VERIFIED |
 | SVC-010 | P0 security | Upload path escape и upload целиком в RAM | DECIDED |
 | SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
-| SVC-012 | P1 | Основной download приложений через `GETBINFILE` | DECIDED |
+| SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
 | SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | OPEN |
 | SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
 
@@ -190,9 +190,36 @@ inner `FileWatcher` с `forceWalk=true`, который рекурсивно в�
 
 ## SVC-009 + SVC-012 — scoped-доступ к тексту и приложениям, end-to-end streaming
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
-Все загрузки приложений переводятся на безопасную схему:
+Фактический итог:
+
+```text
+telegram text:
+  GET_TELEGA_TEXT=32 {id,type}
+
+PDTV confirmation:
+  GET_ISH_PDTV_TEXT=33 {id,slot,entry_index}
+
+GET_ISH_PDTV:
+  strict integer id + read-only AutoPad lookup
+
+attachments:
+  GET_TELEGA_ATACHMENTS
+      ->
+  GET_TELEGA_SINGLE_ATACHMENT
+  with server/client streaming
+
+FILETEXT=2:
+  legacy/reserved, server rejects raw request (InvalidCommand)
+
+GETBINFILE=11:
+  legacy/reserved, server rejects raw request (InvalidCommand)
+
+client does not supply a physical server path for these production downloads
+```
+
+Все загрузки приложений переведены на безопасную схему:
 
 ```text
 GET_TELEGA_ATACHMENTS
@@ -515,11 +542,13 @@ GETDOC
 | `SOLOREQUEST` | index + configured `dirs` |
 | `GETSQLJSONANSWEAR` | index + configured `dirs` |
 | `START_UPDATE_BASE` | full scan/index update |
-| `FILETEXT` | после scoped migration отклонять raw path; SVC-009 |
-| `GETBINFILE` | после scoped migration отклонять raw path; SVC-009/012 |
+| `FILETEXT` | reserved / raw request rejected; SVC-009 |
+| `GETBINFILE` | reserved / raw request rejected; SVC-009/012 |
 | `GET_VH_TELEGI_FROM_SQL` | `prm_base_dir` |
 | `GET_ISH_TELEGI_FROM_SQL` | `prd_base_dir` |
-| `GET_ISH_PDTV` | `prd_base_dir` |
+| `GET_ISH_PDTV` | `prd_base_dir`, strict id/read-only lookup |
+| `GET_ISH_PDTV_TEXT` | scoped PDTV confirmation; id/slot/entry_index; server-side path resolution |
+| `GET_TELEGA_TEXT` | scoped id/type |
 | `GET_VH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_ISH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_OPIS_BASE` | configurable `opis_base_dir`; SVC-011 |
@@ -527,7 +556,7 @@ GETDOC
 | `LOAD_RAZN` | configurable `razn_output_dir`, safe streaming upload; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
-| `GET_SINGLE_ATACHMENT` | scoped streaming attachment read; SVC-009/012 |
+| `GET_SINGLE_ATACHMENT` | scoped attachment flow; SVC-009/012 |
 | `SAVE_MESSAGE_TO` | legacy messages state |
 | `GET_MESSAGE` | legacy queue/user 1 |
 
@@ -543,9 +572,9 @@ SVC-003 -> DECIDED
 SVC-004 -> DECIDED
 SVC-007 -> REJECTED
 SVC-008 -> REJECTED
-SVC-009 -> DECIDED
+SVC-009 -> VERIFIED
 SVC-010 -> DECIDED
-SVC-012 -> DECIDED
+SVC-012 -> VERIFIED
 SVC-002 -> DECIDED
 SVC-011 -> DECIDED
 SVC-006 -> REJECTED

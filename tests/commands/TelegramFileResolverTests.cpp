@@ -258,7 +258,9 @@ TEST(TelegramStreamingContract, ProductionPathDoesNotSlurpAttachmentIntoVector)
     EXPECT_EQ(
         serverText.find("cmdMap[COMMAND::GETBINFILE]"),
         std::string::npos);
-    EXPECT_NE(serverText.find("cmdMap[COMMAND::FILETEXT]"), std::string::npos);
+    EXPECT_EQ(
+        serverText.find("cmdMap[COMMAND::FILETEXT]"),
+        std::string::npos);
     EXPECT_NE(serverText.find("rejectRawBinFileDownload"), std::string::npos);
     EXPECT_EQ(
         serverText.find("std::make_shared<std::ifstream>"),
