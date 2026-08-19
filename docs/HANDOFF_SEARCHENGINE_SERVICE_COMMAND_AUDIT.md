@@ -15,11 +15,13 @@
 ```text
 server: sagge14/SearchEngine_asio_new
 branch: main
-server audit baseline: 07c7fa49b6e09b0fc4259ea590ac3635232d61ee
+server audit baseline: 59c03b25799da0435edda5ecafd9b3f764a9cfa3
 
 client: myLitleWork/SearchEngine-client
 branch: main
-client audit baseline: 07b16d1f6d578544ce842693ddddf35514dbf424
+client audit baseline: 6c2167a2fb885f921c89b40f23e687ab0fef8a46
+
+final cross-repo audit: 2026-08-19 CLEAN
 ```
 
 После существенных изменений service lifecycle, filesystem/protocol, installer,
@@ -48,19 +50,19 @@ VERIFIED    — реализовано и проверено
 | ID | Приоритет | Тема | Статус |
 |---|---:|---|---|
 | SVC-001 | P1 | Runtime-root и редактирование настроек | VERIFIED |
-| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | DECIDED |
-| SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | DECIDED |
-| SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | DECIDED |
-| SVC-005 | P0 | Update/reinstall теряет runtime-state | DECIDED |
+| SVC-002 | P0/P1 | Service account и доступ к рабочим путям | VERIFIED |
+| SVC-003 | P0 | `prefix_map.json` для `GET_ATTACHMENTS` при установке | VERIFIED |
+| SVC-004 | P1/P2 | Семантика `GET_ATTACHMENTS` | VERIFIED |
+| SVC-005 | P0 | Update/reinstall теряет runtime-state | VERIFIED |
 | SVC-006 | P0/P1 | `PING/PONG` как core health-check | REJECTED |
 | SVC-007 | P0 | Отсутствующий root воспринимается как отсутствие файлов | REJECTED |
 | SVC-008 | P1 | Watcher может не подхватить поздно появившийся parent/root | REJECTED |
 | SVC-009 | P0 security | `GETBINFILE`/`FILETEXT` принимают raw server paths | VERIFIED |
 | SVC-010 | P0 security | Upload path escape и upload целиком в RAM | VERIFIED |
-| SVC-011 | P1 | Жёсткие production paths `D:\...` | DECIDED |
+| SVC-011 | P1 | Жёсткие production paths `D:\...` | VERIFIED |
 | SVC-012 | P1 | Основной download приложений через `GETBINFILE` | VERIFIED |
-| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | FIXED |
-| SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | OPEN |
+| SVC-013 | P2 | Legacy state и невидимые `cout/cerr` | VERIFIED |
+| SVC-014 | P2 | Enum команд шире реально поддерживаемого registry | VERIFIED |
 
 ---
 
@@ -68,7 +70,7 @@ VERIFIED    — реализовано и проверено
 
 ## SVC-005 — ProgramData является persistent state
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 ```text
 Program Files = заменяемое приложение.
@@ -105,7 +107,7 @@ uninstall/reset с предупреждением.
 
 ## SVC-003 — `prefix_map.json` входит в release и настраивается installer
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 `GET_ATTACHMENTS` остаётся рабочей функцией. Активный файл в service mode:
 
@@ -129,7 +131,7 @@ Installer спрашивает, используется ли на этом inst
 
 ## SVC-004 — текущая семантика `GET_ATTACHMENTS` сохраняется
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 Оставить текущий сценарий:
 
@@ -346,7 +348,7 @@ SearchEngine и SearchClient.
 
 ## SVC-002 — service account: LocalSystem остаётся поддерживаемым режимом
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 Installer сейчас создаёт/configure службу без `obj=`, поэтому Windows запускает
 её под `LocalSystem`. Это поведение оставить.
@@ -387,7 +389,7 @@ drives автоматически видны службе.
 
 ## SVC-011 — все скрытые production roots выносятся в Settings
 
-**Статус:** DECIDED
+**Статус:** VERIFIED
 
 Жёсткие production paths в C++ убрать. В `Settings.json` добавить отдельные
 настройки назначения, как минимум:
@@ -423,8 +425,8 @@ f12_base_dir
 
 Перевести на эти настройки текущие hardcoded consumers:
 
-- `LOAD_TLG_TO_SEND`;
-- `LOAD_RAZN`;
+- `LOAD_TLG_TO_SEND` / live `UPLOAD_TLG_TO_SEND_V1=34` (15 reserved/rejected);
+- `LOAD_RAZN` / live `UPLOAD_RAZN_V1=35` (22 reserved/rejected);
 - `GET_OPIS_BASE`;
 - `RecordProcessor`;
 - `GET_VH_TELEGA_WAY` / `GET_ISH_TELEGA_WAY` (`TelegaWay`).
@@ -494,7 +496,7 @@ GET_ATTACHMENTS: not configured
 
 ---
 
-# Открытые пункты
+# Реализованные пункты
 
 ## SVC-001 — runtime-root службы и управление настройками
 
@@ -594,7 +596,7 @@ GET_ATTACHMENTS: not configured
 ## SVC-013 — legacy state и диагностика service mode
 
 **Приоритет:** P2  
-**Статус:** FIXED
+**Статус:** VERIFIED
 
 Реализован retirement legacy message queue без изменения wire-слотов:
 
@@ -625,22 +627,43 @@ SAVE_MESSAGE_TO = 2781032419 (historical composite marker)
 ## SVC-014 — enum содержит unsupported historical commands
 
 **Приоритет:** P2  
-**Статус:** OPEN
+**Статус:** VERIFIED
 
-Остаются исторические wire slots без активного handler:
+Исторические wire slots **3..9** сохранены без перенумерации и **не имеют
+production handler**. Принятый контракт (Option C: docs/tests, без rename на
+server):
 
 ```text
-JSONREGUEST
-ADDRESOLUTION
-UPDATE
-GETRESOLUTIONS
-GETRESOLUTION
-GETDOCS
-GETDOC
+3  JSONREGUEST
+4  ADDRESOLUTION
+5  UPDATE            (≠ START_UPDATE_BASE=14)
+6  GETRESOLUTIONS
+7  GETRESOLUTION
+8  GETDOCS
+9  GETDOC
 ```
 
-Нельзя удалять их из середины последовательного enum с перенумерацией остальных.
-Нужно позже закрепить explicit/reserved ordinals и cross-repo tests/docs.
+**Server:** `isRequestCommand=false` → `trustCommand` отклоняет до auth gate и
+до чтения body → `InvalidCommand` (`ERROR_RESPONSE` после negotiate, иначе
+`SOMEERROR`) с diagnostic `wire_command=N` → **TCP session закрывается**
+(`closeAfterWrite=true`). Никогда не доходит до `CommandNotRegistered`.
+
+**Client:** production SearchClient не отправляет 3..9. Имена: slot 3 =
+`JSONREGUEST`; slots 4..9 = `RESERVED_COMMAND_*` (wire IDs совпадают с server).
+
+**SOLOREQUEST=1** остаётся **active** на server (`SoloRequestCmd` в cmdMap) для
+legacy/third-party клиентов; текущий SearchClient использует 10/12/13.
+
+**Cleanup:** удалены unreachable `SaveTlgToSendCmd` / `SaveFileDefaultCmd`
+(SVC-010 legacy upload classes). Stale `AsioServer/` в client repo помечен
+archive-only (не в `SearchClient_asio.cbproj`).
+
+**Tests:** `tests/commands/HistoricalCommandSlotTests.cpp`,
+`static_assert` ordinals 3..9 на server и client,
+расширен `CommandResultTests` allowlist check.
+
+Не переоткрывать: reject semantics для 3..9 (session close), wire ordinals,
+SVC-013/009/010/012 contracts.
 
 ---
 
@@ -652,11 +675,12 @@ GETDOC
 | `PING` | core installer readiness; SVC-006 |
 | `AUTHENTICATE_V1` | persistent auth state; SVC-005 |
 | `USER_REGISTRY` | legacy localhost-admin path |
-| `SOLOREQUEST` | index + configured `dirs` |
+| `SOLOREQUEST` | index + configured `dirs`; server-only legacy (client uses 10/12/13) |
 | `GETSQLJSONANSWEAR` | index + configured `dirs` |
 | `START_UPDATE_BASE` | full scan/index update |
 | `FILETEXT` | reserved / raw request rejected; SVC-009 |
 | `GETBINFILE` | reserved / raw request rejected; SVC-009/012 |
+| `JSONREGUEST..GETDOC` | historical slots 3..9; trustCommand reject; SVC-014 |
 | `GET_VH_TELEGI_FROM_SQL` | `prm_base_dir` |
 | `GET_ISH_TELEGI_FROM_SQL` | `prd_base_dir` |
 | `GET_ISH_PDTV` | `prd_base_dir`, strict id/read-only lookup |
@@ -665,8 +689,10 @@ GETDOC
 | `GET_VH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_ISH_TELEGA_WAY` | configurable `f12_base_dir`; SVC-011 |
 | `GET_OPIS_BASE` | configurable `opis_base_dir`; SVC-011 |
-| `LOAD_TLG_TO_SEND` | configurable `tlg_send_root`, safe streaming upload; SVC-010/011 |
-| `LOAD_RAZN` | configurable `razn_output_dir`, safe streaming upload; SVC-010/011 |
+| `LOAD_TLG_TO_SEND` | reserved slot 15; server rejects InvalidCommand; SVC-010 |
+| `LOAD_RAZN` | reserved slot 22; server rejects InvalidCommand; SVC-010 |
+| `UPLOAD_TLG_TO_SEND_V1` | streaming V1; Settings `tlg_send_root`; SVC-010/011 |
+| `UPLOAD_RAZN_V1` | streaming V1; Settings `razn_output_dir`; SVC-010/011 |
 | `GET_ATTACHMENTS` | primary only + `prefix_map`, destructive buffer semantics; SVC-003/004 |
 | `GET_TELEGA_ATACHMENTS` | scoped AutoPad attachment list; SVC-009/012 |
 | `GET_SINGLE_ATACHMENT` | scoped attachment flow; SVC-009/012 |
@@ -677,26 +703,27 @@ GETDOC
 
 # Текущий порядок дальнейшего разбора
 
-Уже разобраны:
+Все пункты SVC-001..014 закрыты:
 
 ```text
-SVC-005 -> DECIDED
-SVC-003 -> DECIDED
-SVC-004 -> DECIDED
+SVC-001 -> VERIFIED
+SVC-002 -> VERIFIED
+SVC-003 -> VERIFIED
+SVC-004 -> VERIFIED
+SVC-005 -> VERIFIED
+SVC-006 -> REJECTED
 SVC-007 -> REJECTED
 SVC-008 -> REJECTED
 SVC-009 -> VERIFIED
 SVC-010 -> VERIFIED
+SVC-011 -> VERIFIED
 SVC-012 -> VERIFIED
-SVC-002 -> DECIDED
-SVC-011 -> DECIDED
-SVC-006 -> REJECTED
+SVC-013 -> VERIFIED
+SVC-014 -> VERIFIED
 ```
 
-Дальше:
-
-1. **SVC-001** — runtime config UX (FIXED; correction commit applied).
-2. **SVC-013 + SVC-014** — legacy cleanup/diagnostics/wire slots.
+Финальный cross-repo audit 2026-08-19 (`59c03b257` / `6c2167a2`): **CLEAN**.
+Новых OPEN пунктов нет. Не переоткрывать VERIFIED/REJECTED без нового material fact.
 
 ---
 
@@ -747,9 +774,8 @@ Migration/update impact: None for current production client. Old clients will se
 Tests/build/smoke:
   x64 Debug SearchEngine — build: OK
   SearchEngine_test — 116 passed, 3 skipped (symlink); StreamingUploadContract: PASS
-Remaining limitations:  SaveTlgToSendCmd and SaveFileDefaultCmd classes remain in
-                        source but are unreachable — removal is SVC-011/SVC-013 scope.
-                        tlg_send_root/razn_output_dir still stored in setSearchServer
+Remaining limitations:  Legacy upload command classes removed in SVC-014;
+                        `tlg_send_root`/`razn_output_dir` still stored in setSearchServer
                         paths struct for future use by SVC-011.
 ```
 

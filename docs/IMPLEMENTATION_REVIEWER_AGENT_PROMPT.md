@@ -375,13 +375,15 @@ SCM RUNNING + PING/PONG
 
 ---
 
-# OPEN-пункты
+# Закрытые пункты
 
-Эти пункты **НЕ реализовывать**, пока пользователь отдельно не примет по ним решение:
+На текущий момент открытых protocol/service пунктов из handoff нет.
 
-```text
-SVC-014
-```
+Финальный cross-repo audit 2026-08-19: **CLEAN**.
+
+SVC-014 реализован (VERIFIED): historical slots 3..9 задокументированы,
+`static_assert`/regression tests добавлены, unreachable legacy upload classes
+удалены. Контракт — `HANDOFF`, секция SVC-014.
 
 SVC-013 уже реализован как retirement legacy message queue. Для всех будущих
 этапов это обязательный контракт:
@@ -393,7 +395,7 @@ SVC-013 уже реализован как retirement legacy message queue. Дл
   `AttachmentPackage`);
 - не удалять автоматически historical `%ProgramData%\\...\\messages`.
 
-SVC-001 реализован (FIXED): `Configure-SearchEngineService.bat`, `inspect-installed`,
+SVC-001 реализован (VERIFIED): `Configure-SearchEngineService.bat`, `inspect-installed`,
 `settings-transaction-apply/rollback/commit`, расширенный `validateJson()`. Подробнее —
 в `HANDOFF_SEARCHENGINE_SERVICE_COMMAND_AUDIT.md`, секция SVC-001.
 
@@ -403,32 +405,22 @@ SVC-001 реализован (FIXED): `Configure-SearchEngineService.bat`, `insp
 
 # Рекомендуемый порядок реализации
 
-Перед началом сам перепроверь зависимости и при необходимости слегка измени порядок, но объясни причину.
+Порядок SVC-001..014 **выполнен**. Финальный cross-repo audit 2026-08-19
+(`59c03b257` / `6c2167a2`): **CLEAN**.
 
-Базовый порядок:
+Не выдавать implementation prompts на уже VERIFIED/REJECTED пункты без нового
+material fact и отдельного решения пользователя.
+
+Исторический порядок (завершён):
 
 ```text
-1. SVC-008 — только финальная фиксация REJECTED в handoff, если ещё не записано.
-
-2. SVC-005
-   Исправить update/reinstall persistence ProgramData.
-
-3. SVC-003
-   Package/installer prefix_map.json.
-
-4. SVC-002 + SVC-011
-   Settings roots + config helper/installer/docs +
-   убрать hardcoded D:\ consumers.
-
-5. SVC-009 + SVC-012
-   Scoped text/download protocol и end-to-end streaming.
-   Делить на безопасные подэтапы, если один prompt получится слишком большим.
-
-6. SVC-010
-   Safe streaming uploads.
-   Делать после появления configurable upload roots из SVC-011.
-
-7. Финальный cross-repo regression/audit accepted решений.
+1. SVC-008 — REJECTED зафиксирован в handoff.
+2. SVC-005 — ProgramData persistence.
+3. SVC-003 — package/installer prefix_map.json.
+4. SVC-002 + SVC-011 — LocalSystem + Settings roots.
+5. SVC-009 + SVC-012 — scoped text/download + streaming.
+6. SVC-010 — safe streaming uploads 34/35; legacy 15/22 rejected.
+7. Финальный cross-repo regression/audit — CLEAN.
 ```
 
 `SVC-004`, `SVC-006`, `SVC-007`, `SVC-008` не требуют production-code implementation в рамках принятых решений.
@@ -602,18 +594,16 @@ forged id/type/file_name
 
 # Формат твоего первого ответа
 
-После получения этого задания:
+Implementation sequence SVC-001..014 завершена. Финальный audit: **CLEAN**.
+
+После получения нового задания:
 
 1. изучи актуальные HEAD обоих repos и handoff;
-2. проверь, не реализована ли уже часть решений;
-3. проверь статус SVC-008;
-4. составь актуальную dependency/order карту;
-5. **не выдавай сразу все prompts**;
-6. выдай только **первый подробный implementation prompt** для слабой модели;
-7. после него напиши кратко:
+2. не переоткрывай VERIFIED/REJECTED без нового material fact;
+3. если OPEN пунктов нет — не выдавай implementation prompt;
+4. работай в режиме reviewer/audit, пока пользователь отдельно не примет новый пункт.
 
-```text
-Следующий этап не начинаю до проверки результата этого prompt.
-```
+Не используй шаблон «выдай первый implementation prompt», пока пользователь
+явно не откроет новую DECIDED-задачу.
 
-Когда пользователь принесёт результат — переходи в режим reviewer, а не продолжай план автоматически.
+Когда пользователь принесёт результат отдельной будущей задачи — переходи в режим reviewer, а не продолжай план автоматически.
