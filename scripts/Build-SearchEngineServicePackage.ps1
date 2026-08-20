@@ -9,7 +9,8 @@ param(
     [string]$CloudRoot,
     [string]$CloudReleaseId,
     [switch]$SkipCloudPublish,
-    [switch]$SkipVersionBump
+    [switch]$SkipVersionBump,
+    [Nullable[int]]$Year
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,14 @@ $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
 
 $productName = 'SearchEngineService'
+$releaseSettingsYear = if ($PSBoundParameters.ContainsKey('Year')) {
+    [int]$Year
+} else {
+    (Get-Date).Year
+}
+if ($releaseSettingsYear -lt 2000 -or $releaseSettingsYear -gt 2099) {
+    throw "Year must be inside 2000..2099; got $releaseSettingsYear."
+}
 $versionInfo = Sync-SearchEngineAppVersion `
     -ProjectRoot $projectRoot `
     -ProductName $productName `
@@ -86,6 +95,7 @@ foreach ($build in $builds) {
         Architecture = $build.Architecture
         SkipCloudPublish = $SkipCloudPublish
         CloudReleaseId = $CloudReleaseId
+        Year = $releaseSettingsYear
     }
     if (-not [string]::IsNullOrWhiteSpace($SettingsPath)) {
         $packageArguments.SettingsPath = $SettingsPath

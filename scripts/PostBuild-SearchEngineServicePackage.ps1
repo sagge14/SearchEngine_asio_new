@@ -10,7 +10,9 @@ param(
     [Parameter(Mandatory)]
     [string]$Configuration,
 
-    [switch]$SkipCloudPublish
+    [switch]$SkipCloudPublish,
+
+    [Nullable[int]]$Year
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +25,14 @@ if ($Configuration -ne 'Release') {
     return
 }
 
+$packageArguments = @{
+    Architecture = $Architecture
+    BuildDirectory = $BuildDirectory
+    SkipCloudPublish = $SkipCloudPublish
+}
+if ($PSBoundParameters.ContainsKey('Year')) {
+    $packageArguments.Year = [int]$Year
+}
+
 & (Join-Path $PSScriptRoot 'New-SearchEngineServicePackage.ps1') `
-    -Architecture $Architecture `
-    -BuildDirectory $BuildDirectory `
-    -SkipCloudPublish:$SkipCloudPublish
+    @packageArguments

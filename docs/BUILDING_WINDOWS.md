@@ -96,6 +96,44 @@ Release через скрипт (bump → build → package → cloud при н�
 
 Без увеличения patch: `-SkipVersionBump`. Без облака: `-SkipCloudPublish`.
 
+### Годовые fresh-настройки SearchEngineService
+
+Стабильный исходный шаблон новой установки находится в
+`deployment\SearchEngineServicePortable\source-data\Settings.json`. Во время
+`New-SearchEngineServicePackage.ps1` скрипт
+`scripts\Prepare-YearBasedReleaseSettings.ps1` создаёт производный
+`data\Settings.json` внутри уникального package staging-каталога
+`.SearchEngineService-*.staging-<guid>`. Сразу после генерации именно этот файл
+проверяется `SearchEngineConfig validate` и только затем входит в пакет.
+
+По умолчанию один календарный год выбирается на canonical package-flow и явно
+передаётся всем собираемым архитектурам. Для воспроизводимой подготовки укажите
+его явно:
+
+```powershell
+.\scripts\Build-SearchEngineServicePackage.ps1 -Year 2027
+.\scripts\New-SearchEngineServicePackage.ps1 -Architecture x64 -Year 2027
+```
+
+Генератор записывает строковый `config.year` и вычисляет `config.asio_port` из
+порта исходного шаблона:
+
+```text
+generatedPort = floor(basePort / 10) * 10 + (year % 10)
+```
+
+Например, `15006` даёт `15007` для 2027 года и `15000` для 2030 года. Другие
+поля не меняются. Публикация staging-файла атомарна; при ошибке JSON/schema,
+диапазона 2000..2099, порта 1..65535, canonical validation или выходе пути за
+staging подготовка прекращается с ненулевым кодом, не повреждая предыдущий
+валидный файл.
+
+Обычная Debug-сборка генератор не запускает. Tracked template не изменяется.
+При update/reinstall установленный Settings рекурсивно импортируется поверх
+нового template: существующие и unknown-поля сохраняются, а явно выбранные
+пользователем значения имеют приоритет. Генератор не вызывается при старте
+SearchEngine и не входит в установочный runtime.
+
 Локальный пакет и ZIP на Drive:
 
 ```text

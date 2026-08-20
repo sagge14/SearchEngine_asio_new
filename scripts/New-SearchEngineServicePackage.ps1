@@ -9,7 +9,8 @@ param(
     [string]$VCRedistPath,
     [string]$CloudRoot,
     [string]$CloudReleaseId,
-    [switch]$SkipCloudPublish
+    [switch]$SkipCloudPublish,
+    [Nullable[int]]$Year
 )
 
 $ErrorActionPreference = 'Stop'
@@ -214,7 +215,8 @@ Assert-PeMatchesAppVersion `
     -ExpectedFileVersion $versionInfo.FileVersion `
     -ExpectedProductName $productName `
     -ExpectedOriginalFilename 'SearchEngineConfig.exe'
-$SettingsPath = Resolve-RequiredFile $SettingsPath 'Portable Settings.json'
+$settingsTemplatePath = Resolve-RequiredFile `
+    $SettingsPath 'Portable Settings.json template'
 $IgnorePath = Resolve-RequiredFile $IgnorePath 'Portable ignore.txt'
 $VCRedistPath = Resolve-RequiredFile $VCRedistPath `
     "Microsoft Visual C++ Redistributable $vcRedistArch"
@@ -244,104 +246,6 @@ if ($tokenIssuerMachine -ne $expectedMachine) {
         -f $expectedMachine, $tokenIssuerMachine)
 }
 
-& $configToolPath validate --settings $SettingsPath
-if ($LASTEXITCODE -ne 0) {
-    throw "SearchEngineConfig rejected portable Settings.json: $SettingsPath"
-}
-& $configToolPath validate-prefix-map --path $PrefixMapPath
-if ($LASTEXITCODE -ne 0) {
-    throw "SearchEngineConfig rejected portable prefix_map.json: $PrefixMapPath"
-}
-Assert-SearchEngineConfigAutoPadContract `
-    -ConfigToolPath $configToolPath `
-    -TemplatePath $SettingsPath
-
-$cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
-if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
-    throw "CMake cache was not found for the selected build: $cachePath"
-}
-$cacheText = [IO.File]::ReadAllText($cachePath)
-if ($Architecture -eq 'x86' -and
-    ($cacheText -notmatch 'CMAKE_GENERATOR:INTERNAL=Visual Studio 16 2019' -or
-     $cacheText -notmatch 'SEARCHENGINE_WINDOWS_TARGET_VERSION:STRING=0x0601')) {
-    throw 'The x86 package must be built by VS2019 v142 with Windows target 0x0601.'
-}
-
-$signature = Get-AuthenticodeSignature -LiteralPath $VCRedistPath
-if ($signature.Status -ne 'Valid' -or
-    $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
-    throw "VC++ Redistributable does not have a valid Microsoft signature: $VCRedistPath"
-}
-if ($Architecture -eq 'x86' -and
-    (Get-Item -LiteralPath $VCRedistPath).VersionInfo.FileVersion -notlike '14.29.*') {
-    throw 'The Windows 7 package requires the VS2019 VC++ Runtime 14.29 x86.'
-}
-
-$settings = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 |
-    ConvertFrom-Json
-$config = $settings.config
-$indexRootsProperty = if ($null -ne $config) {
-    $config.PSObject.Properties['index_roots']
-} else {
-    $null
-}
-$dirsProperty = if ($null -ne $config) {
-    $config.PSObject.Properties['dirs']
-} else {
-    $null
-}
-$indexRoots = if ($null -ne $indexRootsProperty) {
-    @($indexRootsProperty.Value)
-} elseif ($null -ne $dirsProperty) {
-    @($dirsProperty.Value)
-} else {
-    @()
-}
-$indexedExtensionsProperty = if ($null -ne $config) {
-    $config.PSObject.Properties['indexed_extensions']
-} else {
-    $null
-}
-$legacyExtensionsProperty = if ($null -ne $config) {
-    $config.PSObject.Properties['extensions']
-} else {
-    $null
-}
-$includeExtensionlessProperty = if ($null -ne $config) {
-    $config.PSObject.Properties['include_extensionless_files']
-} else {
-    $null
-}
-$hasIndexedFileTypes = if ($null -ne $indexedExtensionsProperty) {
-    $indexedExtensionsValue = $indexedExtensionsProperty.Value
-    $includeExtensionlessIsValid = (
-        $null -eq $includeExtensionlessProperty -or
-        $includeExtensionlessProperty.Value -is [bool]
-    )
-    $includeExtensionless = (
-        $includeExtensionlessIsValid -and
-        $null -ne $includeExtensionlessProperty -and
-        $includeExtensionlessProperty.Value
-    )
-    $indexedExtensionsValue -is [System.Array] -and
-        $includeExtensionlessIsValid -and
-        ($indexedExtensionsValue.Count -gt 0 -or $includeExtensionless)
-} elseif ($null -ne $legacyExtensionsProperty) {
-    $legacyExtensionsProperty.Value -is [System.Array] -and
-        $legacyExtensionsProperty.Value.Count -gt 0
-} else {
-    $false
-}
-if (-not $config -or -not $config.year -or
-    $indexRoots.Count -eq 0 -or
-    -not $hasIndexedFileTypes) {
-    throw "Settings.json is missing required config fields: $SettingsPath"
-}
-$port = if ($config.port) { [int]$config.port } else { [int]$config.asio_port }
-if ($port -lt 1 -or $port -gt 65535) {
-    throw "Settings.json contains an invalid ASIO port: $port"
-}
-
 $OutputDirectory = Resolve-AbsolutePath $OutputDirectory $projectRoot
 $outputRoot = [IO.Path]::GetPathRoot($OutputDirectory)
 if ($OutputDirectory.TrimEnd('\').Equals(
@@ -365,6 +269,118 @@ try {
     foreach ($directory in @('app', 'data', 'tools', 'prerequisites')) {
         New-Item -ItemType Directory `
             -Path (Join-Path $stagingDirectory $directory) | Out-Null
+    }
+
+    $generatedSettingsPath = Join-Path $stagingDirectory 'data\Settings.json'
+    $prepareArguments = @{
+        TemplatePath = $settingsTemplatePath
+        OutputPath = $generatedSettingsPath
+        AllowedOutputRoot = $stagingDirectory
+        ConfigToolPath = $configToolPath
+    }
+    if ($PSBoundParameters.ContainsKey('Year')) {
+        $prepareArguments.Year = [int]$Year
+    }
+    $preparedSettings = & (Join-Path $PSScriptRoot `
+        'Prepare-YearBasedReleaseSettings.ps1') @prepareArguments
+    $releaseSettingsYear = [int]$preparedSettings.Year
+
+    & $configToolPath validate --settings $generatedSettingsPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SearchEngineConfig rejected generated portable Settings.json: $generatedSettingsPath"
+    }
+    & $configToolPath validate-prefix-map --path $PrefixMapPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SearchEngineConfig rejected portable prefix_map.json: $PrefixMapPath"
+    }
+    Assert-SearchEngineConfigAutoPadContract `
+        -ConfigToolPath $configToolPath `
+        -TemplatePath $generatedSettingsPath
+
+    $cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
+    if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+        throw "CMake cache was not found for the selected build: $cachePath"
+    }
+    $cacheText = [IO.File]::ReadAllText($cachePath)
+    if ($Architecture -eq 'x86' -and
+        ($cacheText -notmatch 'CMAKE_GENERATOR:INTERNAL=Visual Studio 16 2019' -or
+         $cacheText -notmatch 'SEARCHENGINE_WINDOWS_TARGET_VERSION:STRING=0x0601')) {
+        throw 'The x86 package must be built by VS2019 v142 with Windows target 0x0601.'
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $VCRedistPath
+    if ($signature.Status -ne 'Valid' -or
+        $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+        throw "VC++ Redistributable does not have a valid Microsoft signature: $VCRedistPath"
+    }
+    if ($Architecture -eq 'x86' -and
+        (Get-Item -LiteralPath $VCRedistPath).VersionInfo.FileVersion -notlike '14.29.*') {
+        throw 'The Windows 7 package requires the VS2019 VC++ Runtime 14.29 x86.'
+    }
+
+    $settings = Get-Content -LiteralPath $generatedSettingsPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json
+    $config = $settings.config
+    $indexRootsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['index_roots']
+    } else {
+        $null
+    }
+    $dirsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['dirs']
+    } else {
+        $null
+    }
+    $indexRoots = if ($null -ne $indexRootsProperty) {
+        @($indexRootsProperty.Value)
+    } elseif ($null -ne $dirsProperty) {
+        @($dirsProperty.Value)
+    } else {
+        @()
+    }
+    $indexedExtensionsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['indexed_extensions']
+    } else {
+        $null
+    }
+    $legacyExtensionsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['extensions']
+    } else {
+        $null
+    }
+    $includeExtensionlessProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['include_extensionless_files']
+    } else {
+        $null
+    }
+    $hasIndexedFileTypes = if ($null -ne $indexedExtensionsProperty) {
+        $indexedExtensionsValue = $indexedExtensionsProperty.Value
+        $includeExtensionlessIsValid = (
+            $null -eq $includeExtensionlessProperty -or
+            $includeExtensionlessProperty.Value -is [bool]
+        )
+        $includeExtensionless = (
+            $includeExtensionlessIsValid -and
+            $null -ne $includeExtensionlessProperty -and
+            $includeExtensionlessProperty.Value
+        )
+        $indexedExtensionsValue -is [System.Array] -and
+            $includeExtensionlessIsValid -and
+            ($indexedExtensionsValue.Count -gt 0 -or $includeExtensionless)
+    } elseif ($null -ne $legacyExtensionsProperty) {
+        $legacyExtensionsProperty.Value -is [System.Array] -and
+            $legacyExtensionsProperty.Value.Count -gt 0
+    } else {
+        $false
+    }
+    if (-not $config -or -not $config.year -or
+        $indexRoots.Count -eq 0 -or
+        -not $hasIndexedFileTypes) {
+        throw "Generated Settings.json is missing required config fields: $generatedSettingsPath"
+    }
+    $port = [int]$config.asio_port
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "Settings.json contains an invalid ASIO port: $port"
     }
 
     Copy-Item -LiteralPath $binaryPath `
@@ -407,8 +423,6 @@ try {
         -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
     Copy-Item -LiteralPath $registerAuthScriptPath `
         -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
-    Copy-Item -LiteralPath $SettingsPath `
-        -Destination (Join-Path $stagingDirectory 'data\Settings.json')
     Copy-Item -LiteralPath $IgnorePath `
         -Destination (Join-Path $stagingDirectory 'data\ignore.txt')
     Copy-Item -LiteralPath $PrefixMapPath `
@@ -630,7 +644,8 @@ Write-Host "Package: $OutputDirectory"
 Write-Host "Architecture: $Architecture"
 Write-Host "App version: $($versionInfo.Version)"
 Write-Host "Minimum Windows: $minimumWindowsLabel"
-Write-Host "Settings source: $SettingsPath"
+Write-Host "Settings template: $settingsTemplatePath"
+Write-Host "Generated Settings year: $releaseSettingsYear"
 Write-Host "Size: $([Math]::Round($packageSize / 1MB, 1)) MB"
 Write-Host 'Copy the entire package directory to the target computer.'
 

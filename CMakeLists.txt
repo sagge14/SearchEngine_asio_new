@@ -1248,4 +1248,30 @@ if(TARGET SearchEngineConfig)
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock2B.cmake"
     )
+    find_program(
+            SEARCHENGINE_POWERSHELL_EXECUTABLE
+            NAMES pwsh.exe pwsh powershell.exe powershell
+    )
+    if(SEARCHENGINE_POWERSHELL_EXECUTABLE)
+        add_test(
+                NAME YearBasedReleaseSettings_test
+                COMMAND
+                "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${PROJECT_SOURCE_DIR}/scripts/tests/YearBasedReleaseSettings.Tests.ps1"
+                -HelperPath "$<TARGET_FILE:SearchEngineConfig>"
+        )
+        add_test(
+                NAME SearchEngineSettingsMerge_test
+                COMMAND
+                "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
+                -NoProfile
+                -ExecutionPolicy Bypass
+                -File
+                "${PROJECT_SOURCE_DIR}/scripts/tests/SearchEngineSettingsMerge.Tests.ps1"
+                -HelperPath "$<TARGET_FILE:SearchEngineConfig>"
+        )
+    endif()
 endif()
