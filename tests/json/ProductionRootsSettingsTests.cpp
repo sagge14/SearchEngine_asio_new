@@ -75,7 +75,7 @@ TEST(ProductionRootsSettingsTest, CustomValuesRoundtrip)
     search_server::Settings original;
     original.year = "2026";
     original.indexRoots = {"D:\\JANUARY"};
-    original.extensions = {"txt"};
+    original.indexedExtensions = {"txt"};
     original.prm_base_dir = "";
     original.prd_base_dir = "";
     original.tlg_send_root = "E:\\tlg-root";

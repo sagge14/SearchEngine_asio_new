@@ -32,6 +32,13 @@ Register-AuthClient-FromToken.bat.
    локальные Windows-пути или UNC, например D:\DATA и \\server\share\DATA.
    Синтаксическая поддержка UNC не означает, что LocalSystem автоматически
    имеет доступ к SMB/share/ACL.
+   config.indexed_extensions содержит точные последние расширения без точки;
+   сравнение не зависит от регистра. config.include_extensionless_files
+   отдельно разрешает README, .hidden и другие имена без расширения. Пустой
+   indexed_extensions допустим только вместе с true.
+   config.query_word_match=all требует все слова запроса, any — хотя бы одно
+   найденное слово. extensions и exact_search остаются только read-only
+   compatibility aliases для старых конфигураций.
    Production-корни tlg_send_root, razn_output_dir, opis_base_dir и
    f12_base_dir по текущему контракту валидации — только абсолютные локальные
    Windows-пути; UNC для них не принимается.

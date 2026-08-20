@@ -210,6 +210,8 @@ if(BUILD_CONFIG_TOOL)
             SearchEngineConfig
             tools/config/main.cpp
             tools/config/RuntimeDataTransaction.cpp
+            src/MyUtils/FileExtensionContract.cpp
+            src/SearchServer/QueryWordMatch.cpp
     )
     target_include_directories(
             SearchEngineConfig
@@ -1062,6 +1064,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Commands/GetTelegaWay/GetTelegaWayCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/OEMCase.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/Encoding.cpp"
+            "${PROJECT_SOURCE_DIR}/src/MyUtils/FileExtensionContract.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/FileScanner.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/LogFile.cpp"
             "${PROJECT_SOURCE_DIR}/src/MyUtils/PathExclusion.cpp"
@@ -1075,6 +1078,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Index/simd_tokenizer.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/AbstractScheduledTask.cpp"
             "${PROJECT_SOURCE_DIR}/src/scheduler/BackupTask.cpp"
+            "${PROJECT_SOURCE_DIR}/src/SearchServer/QueryWordMatch.cpp"
             "${PROJECT_SOURCE_DIR}/tools/backup/BackupServiceApplication.cpp"
             "${PROJECT_SOURCE_DIR}/tools/backup/BackupServiceOptions.cpp"
     )
@@ -1235,5 +1239,15 @@ if(TARGET SearchEngineConfig)
             "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-block2-index-roots-test"
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock2IndexRoots.cmake"
+    )
+    add_test(
+            NAME SearchEngineConfigBlock2B_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-block2b-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigBlock2B.cmake"
     )
 endif()

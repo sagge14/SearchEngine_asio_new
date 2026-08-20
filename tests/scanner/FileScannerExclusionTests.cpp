@@ -30,6 +30,9 @@ public:
         fs::create_directories(root_ / "excluded_similar");
 
         writeFile(root_ / "keep" / "a.txt", "012345678901234567890");
+        writeFile(root_ / "keep" / "FILE.TXT", "012345678901234567890");
+        writeFile(root_ / "keep" / "suffix.mytxt", "012345678901234567890");
+        writeFile(root_ / "keep" / "README", "012345678901234567890");
         writeFile(root_ / "excluded" / "b.txt", "012345678901234567890");
         writeFile(root_ / "excluded" / "nested" / "c.txt", "012345678901234567890");
         writeFile(root_ / "excluded_similar" / "d.txt", "012345678901234567890");
@@ -73,12 +76,15 @@ TEST(FileScannerExclusionTest, FullScanSkipsExcludedSubtreeAndSimilarNames)
 
     const auto scanned = FileScanner::scanDirectories(
         {rootUtf8},
-        {"txt"},
+        file_extension_contract::Selection{{"txt"}, false},
         {excludedUtf8});
 
     const auto names = basenames(scanned);
     EXPECT_TRUE(names.count(L"a.txt") == 1u);
+    EXPECT_TRUE(names.count(L"FILE.TXT") == 1u);
     EXPECT_TRUE(names.count(L"d.txt") == 1u);
+    EXPECT_EQ(names.count(L"suffix.mytxt"), 0u);
+    EXPECT_EQ(names.count(L"README"), 0u);
     EXPECT_EQ(names.count(L"b.txt"), 0u);
     EXPECT_EQ(names.count(L"c.txt"), 0u);
 }

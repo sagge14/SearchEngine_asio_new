@@ -1,9 +1,9 @@
 #include "FileScanner.h"
 #include "Encoding.h"
+#include "FileExtensionContract.h"
 #include "LogFile.h"
 #include "PathExclusion.h"
 #include <mutex>
-#include <cwctype>
 
 namespace fs = std::filesystem;
 
@@ -17,42 +17,12 @@ namespace
         LogFile::getScan().write(utf8Path + " | " + utf8Msg);
     }
 
-    bool matchExtension(const std::wstring& fileName,
-                        const std::vector<std::string>& exts)
-    {
-        if (exts.empty())
-            return true;
-
-        for (const auto& extUtf8 : exts)
-        {
-            std::wstring ext = fs::u8path(extUtf8).wstring();
-
-            if (ext.empty())
-            {
-                if (fileName.find(L'.') == std::wstring::npos)
-                    return true;
-            }
-            else if (fileName.size() >= ext.size())
-            {
-                if (std::equal(fileName.end() - ext.size(),
-                               fileName.end(),
-                               ext.begin(),
-                               [](wchar_t a, wchar_t b)
-                               {
-                                   return std::towlower(a) == std::towlower(b);
-                               }))
-                    return true;
-            }
-        }
-
-        return false;
-    }
 }
 
 
 std::list<std::wstring>
 FileScanner::scanDirectory(const std::string& dir,
-                           const std::vector<std::string>& extensions,
+                           const file_extension_contract::Selection& fileTypes,
                            const std::vector<std::string>& excludedSubtrees)
 {
     std::list<std::wstring> out;
@@ -111,8 +81,8 @@ FileScanner::scanDirectory(const std::string& dir,
             continue;
         }
 
-        const std::wstring fname = currentPath.filename().wstring();
-        if (!matchExtension(fname, extensions))
+        if (!file_extension_contract::matchesPath(
+                currentPath.wstring(), fileTypes))
             continue;
 
         out.push_back(currentPath.wstring());
@@ -124,14 +94,14 @@ FileScanner::scanDirectory(const std::string& dir,
 
 std::vector<std::wstring>
 FileScanner::scanDirectories(const std::vector<std::string>& indexRoots,
-                             const std::vector<std::string>& extensions,
+                             const file_extension_contract::Selection& fileTypes,
                              const std::vector<std::string>& excludedSubtrees)
 {
     std::vector<std::wstring> result;
 
     for (const auto& dir : indexRoots)
     {
-        auto list = scanDirectory(dir, extensions, excludedSubtrees);
+        auto list = scanDirectory(dir, fileTypes, excludedSubtrees);
 
         result.insert(result.end(),
                       std::make_move_iterator(list.begin()),

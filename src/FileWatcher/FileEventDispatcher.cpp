@@ -7,6 +7,7 @@
 #include "MyUtils/Encoding.h"
 #include "MyUtils/LogFile.h"
 #include <unordered_set>
+#include <utility>
 
 static const wchar_t* evtToStr(FileEvent e)
 {
@@ -42,9 +43,9 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
     if (stopping_.load(std::memory_order_acquire))
         return;
     if (!file_event_filter::shouldAcceptFileEvent(
-            evt, path, ext_, excludedSubtrees_))
+            evt, path, fileTypes_, excludedSubtrees_))
     {
-        if (!file_event_filter::matchesConfiguredExtension(path, ext_)) {
+        if (!file_event_filter::matchesConfiguredExtension(path, fileTypes_)) {
             LogFile::getWatcher().write(
                 L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
         } else {
@@ -150,12 +151,12 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _indexRoo
 }
 
 FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& indexRoots,
-                                         const std::vector<std::string>& extensions,
+                                         file_extension_contract::Selection fileTypes,
                                          const std::vector<std::string>& excludedSubtrees,
                                          boost::asio::io_context& io)
         : io_(io)
         , indexRoots_(indexRoots)
-        , ext_(extensions)
+        , fileTypes_(std::move(fileTypes))
         , excludedSubtrees_(excludedSubtrees)
 {
     initWatchers(indexRoots_);

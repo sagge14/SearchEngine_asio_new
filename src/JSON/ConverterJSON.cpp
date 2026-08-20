@@ -25,6 +25,7 @@
 #include "Commands/GetJsonTelega/Telega.h"
 
 #include "MyUtils/Encoding.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/LogFile.h"
 
 
@@ -50,9 +51,12 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["thread_count"] = val.threadCount;
     jsonSettings["config"]["asio_port"] = val.port;
     jsonSettings["config"]["ind_time"] = val.indTime;
-    jsonSettings["config"]["exact_search"] = val.exactSearch;
+    jsonSettings["config"]["query_word_match"] =
+        std::string(search_server::toString(val.queryWordMatch));
     jsonSettings["config"]["index_roots"] = val.indexRoots;
-    jsonSettings["config"]["extensions"] = val.extensions;
+    jsonSettings["config"]["indexed_extensions"] = val.indexedExtensions;
+    jsonSettings["config"]["include_extensionless_files"] =
+        val.includeExtensionlessFiles;
     jsonSettings["config"]["year"] = val.year;
     jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
     jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
@@ -170,11 +174,60 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             criticalErrors.push_back("config.index_roots (must be non-empty array)");
         }
 
-        // extensions - расширения файлов (не могут быть пустыми)
-        if (config.contains("extensions") && config["extensions"].is_array() && !config["extensions"].empty()) {
-            config.at("extensions").get_to(s.extensions);
+        // indexed_extensions + include_extensionless_files.
+        // Legacy extensions is a read-only alias and does not cause resave.
+        // Canonical key presence wins even when its value is invalid.
+        const bool hasIndexedExtensions = config.contains("indexed_extensions");
+        const bool hasLegacyExtensions = config.contains("extensions");
+        const bool hasIncludeExtensionless =
+            config.contains("include_extensionless_files");
+        bool explicitIncludeExtensionless = false;
+        if (hasIncludeExtensionless) {
+            if (!config["include_extensionless_files"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.include_extensionless_files must be boolean");
+            }
+            config.at("include_extensionless_files").get_to(
+                explicitIncludeExtensionless);
+        }
+
+        if (hasIndexedExtensions) {
+            if (!config["indexed_extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.indexed_extensions must be an array");
+            }
+            config.at("indexed_extensions").get_to(s.indexedExtensions);
+            s.includeExtensionlessFiles = hasIncludeExtensionless
+                ? explicitIncludeExtensionless
+                : false;
+            const file_extension_contract::Selection selection{
+                s.indexedExtensions, s.includeExtensionlessFiles};
+            if (const auto errors =
+                    file_extension_contract::validateCanonicalSelection(selection);
+                !errors.empty())
+            {
+                throw std::invalid_argument(
+                    "config.indexed_extensions " + errors.front());
+            }
+        } else if (hasLegacyExtensions) {
+            if (!config["extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.extensions must be an array");
+            }
+            std::vector<std::string> legacyExtensions;
+            config.at("extensions").get_to(legacyExtensions);
+            const auto selection =
+                file_extension_contract::canonicalizeLegacySelection(
+                    legacyExtensions,
+                    hasIncludeExtensionless
+                        ? &explicitIncludeExtensionless
+                        : nullptr);
+            s.indexedExtensions = selection.indexedExtensions;
+            s.includeExtensionlessFiles =
+                selection.includeExtensionlessFiles;
         } else {
-            criticalErrors.push_back("config.extensions (must be non-empty array)");
+            criticalErrors.push_back(
+                "config.indexed_extensions (required array)");
         }
 
         // year - год работы (используется в путях к БД)
@@ -242,12 +295,30 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // exact_search
-        if (config.contains("exact_search")) {
-            config.at("exact_search").get_to(s.exactSearch);
+        // query_word_match (legacy exact_search alias). Canonical presence
+        // wins even when invalid. Alias or absence does not trigger resave.
+        if (config.contains("query_word_match")) {
+            if (!config["query_word_match"].is_string()) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            const auto mode = search_server::parseQueryWordMatch(
+                config.at("query_word_match").get<std::string>());
+            if (!mode) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            s.queryWordMatch = *mode;
+        } else if (config.contains("exact_search")) {
+            if (!config["exact_search"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.exact_search must be boolean");
+            }
+            s.queryWordMatch = config.at("exact_search").get<bool>()
+                ? search_server::QueryWordMatch::All
+                : search_server::QueryWordMatch::Any;
         } else {
-            addedFields.push_back("config.exact_search");
-            needsResave = true;
+            s.queryWordMatch = search_server::QueryWordMatch::Any;
         }
 
         // hide_console_window — canonical; legacy hide_mode already applied above.

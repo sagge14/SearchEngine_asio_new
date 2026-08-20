@@ -1,6 +1,7 @@
 #pragma once
 #include "FileWatcher/MultiWatcher.h"
 #include "Commands/IFileEventCommand.h"
+#include "MyUtils/FileExtensionContract.h"
 #include <queue>
 #include <atomic>
 
@@ -15,7 +16,7 @@ public:
     using CommandMap = std::unordered_map<FileEvent, std::unique_ptr<IFileEventCommand>>;
 
     explicit FileEventDispatcher(const std::vector<std::string>& indexRoots,
-                                 const std::vector<std::string>& extensions,
+                                 file_extension_contract::Selection fileTypes,
                                  const std::vector<std::string>& excludedSubtrees,
                                  boost::asio::io_context& io);
     void flushPending();
@@ -37,7 +38,7 @@ private:
     void pushFileEvent(FileEvent evt,  const std::wstring& path);
 
     std::vector<std::string> indexRoots_;
-    std::vector<std::string> ext_;
+    file_extension_contract::Selection fileTypes_;
     std::vector<std::string> excludedSubtrees_;
     std::unordered_map<size_t, EventState> evtMap_;
     std::queue<size_t> pendingQ_;

@@ -6,8 +6,10 @@
 
 #include "Index/Batch/FullIndexStrategy.h"
 #include "Index/DocumentCatalogStorage.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/WindowsPath.h"
 #include "RuntimeDataTransaction.h"
+#include "SearchServer/QueryWordMatch.h"
 
 #include <algorithm>
 #include <cctype>
@@ -821,10 +823,84 @@ void migrateBlock2IndexRootsAliases(json& root)
     config.erase("exclude_dirs");
 }
 
+void migrateBlock2BSettings(json& root)
+{
+    if (!root.is_object() || !root.contains("config") ||
+        !root["config"].is_object())
+    {
+        return;
+    }
+
+    json& config = root["config"];
+    const bool hasCanonicalExtensions =
+        config.contains("indexed_extensions");
+    const bool hasLegacyExtensions = config.contains("extensions");
+    const bool hasExplicitExtensionless =
+        config.contains("include_extensionless_files");
+
+    if (!hasCanonicalExtensions && hasLegacyExtensions) {
+        if (config["extensions"].is_array()) {
+            try {
+                const auto legacy =
+                    config["extensions"].get<std::vector<std::string>>();
+                bool explicitExtensionless = false;
+                const bool* explicitValue = nullptr;
+                if (hasExplicitExtensionless &&
+                    config["include_extensionless_files"].is_boolean())
+                {
+                    explicitExtensionless =
+                        config["include_extensionless_files"].get<bool>();
+                    explicitValue = &explicitExtensionless;
+                }
+                const auto selection =
+                    file_extension_contract::canonicalizeLegacySelection(
+                        legacy, explicitValue);
+                config["indexed_extensions"] =
+                    selection.indexedExtensions;
+                if (!hasExplicitExtensionless) {
+                    config["include_extensionless_files"] =
+                        selection.includeExtensionlessFiles;
+                }
+            } catch (const std::exception&) {
+                // Preserve an invalid legacy value under the canonical key so
+                // validateJson reports a deterministic canonical error.
+                config["indexed_extensions"] = config["extensions"];
+                if (!hasExplicitExtensionless) {
+                    config["include_extensionless_files"] = false;
+                }
+            }
+        } else {
+            config["indexed_extensions"] = config["extensions"];
+            if (!hasExplicitExtensionless) {
+                config["include_extensionless_files"] = false;
+            }
+        }
+    } else if (hasCanonicalExtensions && !hasExplicitExtensionless) {
+        config["include_extensionless_files"] = false;
+    }
+    config.erase("extensions");
+
+    if (!config.contains("query_word_match")) {
+        if (config.contains("exact_search")) {
+            if (config["exact_search"].is_boolean()) {
+                config["query_word_match"] =
+                    config["exact_search"].get<bool>() ? "all" : "any";
+            } else {
+                config["query_word_match"] = config["exact_search"];
+            }
+        } else {
+            // Historical runtime default for an installed Settings file.
+            config["query_word_match"] = "any";
+        }
+    }
+    config.erase("exact_search");
+}
+
 void canonicalizeLegacySettings(json& root)
 {
     stripRetiredBlock1Fields(root);
     migrateBlock2IndexRootsAliases(root);
+    migrateBlock2BSettings(root);
 }
 
 std::string withTrailingLf(std::string text)
@@ -995,10 +1071,50 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         errors.emplace_back(
             "config.exclude_dirs is retired; use config.excluded_subtrees");
     }
-    if (!config.contains("extensions") ||
-        !config["extensions"].is_array() || config["extensions"].empty())
+    const bool extensionsArray =
+        config.contains("indexed_extensions") &&
+        config["indexed_extensions"].is_array();
+    const bool extensionlessBoolean =
+        config.contains("include_extensionless_files") &&
+        config["include_extensionless_files"].is_boolean();
+    if (!extensionsArray) {
+        errors.emplace_back("config.indexed_extensions must be an array");
+    }
+    if (!extensionlessBoolean) {
+        errors.emplace_back(
+            "config.include_extensionless_files must be boolean");
+    }
+    if (extensionsArray) {
+        bool elementsAreStrings = true;
+        std::vector<std::string> indexedExtensions;
+        for (const auto& element : config["indexed_extensions"]) {
+            if (!element.is_string()) {
+                elementsAreStrings = false;
+                errors.emplace_back(
+                    "config.indexed_extensions must contain only strings");
+                break;
+            }
+            indexedExtensions.push_back(element.get<std::string>());
+        }
+        if (elementsAreStrings && extensionlessBoolean) {
+            const file_extension_contract::Selection selection{
+                std::move(indexedExtensions),
+                config["include_extensionless_files"].get<bool>()};
+            for (const auto& error :
+                 file_extension_contract::validateCanonicalSelection(selection))
+            {
+                errors.emplace_back(
+                    "config.indexed_extensions " + error);
+            }
+        }
+    }
+
+    if (!config.contains("query_word_match") ||
+        !config["query_word_match"].is_string() ||
+        !search_server::parseQueryWordMatch(
+            config.value("query_word_match", std::string())))
     {
-        errors.emplace_back("config.extensions must be a non-empty array");
+        errors.emplace_back("config.query_word_match must be all or any");
     }
 
     const char* portName = config.contains("port") ? "port" : "asio_port";
@@ -1104,15 +1220,16 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
 
     // Boolean fields: if present must be booleans (get_to<bool> would throw otherwise).
     for (const char* boolField : {
-        "exact_search", "hide_console_window", "scan_on_startup"
+        "hide_console_window", "scan_on_startup"
     }) {
         if (config.contains(boolField) && !config[boolField].is_boolean()) {
             errors.emplace_back(std::string("config.") + boolField + " must be boolean");
         }
     }
 
-    // Element type checks for index_roots and extensions.
-    for (const char* arrField : {"index_roots", "extensions"}) {
+    // Element type checks for path arrays. indexed_extensions is validated
+    // above against its stricter administrator-facing contract.
+    for (const char* arrField : {"index_roots"}) {
         if (config.contains(arrField) && config[arrField].is_array()) {
             for (const auto& el : config[arrField]) {
                 if (!el.is_string()) {

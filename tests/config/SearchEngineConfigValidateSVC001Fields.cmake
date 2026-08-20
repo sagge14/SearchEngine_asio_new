@@ -198,11 +198,11 @@ write_json_with_field("${template_json}" "${f}" "max_parallel_readers" "4")
 assert_validate("max_parallel_readers positive" "${f}" TRUE)
 
 # ------------------------------------------------------------------
-# 18. exact_search as string -> FAIL
+# 18. query_word_match outside all/any -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exact-search-string.json")
-write_json_with_field("${template_json}" "${f}" "exact_search" "\"yes\"")
-assert_validate("exact_search as string" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-query-word-match.json")
+write_json_with_field("${template_json}" "${f}" "query_word_match" "\"yes\"")
+assert_validate("query_word_match outside all/any" "${f}" FALSE)
 
 # ------------------------------------------------------------------
 # 19. hide_console_window as integer -> FAIL
@@ -325,11 +325,11 @@ write_json_with_field("${compact_base}" "${f}" "index_roots" "[\"D:\\\\TEST\", 4
 assert_validate("index_roots element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 23. extensions containing a number element -> FAIL
+# 23. indexed_extensions containing a number element -> FAIL
 # ------------------------------------------------------------------
 set(f "${TEST_ROOT}/bad-extensions-element.json")
-write_json_with_field("${compact_base}" "${f}" "extensions" "[\"txt\", 99]")
-assert_validate("extensions element is number" "${f}" FALSE)
+write_json_with_field("${compact_base}" "${f}" "indexed_extensions" "[\"txt\", 99]")
+assert_validate("indexed_extensions element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
 # 24. excluded_subtrees as a plain string (not array) -> FAIL

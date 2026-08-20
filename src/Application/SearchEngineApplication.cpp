@@ -11,6 +11,7 @@
 #include "FileWatcher/FileEventDispatcher.h"
 #include "JSON/ConverterJSON.h"
 #include "MyUtils/LogFile.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/OEMCase.h"
 #include "MyUtils/SettingsPathContract.h"
 #include "MyUtils/SqlLogger.h"
@@ -84,8 +85,16 @@ void validateSettings(const search_server::Settings& settings)
     {
         throw StartupError(ERROR_INVALID_DATA, paths.error);
     }
-    if (settings.extensions.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.extensions is empty");
+    const file_extension_contract::Selection fileTypes{
+        settings.indexedExtensions,
+        settings.includeExtensionlessFiles};
+    if (const auto errors =
+            file_extension_contract::validateCanonicalSelection(fileTypes);
+        !errors.empty())
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config indexed file types " + errors.front());
     }
     if (settings.year.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.year is empty");
@@ -264,7 +273,9 @@ bool SearchEngineApplication::start()
         throwIfStopRequested();
         pending->dispatcher = std::make_unique<FileEventDispatcher>(
             pending->settings.indexRoots,
-            pending->settings.extensions,
+            file_extension_contract::Selection{
+                pending->settings.indexedExtensions,
+                pending->settings.includeExtensionlessFiles},
             pending->settings.excludedSubtrees,
             pending->contexts->scheduler()
         );
@@ -280,7 +291,9 @@ bool SearchEngineApplication::start()
             std::make_unique<AddFileCommand<TaskId>>(
                 *pending->search_server,
                 *pending->scheduler,
-                pending->settings.extensions,
+                file_extension_contract::Selection{
+                    pending->settings.indexedExtensions,
+                    pending->settings.includeExtensionlessFiles},
                 pending->settings.enablePrmShortContentAutodetect
             )
         );

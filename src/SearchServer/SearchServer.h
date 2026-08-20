@@ -5,6 +5,7 @@
 #include "JSON/ConverterJSON.h"
 #include "Index/InvertedIndex.h"
 #include "AsioServer/AsioServer.h"
+#include "SearchServer/QueryWordMatch.h"
 #include <set>
 #include <condition_variable>
 #include "FileWatcher/MultiWatcher.h"
@@ -74,14 +75,14 @@ namespace search_server {
         bool operator<(const RelativeIndex &r) const { return sum > r.sum;}
 
         RelativeIndex(size_t fileInd, const set <string> &_request, const inverted_index::InvertedIndex *_index,
-                      bool _exactSearch = false);
+                      QueryWordMatch queryWordMatch = QueryWordMatch::Any);
 
         ~RelativeIndex() = default;
     };
 
     class Settings
     {
-        /** @param exactSearch для установки серевера в режим работы "точного поиска".*
+        /** @param queryWordMatch задаёт совпадение всех или любого слова запроса.*
           * @param threadCount устанавливает количество потоков осуществляющих индексирование файлов,
           * если установить значение 0 - то количество потоков будет выбрано автоматически, по количеству ядер процессора.*
           * @param indTime устанавливает период переиндексации файлов в секундах.*
@@ -106,14 +107,15 @@ namespace search_server {
         /// GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY:
         /// <f12_base_dir>\<year>.db and <f12_base_dir>\base.db.
         std::string f12_base_dir = "D:\\F12";
-        bool exactSearch = false;
+        QueryWordMatch queryWordMatch = QueryWordMatch::Any;
         bool hideConsoleWindow{};
         int threadCount = 6;
         int port = 15001;
         size_t indTime{};
         int maxResponse = 30;
         std::vector<std::string> indexRoots;
-        std::vector<std::string> extensions;
+        std::vector<std::string> indexedExtensions;
+        bool includeExtensionlessFiles{false};
         std::vector<std::string> excludedSubtrees;
         double compactThresholdPercent = 5.0;  // Порог для compact (%)
         /// Запускать полный scan/updateStep сразу после старта (после загрузки словаря).
@@ -149,7 +151,9 @@ namespace search_server {
         int batchQueueMemoryMb = 256;
 
         static Settings* getSettings();
-        static auto getExtensions() {return getSettings()->extensions;};
+        static auto getIndexedExtensions() {
+            return getSettings()->indexedExtensions;
+        };
         void show() const;
 
         Settings& operator=(const Settings& s) = default;
@@ -289,9 +293,11 @@ namespace search_server {
         Упращенная версия конструктора @param SearchServer для тестирования некоторых функций.*/
 
         #ifdef TEST_MODE
-        explicit SearchServer(const vector<string>& _docPaths, bool exactSearch = false)
+        explicit SearchServer(
+            const vector<string>& _docPaths,
+            QueryWordMatch queryWordMatch = QueryWordMatch::Any)
         {
-        settings.exactSearch = exactSearch;
+        settings.queryWordMatch = queryWordMatch;
         index = new inverted_index::InvertedIndex();
         index->updateDocumentBase(_docPaths);
         }

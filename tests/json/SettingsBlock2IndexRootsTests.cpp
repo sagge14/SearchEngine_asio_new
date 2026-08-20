@@ -229,7 +229,7 @@ TEST(SettingsBlock2IndexRootsTest, WriterEmitsCanonicalIndexRootsOnly)
     search_server::Settings settings;
     settings.year = "2026";
     settings.indexRoots = {"E:\\CUSTOM"};
-    settings.extensions = {"txt"};
+    settings.indexedExtensions = {"txt"};
     settings.prm_base_dir = "";
     settings.prd_base_dir = "";
 
@@ -266,7 +266,7 @@ TEST(SettingsBlock2IndexRootsTest, WriterEmitsExcludedSubtreesOnly)
     search_server::Settings settings;
     settings.year = "2026";
     settings.indexRoots = {"D:\\DATA"};
-    settings.extensions = {"txt"};
+    settings.indexedExtensions = {"txt"};
     settings.prm_base_dir = "";
     settings.prd_base_dir = "";
     settings.excludedSubtrees = {"D:\\DATA\\TEMP"};

@@ -20,14 +20,14 @@
       "D:\\ДЕКАБРЬ",
       "D:\\TLG"
     ],
-    "exact_search": true,
+    "query_word_match": "all",
     "excluded_subtrees": [],
-    "extensions": [
+    "indexed_extensions": [
       "txt",
       "atl",
-      "shp",
-      ""
+      "shp"
     ],
+    "include_extensionless_files": true,
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120,
     "full_index_strategy": "batch",

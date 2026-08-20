@@ -7,7 +7,7 @@
 
 namespace {
 
-const std::vector<std::string> kTxt{"txt"};
+const file_extension_contract::Selection kTxt{{"txt"}, false};
 const std::vector<std::string> kExcluded{"D:\\ROOT\\excluded"};
 
 }  // namespace
