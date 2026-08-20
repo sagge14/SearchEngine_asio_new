@@ -28,8 +28,15 @@ Register-AuthClient-FromToken.bat.
    релиза (template/default values), не production-конфиг установленной службы.
    Его можно подготовить под целевой компьютер до установки; активный
    Settings.json создаётся в ProgramData.
-   Это локальные пути, доступные службе LocalSystem по ACL.
-   User mapped drives из обычной пользовательской сессии службе недоступны.
+   config.index_roots и config.excluded_subtrees принимают абсолютные
+   локальные Windows-пути или UNC, например D:\DATA и \\server\share\DATA.
+   Синтаксическая поддержка UNC не означает, что LocalSystem автоматически
+   имеет доступ к SMB/share/ACL.
+   Production-корни tlg_send_root, razn_output_dir, opis_base_dir и
+   f12_base_dir по текущему контракту валидации — только абсолютные локальные
+   Windows-пути; UNC для них не принимается.
+   Mapped drives пользовательской сессии (например Z:\...) не считать
+   надёжно доступными Windows service.
    Отсутствие feature-specific каталога (F12, OPIS, разноска, tlg_send_root)
    не мешает запуску: ошибка появится при вызове соответствующей функции.
 4. У каждого экземпляра должен быть свой свободный TCP-порт.
@@ -45,9 +52,11 @@ data-dir при установке/обновлении как runtime-сост�
 создаётся на новых установках; historical messages\ в ProgramData при update
 сохраняется.
 
-Служба работает как LocalSystem. Рабочие корни задаются в Settings.json:
-tlg_send_root, razn_output_dir, opis_base_dir и f12_base_dir. Буква диска
-сама по себе не доказывает, что это физический локальный том.
+Служба работает как LocalSystem. Production-корни в Settings.json
+(tlg_send_root, razn_output_dir, opis_base_dir, f12_base_dir) — абсолютные
+локальные Windows-пути. Буква диска сама по себе не доказывает, что это
+физический локальный том. index_roots и excluded_subtrees описаны выше:
+локальный абсолютный путь или UNC, при условии доступа учётки службы.
 
 Нативный помощник сначала предложит язык диалога: русский выбран по умолчанию,
 английский доступен как вариант 2. Затем он предложит порт, год, число
