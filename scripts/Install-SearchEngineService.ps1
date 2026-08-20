@@ -162,9 +162,61 @@ $oemPath = Resolve-RequiredPath $oemPath Leaf
 
 $settings = Read-JsonFile $settingsPath
 $config = $settings.config
-if (-not $config -or -not $config.Name -or -not $config.year -or
-    -not $config.dirs -or $config.dirs.Count -eq 0 -or
-    -not $config.extensions -or $config.extensions.Count -eq 0) {
+$indexRootsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['index_roots']
+} else {
+    $null
+}
+$dirsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['dirs']
+} else {
+    $null
+}
+$indexRoots = if ($null -ne $indexRootsProperty) {
+    @($indexRootsProperty.Value)
+} elseif ($null -ne $dirsProperty) {
+    @($dirsProperty.Value)
+} else {
+    @()
+}
+$indexedExtensionsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['indexed_extensions']
+} else {
+    $null
+}
+$legacyExtensionsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['extensions']
+} else {
+    $null
+}
+$includeExtensionlessProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['include_extensionless_files']
+} else {
+    $null
+}
+$hasIndexedFileTypes = if ($null -ne $indexedExtensionsProperty) {
+    $indexedExtensionsValue = $indexedExtensionsProperty.Value
+    $includeExtensionlessIsValid = (
+        $null -eq $includeExtensionlessProperty -or
+        $includeExtensionlessProperty.Value -is [bool]
+    )
+    $includeExtensionless = (
+        $includeExtensionlessIsValid -and
+        $null -ne $includeExtensionlessProperty -and
+        $includeExtensionlessProperty.Value
+    )
+    $indexedExtensionsValue -is [System.Array] -and
+        $includeExtensionlessIsValid -and
+        ($indexedExtensionsValue.Count -gt 0 -or $includeExtensionless)
+} elseif ($null -ne $legacyExtensionsProperty) {
+    $legacyExtensionsProperty.Value -is [System.Array] -and
+        $legacyExtensionsProperty.Value.Count -gt 0
+} else {
+    $false
+}
+if (-not $config -or -not $config.year -or
+    $indexRoots.Count -eq 0 -or
+    -not $hasIndexedFileTypes) {
     throw "Settings.json is missing required config fields: $settingsPath"
 }
 $port = if ($config.port) { [int]$config.port } else { [int]$config.asio_port }
@@ -188,7 +240,7 @@ if ($AddFirewallRule -and
     throw "Firewall rule already exists: $firewallRuleName"
 }
 
-foreach ($configuredPath in @($config.dirs)) {
+foreach ($configuredPath in @($indexRoots)) {
     if (Test-MappedDrivePath ([string]$configuredPath)) {
         throw "Mapped drives are not visible to services: $configuredPath. Use a local path or UNC path."
     }

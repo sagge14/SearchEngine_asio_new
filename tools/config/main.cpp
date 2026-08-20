@@ -6,7 +6,10 @@
 
 #include "Index/Batch/FullIndexStrategy.h"
 #include "Index/DocumentCatalogStorage.h"
+#include "MyUtils/FileExtensionContract.h"
+#include "MyUtils/WindowsPath.h"
 #include "RuntimeDataTransaction.h"
+#include "SearchServer/QueryWordMatch.h"
 
 #include <algorithm>
 #include <cctype>
@@ -26,6 +29,8 @@ namespace {
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+using windows_path::isAbsoluteWindowsLocalPath;
+using windows_path::isAbsoluteWindowsFilesystemPath;
 
 constexpr int kMinYear = 2000;
 constexpr int kMaxYear = 2099;
@@ -98,24 +103,6 @@ std::wstring utf16(const std::string& value)
         CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
         result.data(), size);
     return result;
-}
-
-bool isAbsoluteWindowsLocalPath(const std::string& value)
-{
-    if (value.size() < 3) {
-        return false;
-    }
-    if (value[0] == '\\' || value[0] == '/') {
-        return false;
-    }
-    const auto drive = static_cast<unsigned char>(value[0]);
-    if (!std::isalpha(drive)) {
-        return false;
-    }
-    if (value[1] != ':') {
-        return false;
-    }
-    return value[2] == '\\' || value[2] == '/';
 }
 
 void writeInteractive(const std::wstring& text)
@@ -787,6 +774,135 @@ void mergeJson(json& destination, const json& source)
     }
 }
 
+void stripRetiredBlock1Fields(json& root)
+{
+    if (!root.is_object()) {
+        return;
+    }
+    root.erase("Files");
+    if (!root.contains("config") || !root["config"].is_object()) {
+        return;
+    }
+    json& config = root["config"];
+    if (!config.contains("hide_console_window") && config.contains("hide_mode")) {
+        config["hide_console_window"] = config["hide_mode"];
+    }
+    for (const char* key : {
+        "hide_mode",
+        "dir",
+        "Version",
+        "text_request",
+        "save_dictionary_to_file",
+        "Name",
+    }) {
+        config.erase(key);
+    }
+}
+
+void canonicalizeBlock1LegacySettings(json& root)
+{
+    stripRetiredBlock1Fields(root);
+}
+
+void migrateBlock2IndexRootsAliases(json& root)
+{
+    if (!root.is_object()) {
+        return;
+    }
+    if (!root.contains("config") || !root["config"].is_object()) {
+        return;
+    }
+    json& config = root["config"];
+    if (!config.contains("index_roots") && config.contains("dirs")) {
+        config["index_roots"] = config["dirs"];
+    }
+    config.erase("dirs");
+    if (!config.contains("excluded_subtrees") && config.contains("exclude_dirs")) {
+        config["excluded_subtrees"] = config["exclude_dirs"];
+    }
+    config.erase("exclude_dirs");
+}
+
+void migrateBlock2BSettings(json& root)
+{
+    if (!root.is_object() || !root.contains("config") ||
+        !root["config"].is_object())
+    {
+        return;
+    }
+
+    json& config = root["config"];
+    const bool hasCanonicalExtensions =
+        config.contains("indexed_extensions");
+    const bool hasLegacyExtensions = config.contains("extensions");
+    const bool hasExplicitExtensionless =
+        config.contains("include_extensionless_files");
+
+    if (!hasCanonicalExtensions && hasLegacyExtensions) {
+        if (config["extensions"].is_array()) {
+            try {
+                const auto legacy =
+                    config["extensions"].get<std::vector<std::string>>();
+                bool explicitExtensionless = false;
+                const bool* explicitValue = nullptr;
+                if (hasExplicitExtensionless &&
+                    config["include_extensionless_files"].is_boolean())
+                {
+                    explicitExtensionless =
+                        config["include_extensionless_files"].get<bool>();
+                    explicitValue = &explicitExtensionless;
+                }
+                const auto selection =
+                    file_extension_contract::canonicalizeLegacySelection(
+                        legacy, explicitValue);
+                config["indexed_extensions"] =
+                    selection.indexedExtensions;
+                if (!hasExplicitExtensionless) {
+                    config["include_extensionless_files"] =
+                        selection.includeExtensionlessFiles;
+                }
+            } catch (const std::exception&) {
+                // Preserve an invalid legacy value under the canonical key so
+                // validateJson reports a deterministic canonical error.
+                config["indexed_extensions"] = config["extensions"];
+                if (!hasExplicitExtensionless) {
+                    config["include_extensionless_files"] = false;
+                }
+            }
+        } else {
+            config["indexed_extensions"] = config["extensions"];
+            if (!hasExplicitExtensionless) {
+                config["include_extensionless_files"] = false;
+            }
+        }
+    } else if (hasCanonicalExtensions && !hasExplicitExtensionless) {
+        config["include_extensionless_files"] = false;
+    }
+    config.erase("extensions");
+
+    if (!config.contains("query_word_match")) {
+        if (config.contains("exact_search")) {
+            if (config["exact_search"].is_boolean()) {
+                config["query_word_match"] =
+                    config["exact_search"].get<bool>() ? "all" : "any";
+            } else {
+                config["query_word_match"] = config["exact_search"];
+            }
+        } else {
+            // Historical runtime default for an installed Settings file.
+            config["query_word_match"] = "any";
+        }
+    }
+    config.erase("exact_search");
+}
+
+void canonicalizeLegacySettings(json& root)
+{
+    stripRetiredBlock1Fields(root);
+    migrateBlock2IndexRootsAliases(root);
+    migrateBlock2BSettings(root);
+}
+
 std::string withTrailingLf(std::string text)
 {
     if (text.empty() || text.back() != '\n') {
@@ -910,7 +1026,6 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
                                 " must be a non-empty string");
         }
     };
-    requireString("Name");
     requireString("year");
     const auto requireBaseDirString = [&](const char* name) {
         if (!config.contains(name) || !config[name].is_string())
@@ -943,15 +1058,63 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     requireAbsoluteLocalRoot("opis_base_dir");
     requireAbsoluteLocalRoot("f12_base_dir");
 
-    if (!config.contains("dirs") || !config["dirs"].is_array() ||
-        config["dirs"].empty())
+    if (!config.contains("index_roots") || !config["index_roots"].is_array() ||
+        config["index_roots"].empty())
     {
-        errors.emplace_back("config.dirs must be a non-empty array");
+        errors.emplace_back("config.index_roots must be a non-empty array");
     }
-    if (!config.contains("extensions") ||
-        !config["extensions"].is_array() || config["extensions"].empty())
+    if (config.contains("dirs")) {
+        errors.emplace_back(
+            "config.dirs is retired; use config.index_roots");
+    }
+    if (config.contains("exclude_dirs")) {
+        errors.emplace_back(
+            "config.exclude_dirs is retired; use config.excluded_subtrees");
+    }
+    const bool extensionsArray =
+        config.contains("indexed_extensions") &&
+        config["indexed_extensions"].is_array();
+    const bool extensionlessBoolean =
+        config.contains("include_extensionless_files") &&
+        config["include_extensionless_files"].is_boolean();
+    if (!extensionsArray) {
+        errors.emplace_back("config.indexed_extensions must be an array");
+    }
+    if (!extensionlessBoolean) {
+        errors.emplace_back(
+            "config.include_extensionless_files must be boolean");
+    }
+    if (extensionsArray) {
+        bool elementsAreStrings = true;
+        std::vector<std::string> indexedExtensions;
+        for (const auto& element : config["indexed_extensions"]) {
+            if (!element.is_string()) {
+                elementsAreStrings = false;
+                errors.emplace_back(
+                    "config.indexed_extensions must contain only strings");
+                break;
+            }
+            indexedExtensions.push_back(element.get<std::string>());
+        }
+        if (elementsAreStrings && extensionlessBoolean) {
+            const file_extension_contract::Selection selection{
+                std::move(indexedExtensions),
+                config["include_extensionless_files"].get<bool>()};
+            for (const auto& error :
+                 file_extension_contract::validateCanonicalSelection(selection))
+            {
+                errors.emplace_back(
+                    "config.indexed_extensions " + error);
+            }
+        }
+    }
+
+    if (!config.contains("query_word_match") ||
+        !config["query_word_match"].is_string() ||
+        !search_server::parseQueryWordMatch(
+            config.value("query_word_match", std::string())))
     {
-        errors.emplace_back("config.extensions must be a non-empty array");
+        errors.emplace_back("config.query_word_match must be all or any");
     }
 
     const char* portName = config.contains("port") ? "port" : "asio_port";
@@ -1055,23 +1218,18 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
 
     // SVC-001: validate additional fields deserialized by ConverterJSON
 
-    // Optional string fields: if present must be strings.
-    if (config.contains("Version") && !config["Version"].is_string())
-        errors.emplace_back("config.Version must be a string");
-    if (config.contains("dir") && !config["dir"].is_string())
-        errors.emplace_back("config.dir must be a string");
-
     // Boolean fields: if present must be booleans (get_to<bool> would throw otherwise).
     for (const char* boolField : {
-        "exact_search", "hide_mode", "text_request", "save_dictionary_to_file"
+        "hide_console_window", "scan_on_startup"
     }) {
         if (config.contains(boolField) && !config[boolField].is_boolean()) {
             errors.emplace_back(std::string("config.") + boolField + " must be boolean");
         }
     }
 
-    // Element type checks for dirs and extensions (already checked non-empty above).
-    for (const char* arrField : {"dirs", "extensions"}) {
+    // Element type checks for path arrays. indexed_extensions is validated
+    // above against its stricter administrator-facing contract.
+    for (const char* arrField : {"index_roots"}) {
         if (config.contains(arrField) && config[arrField].is_array()) {
             for (const auto& el : config[arrField]) {
                 if (!el.is_string()) {
@@ -1083,28 +1241,43 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
 
-    // exclude_dirs: if present must be array of strings.
-    if (config.contains("exclude_dirs")) {
-        if (!config["exclude_dirs"].is_array()) {
-            errors.emplace_back("config.exclude_dirs must be an array");
-        } else {
-            for (const auto& el : config["exclude_dirs"]) {
-                if (!el.is_string()) {
-                    errors.emplace_back("config.exclude_dirs must contain only strings");
-                    break;
-                }
+    if (config.contains("index_roots") && config["index_roots"].is_array()) {
+        for (const auto& el : config["index_roots"]) {
+            if (!el.is_string()) {
+                continue;
+            }
+            const auto& value = el.get_ref<const std::string&>();
+            if (value.empty()) {
+                errors.emplace_back(
+                    "config.index_roots must contain non-empty strings");
+                break;
+            }
+            if (!isAbsoluteWindowsFilesystemPath(value)) {
+                errors.emplace_back(
+                    "config.index_roots must contain absolute Windows paths "
+                    "(local drive or UNC; relative paths are not supported)");
+                break;
             }
         }
     }
 
-    // Top-level Files: if present must be array of strings.
-    if (root.contains("Files")) {
-        if (!root["Files"].is_array()) {
-            errors.emplace_back("Files must be an array");
+    // excluded_subtrees: if present must be array of strings.
+    if (config.contains("excluded_subtrees")) {
+        if (!config["excluded_subtrees"].is_array()) {
+            errors.emplace_back("config.excluded_subtrees must be an array");
         } else {
-            for (const auto& el : root["Files"]) {
+            for (const auto& el : config["excluded_subtrees"]) {
                 if (!el.is_string()) {
-                    errors.emplace_back("Files must contain only strings");
+                    errors.emplace_back(
+                        "config.excluded_subtrees must contain only strings");
+                    break;
+                }
+                const auto& value = el.get_ref<const std::string&>();
+                if (value.empty() || !isAbsoluteWindowsFilesystemPath(value)) {
+                    errors.emplace_back(
+                        "config.excluded_subtrees must contain non-empty "
+                        "absolute Windows paths "
+                        "(local drive or UNC; relative paths are not supported)");
                     break;
                 }
             }
@@ -1193,10 +1366,10 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         errors.emplace_back("config.sqlite_precount_postings must be boolean");
     }
 
-    if (checkDirectories && config.contains("dirs") &&
-        config["dirs"].is_array())
+    if (checkDirectories && config.contains("index_roots") &&
+        config["index_roots"].is_array())
     {
-        for (const auto& directory : config["dirs"]) {
+        for (const auto& directory : config["index_roots"]) {
             if (!directory.is_string() ||
                 !fs::is_directory(fs::u8path(directory.get<std::string>())))
             {
@@ -1265,7 +1438,9 @@ int validateCommand(const std::vector<std::wstring>& args)
     const fs::path settings = requiredOption(args, L"--settings");
     const bool checkDirectories =
         std::find(args.begin(), args.end(), L"--check-dirs") != args.end();
-    const auto errors = validateJson(readJson(settings), checkDirectories);
+    json root = readJson(settings);
+    canonicalizeLegacySettings(root);
+    const auto errors = validateJson(root, checkDirectories);
     for (const auto& error : errors) {
         std::cout << "error=" << error << '\n';
     }
@@ -1332,7 +1507,8 @@ int validatePrefixMapCommand(const std::vector<std::wstring>& args)
 
 int inspectCommand(const std::vector<std::wstring>& args)
 {
-    const json root = readJson(requiredOption(args, L"--settings"));
+    json root = readJson(requiredOption(args, L"--settings"));
+    canonicalizeLegacySettings(root);
     const auto errors = validateJson(root, false);
     if (!root.contains("config") || !root["config"].is_object()) {
         return validateCommand(args);
@@ -1430,7 +1606,9 @@ int configureCommand(const std::vector<std::wstring>& args)
 
     json result = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
-        mergeJson(result, readJson(fs::path(*importPath)));
+        json imported = readJson(fs::path(*importPath));
+        canonicalizeLegacySettings(imported);
+        mergeJson(result, imported);
     }
     if (!result.contains("config") || !result["config"].is_object()) {
         result["config"] = json::object();
@@ -1466,6 +1644,8 @@ int configureCommand(const std::vector<std::wstring>& args)
     if (const auto value = option(args, L"--f12-base-dir")) {
         config["f12_base_dir"] = utf8(*value);
     }
+
+    canonicalizeLegacySettings(result);
 
     const auto errors = validateJson(result, false);
     if (!errors.empty()) {
@@ -1612,7 +1792,9 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     const fs::path outputPath = requiredOption(args, L"--output");
     json defaults = readJson(templatePath);
     if (const auto importPath = option(args, L"--import-settings")) {
-        mergeJson(defaults, readJson(fs::path(*importPath)));
+        json imported = readJson(fs::path(*importPath));
+        canonicalizeLegacySettings(imported);
+        mergeJson(defaults, imported);
     }
 
     int defaultPort = 15001;

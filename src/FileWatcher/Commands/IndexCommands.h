@@ -7,7 +7,10 @@
 #include "IFileEventCommand.h"
 #include "UpdateOpisBaseCommand.h"
 #include "SearchServer/SearchServer.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/LogFile.h"
+
+#include <utility>
 
 template<typename TaskID>
 class PeriodicTaskManager;
@@ -17,13 +20,14 @@ class AddFileCommand : public IFileEventCommand {
 public:
 
     AddFileCommand(search_server::SearchServer& server, PeriodicTaskManager<TaskID>& ptm,
-                   const std::vector<std::string>& ext,
+                   file_extension_contract::Selection fileTypes,
                    bool enablePrmShortContentAutodetect = true)
         : server_(server)
     {
             if (enablePrmShortContentAutodetect) {
                 opis_command_ =
-                    std::make_unique<UpdateOpisBaseCommand<TaskID>>(ptm, ext);
+                    std::make_unique<UpdateOpisBaseCommand<TaskID>>(
+                        ptm, std::move(fileTypes));
             }
     }
 

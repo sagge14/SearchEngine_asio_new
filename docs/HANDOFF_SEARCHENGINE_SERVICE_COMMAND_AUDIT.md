@@ -560,11 +560,24 @@ GET_ATTACHMENTS: not configured
      (задокументированное операционное значение).
    - `sqlite_load_threads`: integer >= 1.
    - `sqlite_precount_postings`: boolean.
-   - `exact_search`, `hide_mode`, `text_request`, `save_dictionary_to_file`: boolean.
-   - `config.Version`, `config.dir`: string если присутствует.
-   - `config.dirs`, `config.extensions`: non-empty array of strings (проверяются элементы).
-   - `config.exclude_dirs`: array of strings если присутствует (проверяется контейнер и элементы).
-   - `Files` (top-level): array of strings если присутствует.
+   - `query_word_match`: строка `all` или `any`; `exact_search` остаётся
+     read-only compatibility alias. `hide_console_window`: boolean если
+     присутствует.
+     Retired BLOCK-1 names (`hide_mode`, `text_request`,
+     `save_dictionary_to_file`, `config.Version`, `config.dir`, `config.Name`,
+     top-level `Files`) больше не являются active canonical Settings: runtime
+     их игнорирует, а SearchEngineConfig снимает/мигрирует при configure.
+   - `config.index_roots`: non-empty array of strings (проверяются элементы;
+     абсолютные Windows-пути, local или UNC). Direct runtime read понимает
+     legacy alias `config.dirs`.
+   - `config.indexed_extensions`: array точных последних расширений без точки;
+     `config.include_extensionless_files`: boolean. Пустой массив допустим
+     только при `include_extensionless_files=true`. Direct runtime read
+     понимает legacy alias `config.extensions`. Persistent canonical migration
+     — обязанность explicit configure/update.
+   - `config.excluded_subtrees`: array of non-empty absolute Windows paths
+     если присутствует. Direct runtime read понимает legacy alias
+     `config.exclude_dirs`.
    - Port precedence: `port` предпочтительнее `asio_port` (соответствует runtime).
 
 7. **`inspect-installed` (скорректирован)**:

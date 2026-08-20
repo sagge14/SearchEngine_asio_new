@@ -11,7 +11,9 @@
 #include "FileWatcher/FileEventDispatcher.h"
 #include "JSON/ConverterJSON.h"
 #include "MyUtils/LogFile.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/OEMCase.h"
+#include "MyUtils/SettingsPathContract.h"
 #include "MyUtils/SqlLogger.h"
 #include "MyUtils/Utf8Path.h"
 #include "SearchServer/SearchServer.h"
@@ -67,9 +69,6 @@ void validateSettings(const search_server::Settings& settings)
             "config.document_catalog_storage must be memory or sqlite"
         );
     }
-    if (settings.name.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.Name is empty");
-    }
     if (settings.threadCount < 0 || settings.threadCount == 1) {
         throw StartupError(
             ERROR_INVALID_DATA,
@@ -79,11 +78,23 @@ void validateSettings(const search_server::Settings& settings)
     if (settings.port <= 0 || settings.port > 65535) {
         throw StartupError(ERROR_INVALID_DATA, "config.port is outside 1..65535");
     }
-    if (settings.dirs.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.dirs is empty");
+    if (const auto paths =
+            settings_path_contract::validateConfiguredIndexPaths(
+                settings.indexRoots, settings.excludedSubtrees);
+        !paths.ok)
+    {
+        throw StartupError(ERROR_INVALID_DATA, paths.error);
     }
-    if (settings.extensions.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.extensions is empty");
+    const file_extension_contract::Selection fileTypes{
+        settings.indexedExtensions,
+        settings.includeExtensionlessFiles};
+    if (const auto errors =
+            file_extension_contract::validateCanonicalSelection(fileTypes);
+        !errors.empty())
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config indexed file types " + errors.front());
     }
     if (settings.year.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.year is empty");
@@ -261,8 +272,11 @@ bool SearchEngineApplication::start()
 
         throwIfStopRequested();
         pending->dispatcher = std::make_unique<FileEventDispatcher>(
-            pending->settings.dirs,
-            pending->settings.extensions,
+            pending->settings.indexRoots,
+            file_extension_contract::Selection{
+                pending->settings.indexedExtensions,
+                pending->settings.includeExtensionlessFiles},
+            pending->settings.excludedSubtrees,
             pending->contexts->scheduler()
         );
         pending->scheduler =
@@ -277,7 +291,9 @@ bool SearchEngineApplication::start()
             std::make_unique<AddFileCommand<TaskId>>(
                 *pending->search_server,
                 *pending->scheduler,
-                pending->settings.extensions,
+                file_extension_contract::Selection{
+                    pending->settings.indexedExtensions,
+                    pending->settings.includeExtensionlessFiles},
                 pending->settings.enablePrmShortContentAutodetect
             )
         );
@@ -326,10 +342,10 @@ bool SearchEngineApplication::start()
         LG("ASIO port bound; server accepts connections");
 
         if (options_.mode == SearchEngineLaunchMode::Console &&
-            pending->settings.hideMode)
+            pending->settings.hideConsoleWindow)
         {
             ShowWindow(GetConsoleWindow(), SW_HIDE);
-            LG("Console hidden by config.hide_mode");
+            LG("Console hidden by config.hide_console_window");
         }
 
         runtime_ = std::move(pending_runtime);

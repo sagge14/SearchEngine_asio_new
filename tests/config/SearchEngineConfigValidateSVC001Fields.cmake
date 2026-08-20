@@ -179,16 +179,16 @@ write_json_with_field("${template_json}" "${f}" "compact_threshold_percent" "150
 assert_validate("compact_threshold_percent over 100" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 16. Missing dirs without --check-dirs -> PASS
+# 16. Missing index_roots on disk without --check-dirs -> PASS
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/missing-dirs.json")
+set(f "${TEST_ROOT}/missing-index-roots.json")
 string(REGEX REPLACE
-    "(\"dirs\"[ \t]*:[ \t]*\\[)[^\\]]*\\]"
-    "\\1\"/nonexistent/path/for/test\"]"
-    no_dirs_json
+    "(\"index_roots\"[ \t]*:[ \t]*\\[)[^\\]]*\\]"
+    "\\1\"D:\\\\nonexistent-se-index-root-for-test\"]"
+    no_index_roots_json
     "${template_json}")
-file(WRITE "${f}" "${no_dirs_json}")
-assert_validate("missing dirs without --check-dirs" "${f}" TRUE)
+file(WRITE "${f}" "${no_index_roots_json}")
+assert_validate("missing index_roots without --check-dirs" "${f}" TRUE)
 
 # ------------------------------------------------------------------
 # 17. Valid positive max_parallel_readers -> PASS
@@ -198,32 +198,18 @@ write_json_with_field("${template_json}" "${f}" "max_parallel_readers" "4")
 assert_validate("max_parallel_readers positive" "${f}" TRUE)
 
 # ------------------------------------------------------------------
-# 18. exact_search as string -> FAIL
+# 18. query_word_match outside all/any -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exact-search-string.json")
-write_json_with_field("${template_json}" "${f}" "exact_search" "\"yes\"")
-assert_validate("exact_search as string" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-query-word-match.json")
+write_json_with_field("${template_json}" "${f}" "query_word_match" "\"yes\"")
+assert_validate("query_word_match outside all/any" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 19. hide_mode as integer -> FAIL
+# 19. hide_console_window as integer -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-hide-mode-int.json")
-write_json_with_field("${template_json}" "${f}" "hide_mode" "1")
-assert_validate("hide_mode as integer" "${f}" FALSE)
-
-# ------------------------------------------------------------------
-# 20. text_request as string -> FAIL
-# ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-text-request-string.json")
-write_json_with_field("${template_json}" "${f}" "text_request" "\"true\"")
-assert_validate("text_request as string" "${f}" FALSE)
-
-# ------------------------------------------------------------------
-# 21. save_dictionary_to_file as integer -> FAIL
-# ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-save-dict-int.json")
-write_json_with_field("${template_json}" "${f}" "save_dictionary_to_file" "0")
-assert_validate("save_dictionary_to_file as integer" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-hide-console-window-int.json")
+write_json_with_field("${template_json}" "${f}" "hide_console_window" "1")
+assert_validate("hide_console_window as integer" "${f}" FALSE)
 
 # ------------------------------------------------------------------
 # 21b. representable INT_MAX boundaries for int destinations
@@ -288,22 +274,20 @@ endif()
 # ------------------------------------------------------------------
 set(compact_base [=[{
   "config": {
-    "Name": "TestEngine",
     "asio_port": 15006,
     "batch_indexer_threads": 0,
     "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1,
     "compact_threshold_percent": 5.0,
-    "dir": "D:\\",
-    "dirs": ["D:\\TEST"],
+    "index_roots": ["D:\\TEST"],
     "exact_search": true,
-    "exclude_dirs": [],
+    "excluded_subtrees": [],
     "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120,
     "full_index_strategy": "batch",
     "document_catalog_storage": "memory",
-    "hide_mode": false,
+    "hide_console_window": false,
     "ind_time": 500,
     "max_parallel_readers": 0,
     "max_response": 50000,
@@ -313,13 +297,11 @@ set(compact_base [=[{
     "razn_output_dir": "D:\\RAZN",
     "opis_base_dir": "D:\\OPIS",
     "f12_base_dir": "D:\\F12",
-    "save_dictionary_to_file": true,
     "scan_on_startup": true,
     "sqlite_load_threads": 4,
     "sqlite_mirror_flush_interval_sec": 2.0,
     "sqlite_mirror_max_pending_ops": 500,
     "sqlite_precount_postings": false,
-    "text_request": true,
     "thread_count": 4,
     "year": "2026"
   }
@@ -329,83 +311,89 @@ file(WRITE "${compact_base_file}" "${compact_base}")
 assert_validate("compact baseline" "${compact_base_file}" TRUE)
 
 # ------------------------------------------------------------------
-# 22. dirs containing a number element -> FAIL
+# 19b. Settings without Name -> PASS
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-dirs-element.json")
-write_json_with_field("${compact_base}" "${f}" "dirs" "[\"D:\\\\TEST\", 42]")
-assert_validate("dirs element is number" "${f}" FALSE)
+set(f "${TEST_ROOT}/no-name.json")
+file(WRITE "${f}" "${compact_base}")
+assert_validate("settings without Name" "${f}" TRUE)
 
 # ------------------------------------------------------------------
-# 23. extensions containing a number element -> FAIL
+# 22. index_roots containing a number element -> FAIL
+# ------------------------------------------------------------------
+set(f "${TEST_ROOT}/bad-index-roots-element.json")
+write_json_with_field("${compact_base}" "${f}" "index_roots" "[\"D:\\\\TEST\", 42]")
+assert_validate("index_roots element is number" "${f}" FALSE)
+
+# ------------------------------------------------------------------
+# 23. indexed_extensions containing a number element -> FAIL
 # ------------------------------------------------------------------
 set(f "${TEST_ROOT}/bad-extensions-element.json")
-write_json_with_field("${compact_base}" "${f}" "extensions" "[\"txt\", 99]")
-assert_validate("extensions element is number" "${f}" FALSE)
+write_json_with_field("${compact_base}" "${f}" "indexed_extensions" "[\"txt\", 99]")
+assert_validate("indexed_extensions element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 24. exclude_dirs as a plain string (not array) -> FAIL
+# 24. excluded_subtrees as a plain string (not array) -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exclude-dirs-string.json")
-write_json_with_field("${compact_base}" "${f}" "exclude_dirs" "\"oops\"")
-assert_validate("exclude_dirs as string not array" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-excluded-subtrees-string.json")
+write_json_with_field("${compact_base}" "${f}" "excluded_subtrees" "\"oops\"")
+assert_validate("excluded_subtrees as string not array" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 25. exclude_dirs containing a number element -> FAIL
+# 25. excluded_subtrees containing a number element -> FAIL
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-exclude-dirs-element.json")
-write_json_with_field("${compact_base}" "${f}" "exclude_dirs" "[\"C:/ok\", 123]")
-assert_validate("exclude_dirs element is number" "${f}" FALSE)
+set(f "${TEST_ROOT}/bad-excluded-subtrees-element.json")
+write_json_with_field("${compact_base}" "${f}" "excluded_subtrees" "[\"C:/ok\", 123]")
+assert_validate("excluded_subtrees element is number" "${f}" FALSE)
 
 # ------------------------------------------------------------------
-# 26. Files (top-level) as plain string -> FAIL
-# Build a JSON with "Files" as a string at root level.
+# 26. Retired top-level Files with invalid type -> PASS (legacy ignored)
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-files-string.json")
-set(bad_files_str [=[{"Files": "oops", "config": {
-    "Name": "TestEngine", "asio_port": 15006,
+set(f "${TEST_ROOT}/legacy-files-string.json")
+set(legacy_files_str [=[{"Files": "oops", "config": {
+    "asio_port": 15006,
     "batch_indexer_threads": 0, "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1, "compact_threshold_percent": 5.0,
-    "dir": "D:\\", "dirs": ["D:\\TEST"], "exact_search": true,
-    "exclude_dirs": [], "extensions": ["txt"],
+    "index_roots": ["D:\\TEST"], "exact_search": true,
+    "excluded_subtrees": [], "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120, "full_index_strategy": "batch",
-    "document_catalog_storage": "memory", "hide_mode": false,
+    "document_catalog_storage": "memory", "hide_console_window": false,
     "ind_time": 500, "max_parallel_readers": 0, "max_response": 50000,
     "prd_base_dir": "D:\\BASES_PRD", "prm_base_dir": "D:\\BASES",
     "tlg_send_root": "D:\\", "razn_output_dir": "D:\\RAZN",
     "opis_base_dir": "D:\\OPIS", "f12_base_dir": "D:\\F12",
-    "save_dictionary_to_file": true, "scan_on_startup": true,
+    "scan_on_startup": true,
     "sqlite_load_threads": 4, "sqlite_mirror_flush_interval_sec": 2.0,
     "sqlite_mirror_max_pending_ops": 500, "sqlite_precount_postings": false,
-    "text_request": true, "thread_count": 4, "year": "2026"
+    "thread_count": 4, "year": "2026"
   }}]=])
-file(WRITE "${f}" "${bad_files_str}")
-assert_validate("Files as string not array" "${f}" FALSE)
+file(WRITE "${f}" "${legacy_files_str}")
+assert_validate("retired Files as string ignored" "${f}" TRUE)
 
 # ------------------------------------------------------------------
-# 26b. Files (top-level) containing a number element -> FAIL
+# 26b. Retired top-level Files with invalid element -> PASS (legacy ignored)
 # ------------------------------------------------------------------
-set(f "${TEST_ROOT}/bad-files-element.json")
-set(bad_files_el_str [=[{"Files": ["ok.txt", 42], "config": {
-    "Name": "TestEngine", "asio_port": 15006,
+set(f "${TEST_ROOT}/legacy-files-element.json")
+set(legacy_files_el_str [=[{"Files": ["ok.txt", 42], "config": {
+    "asio_port": 15006,
     "batch_indexer_threads": 0, "batch_queue_memory_mb": 256,
     "batch_reader_threads": 1, "compact_threshold_percent": 5.0,
-    "dir": "D:\\", "dirs": ["D:\\TEST"], "exact_search": true,
-    "exclude_dirs": [], "extensions": ["txt"],
+    "index_roots": ["D:\\TEST"], "exact_search": true,
+    "excluded_subtrees": [], "extensions": ["txt"],
     "enable_prm_short_content_autodetect": true,
     "file_indexing_timeout_sec": 120, "full_index_strategy": "batch",
-    "document_catalog_storage": "memory", "hide_mode": false,
+    "document_catalog_storage": "memory", "hide_console_window": false,
     "ind_time": 500, "max_parallel_readers": 0, "max_response": 50000,
     "prd_base_dir": "D:\\BASES_PRD", "prm_base_dir": "D:\\BASES",
     "tlg_send_root": "D:\\", "razn_output_dir": "D:\\RAZN",
     "opis_base_dir": "D:\\OPIS", "f12_base_dir": "D:\\F12",
-    "save_dictionary_to_file": true, "scan_on_startup": true,
+    "scan_on_startup": true,
     "sqlite_load_threads": 4, "sqlite_mirror_flush_interval_sec": 2.0,
     "sqlite_mirror_max_pending_ops": 500, "sqlite_precount_postings": false,
-    "text_request": true, "thread_count": 4, "year": "2026"
+    "thread_count": 4, "year": "2026"
   }}]=])
-file(WRITE "${f}" "${bad_files_el_str}")
-assert_validate("Files element is number" "${f}" FALSE)
+file(WRITE "${f}" "${legacy_files_el_str}")
+assert_validate("retired Files invalid element ignored" "${f}" TRUE)
 
 # ------------------------------------------------------------------
 # 27. Port precedence: legacy port only (no asio_port) -> PASS

@@ -20,13 +20,30 @@ Register-AuthClient-FromToken.bat.
    разных годов или с разными наборами индексируемых папок выберите разные
    имена, например year2025 и year2026. Для единственного сервера оставьте
    default.
-3. Проверьте в data\Settings.json каталоги config.dirs, exclude_dirs,
-   prm_base_dir, prd_base_dir, tlg_send_root, razn_output_dir, opis_base_dir
-   и f12_base_dir. data\Settings.json — шаблон релиза (template/default values),
-   не production-конфиг установленной службы. Его можно подготовить под целевой
-   компьютер до установки; активный Settings.json создаётся в ProgramData.
-   Это локальные пути, доступные службе LocalSystem по ACL.
-   User mapped drives из обычной пользовательской сессии службе недоступны.
+3. Проверьте в data\Settings.json каталоги config.index_roots,
+   config.excluded_subtrees, prm_base_dir, prd_base_dir, tlg_send_root,
+   razn_output_dir, opis_base_dir и f12_base_dir. Старые имена config.dirs и
+   config.exclude_dirs читаются только как compatibility aliases при миграции;
+   в новом шаблоне используйте canonical-имена. data\Settings.json — шаблон
+   релиза (template/default values), не production-конфиг установленной службы.
+   Его можно подготовить под целевой компьютер до установки; активный
+   Settings.json создаётся в ProgramData.
+   config.index_roots и config.excluded_subtrees принимают абсолютные
+   локальные Windows-пути или UNC, например D:\DATA и \\server\share\DATA.
+   Синтаксическая поддержка UNC не означает, что LocalSystem автоматически
+   имеет доступ к SMB/share/ACL.
+   config.indexed_extensions содержит точные последние расширения без точки;
+   сравнение не зависит от регистра. config.include_extensionless_files
+   отдельно разрешает README, .hidden и другие имена без расширения. Пустой
+   indexed_extensions допустим только вместе с true.
+   config.query_word_match=all требует все слова запроса, any — хотя бы одно
+   найденное слово. extensions и exact_search остаются только read-only
+   compatibility aliases для старых конфигураций.
+   Production-корни tlg_send_root, razn_output_dir, opis_base_dir и
+   f12_base_dir по текущему контракту валидации — только абсолютные локальные
+   Windows-пути; UNC для них не принимается.
+   Mapped drives пользовательской сессии (например Z:\...) не считать
+   надёжно доступными Windows service.
    Отсутствие feature-specific каталога (F12, OPIS, разноска, tlg_send_root)
    не мешает запуску: ошибка появится при вызове соответствующей функции.
 4. У каждого экземпляра должен быть свой свободный TCP-порт.
@@ -42,9 +59,11 @@ data-dir при установке/обновлении как runtime-сост�
 создаётся на новых установках; historical messages\ в ProgramData при update
 сохраняется.
 
-Служба работает как LocalSystem. Рабочие корни задаются в Settings.json:
-tlg_send_root, razn_output_dir, opis_base_dir и f12_base_dir. Буква диска
-сама по себе не доказывает, что это физический локальный том.
+Служба работает как LocalSystem. Production-корни в Settings.json
+(tlg_send_root, razn_output_dir, opis_base_dir, f12_base_dir) — абсолютные
+локальные Windows-пути. Буква диска сама по себе не доказывает, что это
+физический локальный том. index_roots и excluded_subtrees описаны выше:
+локальный абсолютный путь или UNC, при условии доступа учётки службы.
 
 Нативный помощник сначала предложит язык диалога: русский выбран по умолчанию,
 английский доступен как вариант 2. Затем он предложит порт, год, число

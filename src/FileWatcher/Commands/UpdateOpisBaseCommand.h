@@ -4,17 +4,19 @@
 #include "scheduler/PeriodicTaskManager.h"
 #include "MyUtils/LogFile.h"
 #include "MyUtils/Encoding.h"
+#include "MyUtils/FileExtensionContract.h"
 #include <memory>
 #include <algorithm>
 #include <filesystem>
+#include <utility>
 #include <sstream>
 
 template<typename TaskID>
 class UpdateOpisBaseCommand : public IFileEventCommand {
 public:
     UpdateOpisBaseCommand(PeriodicTaskManager<TaskID>& ptm,
-                          std::vector<std::string>      ext )
-            : periodicTaskManager_{ptm}, allowed_exts_{std::move(ext)} {}
+                          file_extension_contract::Selection fileTypes)
+            : periodicTaskManager_{ptm}, fileTypes_{std::move(fileTypes)} {}
 
     /*-------------------------------------------------------------*/
     void execute(const std::wstring& path) override {
@@ -134,19 +136,10 @@ private:
     }
 
     bool isExtensionAllowed(const std::filesystem::path& fp) const {
-        std::string ext = fp.extension().string();
-        if (!ext.empty() && ext[0] == '.') ext.erase(0,1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-        for (auto a : allowed_exts_) {
-            std::transform(a.begin(), a.end(), a.begin(), ::tolower);
-            if (ext == a) return true;
-        }
-        return ext.empty() &&                                           // пустое?
-               std::find(allowed_exts_.begin(), allowed_exts_.end(), "") != allowed_exts_.end();
+        return file_extension_contract::matchesPath(fp.wstring(), fileTypes_);
     }
 
     /*------------- данные --------------------------------------*/
     PeriodicTaskManager<TaskID>& periodicTaskManager_;
-    std::vector<std::string>      allowed_exts_;
+    file_extension_contract::Selection fileTypes_;
 };

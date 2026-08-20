@@ -25,6 +25,7 @@
 #include "Commands/GetJsonTelega/Telega.h"
 
 #include "MyUtils/Encoding.h"
+#include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/LogFile.h"
 
 
@@ -46,21 +47,19 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
 
     nh::json jsonSettings;
 
-    jsonSettings["config"]["Name"] = val.name;
-    jsonSettings["config"]["Version"] = val.version;
     jsonSettings["config"]["max_response"] = val.maxResponse;
     jsonSettings["config"]["thread_count"] = val.threadCount;
-    jsonSettings["config"]["dir"] = val.dir;
     jsonSettings["config"]["asio_port"] = val.port;
     jsonSettings["config"]["ind_time"] = val.indTime;
-    jsonSettings["config"]["text_request"] = val.requestText;
-    jsonSettings["config"]["exact_search"] = val.exactSearch;
-    jsonSettings["config"]["dirs"] = val.dirs;
-    jsonSettings["config"]["extensions"] = val.extensions;
+    jsonSettings["config"]["query_word_match"] =
+        std::string(search_server::toString(val.queryWordMatch));
+    jsonSettings["config"]["index_roots"] = val.indexRoots;
+    jsonSettings["config"]["indexed_extensions"] = val.indexedExtensions;
+    jsonSettings["config"]["include_extensionless_files"] =
+        val.includeExtensionlessFiles;
     jsonSettings["config"]["year"] = val.year;
-    jsonSettings["config"]["hide_mode"] = val.hideMode;
-    jsonSettings["Files"] = val.files;
-    jsonSettings["config"]["exclude_dirs"] = val.excludeDirs;
+    jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
+    jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
     jsonSettings["config"]["tlg_send_root"] = val.tlg_send_root;
@@ -68,7 +67,6 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["opis_base_dir"] = val.opis_base_dir;
     jsonSettings["config"]["f12_base_dir"] = val.f12_base_dir;
     jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
-    jsonSettings["config"]["save_dictionary_to_file"] = val.saveDictionaryToFile;
     jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
     jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
     jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
@@ -113,7 +111,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         // Создаем пустой JSON для дальнейшей обработки
         jsonSettings = nh::json::object();
         jsonSettings["config"] = nh::json::object();
-        jsonSettings["Files"] = nh::json::array();
     } else {
         try
         {
@@ -142,31 +139,95 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         
         auto& config = jsonSettings["config"];
 
-        // === Сначала загружаем hide_mode для обработки ошибок ===
-        if (config.contains("hide_mode")) {
-            config.at("hide_mode").get_to(s.hideMode);
+        // === hide_console_window (legacy hide_mode alias) — load early for error UI ===
+        const bool hasHideConsoleWindow = config.contains("hide_console_window");
+        const bool hasLegacyHideMode = config.contains("hide_mode");
+        if (hasHideConsoleWindow) {
+            config.at("hide_console_window").get_to(s.hideConsoleWindow);
+        } else if (hasLegacyHideMode) {
+            config.at("hide_mode").get_to(s.hideConsoleWindow);
         }
 
         // === КРИТИЧЕСКИЕ ПОЛЯ (обязательные) ===
-        // name
-        if (config.contains("Name")) {
-            config.at("Name").get_to(s.name);
+        // index_roots (legacy dirs alias) — корни рекурсивной индексации.
+        // Canonical key presence always wins: never fall back to dirs when
+        // index_roots exists, even if the canonical value is empty or invalid.
+        // Direct runtime read of a legacy alias does not trigger a rewrite.
+        const bool hasIndexRootsKey = config.contains("index_roots");
+        const bool hasLegacyDirsKey = config.contains("dirs");
+        auto loadIndexRootsArray = [&](nh::json& field, const char* errorName) {
+            if (!field.is_array()) {
+                throw std::invalid_argument(
+                    std::string(errorName) + " must be a non-empty array");
+            }
+            field.get_to(s.indexRoots);
+            if (s.indexRoots.empty()) {
+                criticalErrors.push_back(
+                    "config.index_roots (must be non-empty array)");
+            }
+        };
+        if (hasIndexRootsKey) {
+            loadIndexRootsArray(config["index_roots"], "config.index_roots");
+        } else if (hasLegacyDirsKey) {
+            loadIndexRootsArray(config["dirs"], "config.dirs");
         } else {
-            criticalErrors.push_back("config.Name");
+            criticalErrors.push_back("config.index_roots (must be non-empty array)");
         }
 
-        // dirs - директории для индексации (не могут быть пустыми)
-        if (config.contains("dirs") && config["dirs"].is_array() && !config["dirs"].empty()) {
-            config.at("dirs").get_to(s.dirs);
-        } else {
-            criticalErrors.push_back("config.dirs (must be non-empty array)");
+        // indexed_extensions + include_extensionless_files.
+        // Legacy extensions is a read-only alias and does not cause resave.
+        // Canonical key presence wins even when its value is invalid.
+        const bool hasIndexedExtensions = config.contains("indexed_extensions");
+        const bool hasLegacyExtensions = config.contains("extensions");
+        const bool hasIncludeExtensionless =
+            config.contains("include_extensionless_files");
+        bool explicitIncludeExtensionless = false;
+        if (hasIncludeExtensionless) {
+            if (!config["include_extensionless_files"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.include_extensionless_files must be boolean");
+            }
+            config.at("include_extensionless_files").get_to(
+                explicitIncludeExtensionless);
         }
 
-        // extensions - расширения файлов (не могут быть пустыми)
-        if (config.contains("extensions") && config["extensions"].is_array() && !config["extensions"].empty()) {
-            config.at("extensions").get_to(s.extensions);
+        if (hasIndexedExtensions) {
+            if (!config["indexed_extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.indexed_extensions must be an array");
+            }
+            config.at("indexed_extensions").get_to(s.indexedExtensions);
+            s.includeExtensionlessFiles = hasIncludeExtensionless
+                ? explicitIncludeExtensionless
+                : false;
+            const file_extension_contract::Selection selection{
+                s.indexedExtensions, s.includeExtensionlessFiles};
+            if (const auto errors =
+                    file_extension_contract::validateCanonicalSelection(selection);
+                !errors.empty())
+            {
+                throw std::invalid_argument(
+                    "config.indexed_extensions " + errors.front());
+            }
+        } else if (hasLegacyExtensions) {
+            if (!config["extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.extensions must be an array");
+            }
+            std::vector<std::string> legacyExtensions;
+            config.at("extensions").get_to(legacyExtensions);
+            const auto selection =
+                file_extension_contract::canonicalizeLegacySelection(
+                    legacyExtensions,
+                    hasIncludeExtensionless
+                        ? &explicitIncludeExtensionless
+                        : nullptr);
+            s.indexedExtensions = selection.indexedExtensions;
+            s.includeExtensionlessFiles =
+                selection.includeExtensionlessFiles;
         } else {
-            criticalErrors.push_back("config.extensions (must be non-empty array)");
+            criticalErrors.push_back(
+                "config.indexed_extensions (required array)");
         }
 
         // year - год работы (используется в путях к БД)
@@ -207,14 +268,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         loadOptionalRoot("f12_base_dir", s.f12_base_dir);
 
         // === ОПЦИОНАЛЬНЫЕ ПОЛЯ (с автодополнением) ===
-        
-        // version
-        if (config.contains("Version")) {
-            config.at("Version").get_to(s.version);
-        } else {
-            addedFields.push_back("config.Version");
-            needsResave = true;
-        }
 
         // max_response
         if (config.contains("max_response")) {
@@ -242,25 +295,36 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // dir
-        if (config.contains("dir")) {
-            config.at("dir").get_to(s.dir);
+        // query_word_match (legacy exact_search alias). Canonical presence
+        // wins even when invalid. Alias or absence does not trigger resave.
+        if (config.contains("query_word_match")) {
+            if (!config["query_word_match"].is_string()) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            const auto mode = search_server::parseQueryWordMatch(
+                config.at("query_word_match").get<std::string>());
+            if (!mode) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            s.queryWordMatch = *mode;
+        } else if (config.contains("exact_search")) {
+            if (!config["exact_search"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.exact_search must be boolean");
+            }
+            s.queryWordMatch = config.at("exact_search").get<bool>()
+                ? search_server::QueryWordMatch::All
+                : search_server::QueryWordMatch::Any;
         } else {
-            addedFields.push_back("config.dir");
-            needsResave = true;
+            s.queryWordMatch = search_server::QueryWordMatch::Any;
         }
 
-        // exact_search
-        if (config.contains("exact_search")) {
-            config.at("exact_search").get_to(s.exactSearch);
-        } else {
-            addedFields.push_back("config.exact_search");
-            needsResave = true;
-        }
-
-        // hide_mode (уже загружено выше, но нужно отметить если отсутствовало)
-        if (!config.contains("hide_mode")) {
-            addedFields.push_back("config.hide_mode");
+        // hide_console_window — canonical; legacy hide_mode already applied above.
+        // Using hide_mode is read compatibility only: do not rewrite Settings.
+        if (!hasHideConsoleWindow && !hasLegacyHideMode) {
+            addedFields.push_back("config.hide_console_window");
             needsResave = true;
         }
 
@@ -272,19 +336,16 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // text_request
-        if (config.contains("text_request")) {
-            config.at("text_request").get_to(s.requestText);
+        // excluded_subtrees (legacy exclude_dirs alias).
+        // Direct runtime read of exclude_dirs does not trigger a rewrite.
+        const bool hasExcludedSubtrees = config.contains("excluded_subtrees");
+        const bool hasLegacyExcludeDirs = config.contains("exclude_dirs");
+        if (hasExcludedSubtrees) {
+            config.at("excluded_subtrees").get_to(s.excludedSubtrees);
+        } else if (hasLegacyExcludeDirs) {
+            config.at("exclude_dirs").get_to(s.excludedSubtrees);
         } else {
-            addedFields.push_back("config.text_request");
-            needsResave = true;
-        }
-
-        // exclude_dirs
-        if (config.contains("exclude_dirs")) {
-            config.at("exclude_dirs").get_to(s.excludeDirs);
-        } else {
-            addedFields.push_back("config.exclude_dirs");
+            addedFields.push_back("config.excluded_subtrees");
             needsResave = true;
         }
 
@@ -293,14 +354,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("compact_threshold_percent").get_to(s.compactThresholdPercent);
         } else {
             addedFields.push_back("config.compact_threshold_percent");
-            needsResave = true;
-        }
-
-        // save_dictionary_to_file — сохранять inverted_index3.dat (дефолт true в Settings)
-        if (config.contains("save_dictionary_to_file")) {
-            config.at("save_dictionary_to_file").get_to(s.saveDictionaryToFile);
-        } else {
-            addedFields.push_back("config.save_dictionary_to_file");
             needsResave = true;
         }
 
@@ -429,14 +482,6 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // Files
-        if (jsonSettings.contains("Files")) {
-            jsonSettings.at("Files").get_to(s.files);
-        } else {
-            addedFields.push_back("Files");
-            needsResave = true;
-        }
-
         // Если были добавлены поля - пересохраняем настройки
         if (needsResave) {
             setSettings(s, jsonPath);  // Сохраняем в тот же файл, откуда читали
@@ -486,8 +531,8 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             LogFile::getStartup().write("Please fix Settings.json and restart the server.");
             LogFile::getStartup().write("Logs directory: " + logsPathStr);
             
-            // Если hideMode - показываем окно с ошибкой
-            if (s.hideMode &&
+            // Если hideConsoleWindow - показываем окно с ошибкой
+            if (s.hideConsoleWindow &&
                 g_interactiveErrors.load(std::memory_order_acquire)) {
                 ShowWindow(GetConsoleWindow(), SW_SHOW);  // Показываем консоль
                 MessageBoxA(nullptr, errorMsg.c_str(), "Search Engine - Critical Settings Error", 

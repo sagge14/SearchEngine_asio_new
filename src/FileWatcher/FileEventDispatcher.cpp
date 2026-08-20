@@ -3,9 +3,11 @@
 //
 
 #include "FileEventDispatcher.h"
+#include "FileEventFilter.h"
 #include "MyUtils/Encoding.h"
 #include "MyUtils/LogFile.h"
 #include <unordered_set>
+#include <utility>
 
 static const wchar_t* evtToStr(FileEvent e)
 {
@@ -40,8 +42,16 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 {
     if (stopping_.load(std::memory_order_acquire))
         return;
-    if (!matchByExtensions(path)) {
-        LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+    if (!file_event_filter::shouldAcceptFileEvent(
+            evt, path, fileTypes_, excludedSubtrees_))
+    {
+        if (!file_event_filter::matchesConfiguredExtension(path, fileTypes_)) {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+        } else {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (excluded) path=" + path);
+        }
         return;
     }
     LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent " + std::wstring(evtToStr(evt)) + L" path=" + path);
@@ -109,13 +119,13 @@ void FileEventDispatcher::flushPending()
     }
 }
 
-void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
+void FileEventDispatcher::initWatchers(const std::vector<std::string>& _indexRoots)
 {
     /* parent-dir → множество имён нужных подпапок */
     std::unordered_map<std::wstring,
             std::unordered_set<std::wstring>> need;
 
-    for (const auto& d8 : _dirs)
+    for (const auto& d8 : _indexRoots)
     {
         std::filesystem::path p = encoding::utf8_to_wstring(d8);
         std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
@@ -140,53 +150,16 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
     }
 }
 
-FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& _dirs,
-                                         const std::vector<std::string>& _ext,
-                                         boost::asio::io_context& io) : io_(io), dirs_(_dirs), ext_(_ext)
+FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& indexRoots,
+                                         file_extension_contract::Selection fileTypes,
+                                         const std::vector<std::string>& excludedSubtrees,
+                                         boost::asio::io_context& io)
+        : io_(io)
+        , indexRoots_(indexRoots)
+        , fileTypes_(std::move(fileTypes))
+        , excludedSubtrees_(excludedSubtrees)
 {
-
-    initWatchers(dirs_);
-
-}
-
-bool FileEventDispatcher::matchByExtensions(const std::wstring& path) const
-{
-    using namespace std::filesystem;
-
-    /* Если список пуст -- фильтра нет → разрешаем всё */
-    if (ext_.empty())
-        return true;
-
-    std::wstring file = std::filesystem::path(path).filename().wstring();
-
-    // позиция последней точки
-    auto pos = file.rfind(L'.');                 // npos ⇒ нет точки
-    bool hasDot   = pos != std::wstring::npos;
-    bool dotAtEnd = hasDot && pos == file.size() - 1;
-    bool noExt    = !hasDot || dotAtEnd;         // «без расширения»
-
-    for (const auto& e8 : ext_)
-    {
-        std::wstring e (e8.begin(), e8.end());   // UTF-8 → UTF-16
-
-        /*  Пустая строка в конфиге значит: «разрешить файлы без расширения» */
-        if (e.empty())
-        {
-            if (noExt)
-                return true;
-            continue;
-        }
-
-        /*  Файл имеет расширение → сравниваем нечувствительно к регистру  */
-        if (!noExt && e.size() <= file.size() - pos - 1 &&
-            std::equal(e.begin(), e.end(),
-                       file.end() - e.size(),
-                       [](wchar_t a, wchar_t b){
-                           return towlower(a) == towlower(b);
-                       }))
-            return true;
-    }
-    return false;
+    initWatchers(indexRoots_);
 }
 
 void FileEventDispatcher::stopAll() {

@@ -1,8 +1,9 @@
 #include "FileScanner.h"
 #include "Encoding.h"
+#include "FileExtensionContract.h"
 #include "LogFile.h"
+#include "PathExclusion.h"
 #include <mutex>
-#include <cwctype>
 
 namespace fs = std::filesystem;
 
@@ -16,43 +17,13 @@ namespace
         LogFile::getScan().write(utf8Path + " | " + utf8Msg);
     }
 
-    bool matchExtension(const std::wstring& fileName,
-                        const std::vector<std::string>& exts)
-    {
-        if (exts.empty())
-            return true;
-
-        for (const auto& extUtf8 : exts)
-        {
-            std::wstring ext = fs::u8path(extUtf8).wstring();
-
-            if (ext.empty())
-            {
-                if (fileName.find(L'.') == std::wstring::npos)
-                    return true;
-            }
-            else if (fileName.size() >= ext.size())
-            {
-                if (std::equal(fileName.end() - ext.size(),
-                               fileName.end(),
-                               ext.begin(),
-                               [](wchar_t a, wchar_t b)
-                               {
-                                   return std::towlower(a) == std::towlower(b);
-                               }))
-                    return true;
-            }
-        }
-
-        return false;
-    }
 }
 
 
 std::list<std::wstring>
 FileScanner::scanDirectory(const std::string& dir,
-                           const std::vector<std::string>& extensions,
-                           const std::vector<std::string>& excludeDirs)
+                           const file_extension_contract::Selection& fileTypes,
+                           const std::vector<std::string>& excludedSubtrees)
 {
     std::list<std::wstring> out;
     fs::path root = fs::u8path(dir);
@@ -79,20 +50,15 @@ FileScanner::scanDirectory(const std::string& dir,
         }
 
         const auto& de = *it;
+        const fs::path currentPath = de.path();
 
         if (de.is_directory(ec))
         {
             if (ec) { ec.clear(); continue; }
 
-            const std::wstring wDir = de.path().wstring();
-
-            for (const auto& exclUtf8 : excludeDirs)
+            if (path_exclusion::isPathExcluded(currentPath, excludedSubtrees))
             {
-                if (wDir.find(fs::u8path(exclUtf8).wstring()) != std::wstring::npos)
-                {
-                    it.disable_recursion_pending();
-                    break;
-                }
+                it.disable_recursion_pending();
             }
             continue;
         }
@@ -103,6 +69,11 @@ FileScanner::scanDirectory(const std::string& dir,
             continue;
         }
 
+        if (path_exclusion::isPathExcluded(currentPath, excludedSubtrees))
+        {
+            continue;
+        }
+
         auto size = de.file_size(ec);
         if (ec || size < 10)
         {
@@ -110,11 +81,11 @@ FileScanner::scanDirectory(const std::string& dir,
             continue;
         }
 
-        const std::wstring fname = de.path().filename().wstring();
-        if (!matchExtension(fname, extensions))
+        if (!file_extension_contract::matchesPath(
+                currentPath.wstring(), fileTypes))
             continue;
 
-        out.push_back(de.path().wstring());
+        out.push_back(currentPath.wstring());
     }
 
     return out;
@@ -122,15 +93,15 @@ FileScanner::scanDirectory(const std::string& dir,
 
 
 std::vector<std::wstring>
-FileScanner::scanDirectories(const std::vector<std::string>& dirs,
-                             const std::vector<std::string>& extensions,
-                             const std::vector<std::string>& excludeDirs)
+FileScanner::scanDirectories(const std::vector<std::string>& indexRoots,
+                             const file_extension_contract::Selection& fileTypes,
+                             const std::vector<std::string>& excludedSubtrees)
 {
     std::vector<std::wstring> result;
 
-    for (const auto& dir : dirs)
+    for (const auto& dir : indexRoots)
     {
-        auto list = scanDirectory(dir, extensions, excludeDirs);
+        auto list = scanDirectory(dir, fileTypes, excludedSubtrees);
 
         result.insert(result.end(),
                       std::make_move_iterator(list.begin()),

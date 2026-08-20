@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
         ContextRuntime runtime(0);
         runtime.start();
 
-        FileEventDispatcher dispatcher(watchDirs, ext, runtime.scheduler());
+        FileEventDispatcher dispatcher(watchDirs, ext, {}, runtime.scheduler());
 
         dispatcher.registerCommand(
             FileEvent::Added,

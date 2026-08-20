@@ -58,9 +58,8 @@ namespace
         return nh::json{
             {"config",
              {
-                 {"Name", "TestServer"},
                  {"year", "2026"},
-                 {"dirs", nh::json::array({"D:\\JANUARY"})},
+                 {"index_roots", nh::json::array({"D:\\JANUARY"})},
                  {"extensions", nh::json::array({"txt"})},
                  {"prm_base_dir", ""},
                  {"prd_base_dir", ""}
@@ -74,10 +73,9 @@ TEST(ProductionRootsSettingsTest, CustomValuesRoundtrip)
     TemporaryDirectory temporary;
     const fs::path settingsPath = temporary.path() / "Settings.json";
     search_server::Settings original;
-    original.name = "TestServer";
     original.year = "2026";
-    original.dirs = {"D:\\JANUARY"};
-    original.extensions = {"txt"};
+    original.indexRoots = {"D:\\JANUARY"};
+    original.indexedExtensions = {"txt"};
     original.prm_base_dir = "";
     original.prd_base_dir = "";
     original.tlg_send_root = "E:\\tlg-root";
