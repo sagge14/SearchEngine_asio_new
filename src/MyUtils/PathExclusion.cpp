@@ -1,31 +1,50 @@
 #include "PathExclusion.h"
 
-#include <cwctype>
 #include <algorithm>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace path_exclusion {
 namespace fs = std::filesystem;
 
 namespace {
 
+#ifdef _WIN32
+void foldWindowsCase(std::wstring& value)
+{
+    if (!value.empty()) {
+        CharLowerBuffW(value.data(), static_cast<DWORD>(value.size()));
+    }
+}
+
 bool componentsEqual(wchar_t lhs, wchar_t rhs)
 {
-#ifdef _WIN32
-    return std::towlower(lhs) == std::towlower(rhs);
-#else
-    return lhs == rhs;
-#endif
+    wchar_t a = lhs;
+    wchar_t b = rhs;
+    CharLowerBuffW(&a, 1);
+    CharLowerBuffW(&b, 1);
+    return a == b;
 }
+#else
+bool componentsEqual(wchar_t lhs, wchar_t rhs)
+{
+    return lhs == rhs;
+}
+#endif
 
 std::wstring toComparableWstring(const fs::path& path)
 {
     std::wstring value = path.lexically_normal().generic_wstring();
 #ifdef _WIN32
-    std::transform(
-        value.begin(),
-        value.end(),
-        value.begin(),
-        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    foldWindowsCase(value);
 #endif
     while (value.size() > 1 &&
            (value.back() == L'/' || value.back() == L'\\'))

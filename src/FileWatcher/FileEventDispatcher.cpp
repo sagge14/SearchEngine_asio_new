@@ -3,9 +3,9 @@
 //
 
 #include "FileEventDispatcher.h"
+#include "FileEventFilter.h"
 #include "MyUtils/Encoding.h"
 #include "MyUtils/LogFile.h"
-#include "MyUtils/PathExclusion.h"
 #include <unordered_set>
 
 static const wchar_t* evtToStr(FileEvent e)
@@ -41,14 +41,16 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 {
     if (stopping_.load(std::memory_order_acquire))
         return;
-    if (!matchByExtensions(path)) {
-        LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
-        return;
-    }
-    if (evt != FileEvent::Removed && evt != FileEvent::RenamedOld &&
-        path_exclusion::isPathExcluded(std::filesystem::path(path), excludedSubtrees_))
+    if (!file_event_filter::shouldAcceptFileEvent(
+            evt, path, ext_, excludedSubtrees_))
     {
-        LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent SKIP (excluded) path=" + path);
+        if (!file_event_filter::matchesConfiguredExtension(path, ext_)) {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+        } else {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (excluded) path=" + path);
+        }
         return;
     }
     LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent " + std::wstring(evtToStr(evt)) + L" path=" + path);
@@ -157,46 +159,6 @@ FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& indexRo
         , excludedSubtrees_(excludedSubtrees)
 {
     initWatchers(indexRoots_);
-}
-
-bool FileEventDispatcher::matchByExtensions(const std::wstring& path) const
-{
-    using namespace std::filesystem;
-
-    /* Если список пуст -- фильтра нет → разрешаем всё */
-    if (ext_.empty())
-        return true;
-
-    std::wstring file = std::filesystem::path(path).filename().wstring();
-
-    // позиция последней точки
-    auto pos = file.rfind(L'.');                 // npos ⇒ нет точки
-    bool hasDot   = pos != std::wstring::npos;
-    bool dotAtEnd = hasDot && pos == file.size() - 1;
-    bool noExt    = !hasDot || dotAtEnd;         // «без расширения»
-
-    for (const auto& e8 : ext_)
-    {
-        std::wstring e (e8.begin(), e8.end());   // UTF-8 → UTF-16
-
-        /*  Пустая строка в конфиге значит: «разрешить файлы без расширения» */
-        if (e.empty())
-        {
-            if (noExt)
-                return true;
-            continue;
-        }
-
-        /*  Файл имеет расширение → сравниваем нечувствительно к регистру  */
-        if (!noExt && e.size() <= file.size() - pos - 1 &&
-            std::equal(e.begin(), e.end(),
-                       file.end() - e.size(),
-                       [](wchar_t a, wchar_t b){
-                           return towlower(a) == towlower(b);
-                       }))
-            return true;
-    }
-    return false;
 }
 
 void FileEventDispatcher::stopAll() {

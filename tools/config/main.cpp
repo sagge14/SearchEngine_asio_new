@@ -6,6 +6,7 @@
 
 #include "Index/Batch/FullIndexStrategy.h"
 #include "Index/DocumentCatalogStorage.h"
+#include "MyUtils/WindowsPath.h"
 #include "RuntimeDataTransaction.h"
 
 #include <algorithm>
@@ -26,6 +27,8 @@ namespace {
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+using windows_path::isAbsoluteWindowsLocalPath;
+using windows_path::isAbsoluteWindowsFilesystemPath;
 
 constexpr int kMinYear = 2000;
 constexpr int kMaxYear = 2099;
@@ -98,24 +101,6 @@ std::wstring utf16(const std::string& value)
         CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
         result.data(), size);
     return result;
-}
-
-bool isAbsoluteWindowsLocalPath(const std::string& value)
-{
-    if (value.size() < 3) {
-        return false;
-    }
-    if (value[0] == '\\' || value[0] == '/') {
-        return false;
-    }
-    const auto drive = static_cast<unsigned char>(value[0]);
-    if (!std::isalpha(drive)) {
-        return false;
-    }
-    if (value[1] != ':') {
-        return false;
-    }
-    return value[2] == '\\' || value[2] == '/';
 }
 
 void writeInteractive(const std::wstring& text)
@@ -1150,10 +1135,10 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
                     "config.index_roots must contain non-empty strings");
                 break;
             }
-            if (!isAbsoluteWindowsLocalPath(value)) {
+            if (!isAbsoluteWindowsFilesystemPath(value)) {
                 errors.emplace_back(
-                    "config.index_roots must contain absolute local Windows paths "
-                    "(UNC and relative paths are not supported)");
+                    "config.index_roots must contain absolute Windows paths "
+                    "(local drive or UNC; relative paths are not supported)");
                 break;
             }
         }
@@ -1171,10 +1156,11 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
                     break;
                 }
                 const auto& value = el.get_ref<const std::string&>();
-                if (!value.empty() && !isAbsoluteWindowsLocalPath(value)) {
+                if (value.empty() || !isAbsoluteWindowsFilesystemPath(value)) {
                     errors.emplace_back(
-                        "config.excluded_subtrees must contain absolute local "
-                        "Windows paths (UNC and relative paths are not supported)");
+                        "config.excluded_subtrees must contain non-empty "
+                        "absolute Windows paths "
+                        "(local drive or UNC; relative paths are not supported)");
                     break;
                 }
             }

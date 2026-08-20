@@ -10,7 +10,7 @@
 #include <mutex>
 #include <Windows.h>
 
-enum class FileEvent { Added, Removed, Modified, RenamedOld, RenamedNew };
+#include "FileWatcher/FileEvent.h"
 
 class FileWatcher
 {

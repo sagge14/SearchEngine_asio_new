@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <clocale>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -39,6 +40,32 @@ TEST(PathExclusionTest, SubtreeSemantics)
             path_exclusion::isPathExcluded(fs::path(testCase.candidate), excludedUtf8),
             testCase.expected)
             << "candidate=" << testCase.candidate.c_str();
+    }
+}
+
+TEST(PathExclusionTest, UncCaseInsensitiveSubtree)
+{
+    const std::vector<std::string> excluded{
+        "\\\\SERVER\\Share\\DATA\\TEMP"};
+    EXPECT_TRUE(path_exclusion::isPathExcluded(
+        fs::path(L"\\\\server\\share\\data\\temp\\a.txt"), excluded));
+    EXPECT_FALSE(path_exclusion::isPathExcluded(
+        fs::path(L"\\\\server\\share\\data\\temp_old\\a.txt"), excluded));
+}
+
+TEST(PathExclusionTest, CyrillicCaseInsensitiveIndependentOfLocale)
+{
+    const char* previous = setlocale(LC_ALL, nullptr);
+    ASSERT_NE(setlocale(LC_ALL, "C"), nullptr);
+
+    const std::vector<std::string> excluded{"D:\\ДАННЫЕ\\ТЕМП"};
+    EXPECT_TRUE(path_exclusion::isPathExcluded(
+        fs::path(L"D:\\данные\\темп\\a.txt"), excluded));
+    EXPECT_FALSE(path_exclusion::isPathExcluded(
+        fs::path(L"D:\\данные\\темп_old\\a.txt"), excluded));
+
+    if (previous != nullptr) {
+        setlocale(LC_ALL, previous);
     }
 }
 

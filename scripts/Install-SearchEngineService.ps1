@@ -162,10 +162,20 @@ $oemPath = Resolve-RequiredPath $oemPath Leaf
 
 $settings = Read-JsonFile $settingsPath
 $config = $settings.config
-$indexRoots = if ($config.index_roots) {
-    @($config.index_roots)
-} elseif ($config.dirs) {
-    @($config.dirs)
+$indexRootsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['index_roots']
+} else {
+    $null
+}
+$dirsProperty = if ($null -ne $config) {
+    $config.PSObject.Properties['dirs']
+} else {
+    $null
+}
+$indexRoots = if ($null -ne $indexRootsProperty) {
+    @($indexRootsProperty.Value)
+} elseif ($null -ne $dirsProperty) {
+    @($dirsProperty.Value)
 } else {
     @()
 }

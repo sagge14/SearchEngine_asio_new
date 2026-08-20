@@ -145,16 +145,27 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
         }
 
         // === КРИТИЧЕСКИЕ ПОЛЯ (обязательные) ===
-        // index_roots (legacy dirs alias) — корни рекурсивной индексации
-        const bool hasIndexRoots = config.contains("index_roots") &&
-            config["index_roots"].is_array() && !config["index_roots"].empty();
-        const bool hasLegacyDirs = config.contains("dirs") &&
-            config["dirs"].is_array() && !config["dirs"].empty();
-        if (hasIndexRoots) {
-            config.at("index_roots").get_to(s.indexRoots);
-        } else if (hasLegacyDirs) {
-            config.at("dirs").get_to(s.indexRoots);
-            needsResave = true;
+        // index_roots (legacy dirs alias) — корни рекурсивной индексации.
+        // Canonical key presence always wins: never fall back to dirs when
+        // index_roots exists, even if the canonical value is empty or invalid.
+        // Direct runtime read of a legacy alias does not trigger a rewrite.
+        const bool hasIndexRootsKey = config.contains("index_roots");
+        const bool hasLegacyDirsKey = config.contains("dirs");
+        auto loadIndexRootsArray = [&](nh::json& field, const char* errorName) {
+            if (!field.is_array()) {
+                throw std::invalid_argument(
+                    std::string(errorName) + " must be a non-empty array");
+            }
+            field.get_to(s.indexRoots);
+            if (s.indexRoots.empty()) {
+                criticalErrors.push_back(
+                    "config.index_roots (must be non-empty array)");
+            }
+        };
+        if (hasIndexRootsKey) {
+            loadIndexRootsArray(config["index_roots"], "config.index_roots");
+        } else if (hasLegacyDirsKey) {
+            loadIndexRootsArray(config["dirs"], "config.dirs");
         } else {
             criticalErrors.push_back("config.index_roots (must be non-empty array)");
         }
@@ -239,11 +250,10 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // hide_console_window — canonical; legacy hide_mode already applied above
+        // hide_console_window — canonical; legacy hide_mode already applied above.
+        // Using hide_mode is read compatibility only: do not rewrite Settings.
         if (!hasHideConsoleWindow && !hasLegacyHideMode) {
             addedFields.push_back("config.hide_console_window");
-            needsResave = true;
-        } else if (!hasHideConsoleWindow && hasLegacyHideMode) {
             needsResave = true;
         }
 
@@ -255,14 +265,14 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             needsResave = true;
         }
 
-        // excluded_subtrees (legacy exclude_dirs alias)
+        // excluded_subtrees (legacy exclude_dirs alias).
+        // Direct runtime read of exclude_dirs does not trigger a rewrite.
         const bool hasExcludedSubtrees = config.contains("excluded_subtrees");
         const bool hasLegacyExcludeDirs = config.contains("exclude_dirs");
         if (hasExcludedSubtrees) {
             config.at("excluded_subtrees").get_to(s.excludedSubtrees);
         } else if (hasLegacyExcludeDirs) {
             config.at("exclude_dirs").get_to(s.excludedSubtrees);
-            needsResave = true;
         } else {
             addedFields.push_back("config.excluded_subtrees");
             needsResave = true;

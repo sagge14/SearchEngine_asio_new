@@ -20,11 +20,14 @@ Register-AuthClient-FromToken.bat.
    разных годов или с разными наборами индексируемых папок выберите разные
    имена, например year2025 и year2026. Для единственного сервера оставьте
    default.
-3. Проверьте в data\Settings.json каталоги config.dirs, exclude_dirs,
-   prm_base_dir, prd_base_dir, tlg_send_root, razn_output_dir, opis_base_dir
-   и f12_base_dir. data\Settings.json — шаблон релиза (template/default values),
-   не production-конфиг установленной службы. Его можно подготовить под целевой
-   компьютер до установки; активный Settings.json создаётся в ProgramData.
+3. Проверьте в data\Settings.json каталоги config.index_roots,
+   config.excluded_subtrees, prm_base_dir, prd_base_dir, tlg_send_root,
+   razn_output_dir, opis_base_dir и f12_base_dir. Старые имена config.dirs и
+   config.exclude_dirs читаются только как compatibility aliases при миграции;
+   в новом шаблоне используйте canonical-имена. data\Settings.json — шаблон
+   релиза (template/default values), не production-конфиг установленной службы.
+   Его можно подготовить под целевой компьютер до установки; активный
+   Settings.json создаётся в ProgramData.
    Это локальные пути, доступные службе LocalSystem по ACL.
    User mapped drives из обычной пользовательской сессии службе недоступны.
    Отсутствие feature-specific каталога (F12, OPIS, разноска, tlg_send_root)

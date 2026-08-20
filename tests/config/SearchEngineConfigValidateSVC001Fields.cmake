@@ -184,7 +184,7 @@ assert_validate("compact_threshold_percent over 100" "${f}" FALSE)
 set(f "${TEST_ROOT}/missing-index-roots.json")
 string(REGEX REPLACE
     "(\"index_roots\"[ \t]*:[ \t]*\\[)[^\\]]*\\]"
-    "\\1\"/nonexistent/path/for/test\"]"
+    "\\1\"D:\\\\nonexistent-se-index-root-for-test\"]"
     no_index_roots_json
     "${template_json}")
 file(WRITE "${f}" "${no_index_roots_json}")

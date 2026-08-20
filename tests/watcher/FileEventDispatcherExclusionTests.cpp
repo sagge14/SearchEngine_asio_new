@@ -1,34 +1,44 @@
-#include "MyUtils/PathExclusion.h"
+#include "FileWatcher/FileEventFilter.h"
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
 #include <string>
 #include <vector>
 
-namespace fs = std::filesystem;
-
 namespace {
 
-bool wouldQueueForIndexing(
-    const std::wstring& path,
-    const std::vector<std::string>& excludedSubtrees)
-{
-    return !path_exclusion::isPathExcluded(fs::path(path), excludedSubtrees);
-}
+const std::vector<std::string> kTxt{"txt"};
+const std::vector<std::string> kExcluded{"D:\\ROOT\\excluded"};
 
 }  // namespace
 
 TEST(FileEventDispatcherExclusionTest, ExcludedLivePathIsFilteredAtDispatcherBoundary)
 {
-    const std::vector<std::string> excluded{"D:\\ROOT\\excluded"};
-    EXPECT_FALSE(wouldQueueForIndexing(L"D:\\ROOT\\excluded\\new.txt", excluded));
-    EXPECT_TRUE(wouldQueueForIndexing(L"D:\\ROOT\\excluded_similar\\new.txt", excluded));
+    EXPECT_FALSE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Added, L"D:\\ROOT\\excluded\\new.txt", kTxt, kExcluded));
+    EXPECT_FALSE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Modified, L"D:\\ROOT\\excluded\\new.txt", kTxt, kExcluded));
+    EXPECT_FALSE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::RenamedNew, L"D:\\ROOT\\excluded\\new.txt", kTxt, kExcluded));
+    EXPECT_TRUE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Added, L"D:\\ROOT\\excluded_similar\\new.txt", kTxt, kExcluded));
+}
+
+TEST(FileEventDispatcherExclusionTest, RemovalAndRenamedOldStayAcceptedForCleanup)
+{
+    EXPECT_TRUE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Removed, L"D:\\ROOT\\excluded\\gone.txt", kTxt, kExcluded));
+    EXPECT_TRUE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::RenamedOld, L"D:\\ROOT\\excluded\\old.txt", kTxt, kExcluded));
 }
 
 TEST(FileEventDispatcherExclusionTest, ForceWalkUsesSamePredicateAsLiveEvents)
 {
-    const std::vector<std::string> excluded{"D:\\ROOT\\excluded"};
-    EXPECT_FALSE(wouldQueueForIndexing(L"D:\\ROOT\\excluded\\nested\\seed.txt", excluded));
-    EXPECT_TRUE(wouldQueueForIndexing(L"D:\\ROOT\\keep\\seed.txt", excluded));
+    EXPECT_FALSE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Added,
+        L"D:\\ROOT\\excluded\\nested\\seed.txt",
+        kTxt,
+        kExcluded));
+    EXPECT_TRUE(file_event_filter::shouldAcceptFileEvent(
+        FileEvent::Added, L"D:\\ROOT\\keep\\seed.txt", kTxt, kExcluded));
 }

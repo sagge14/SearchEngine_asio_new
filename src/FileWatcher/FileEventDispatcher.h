@@ -33,7 +33,6 @@ private:
         bool queued{false};
     };
 
-    [[nodiscard]] bool matchByExtensions(const std::wstring& path) const;
     void initWatchers(const std::vector<std::string>& indexRoots);
     void pushFileEvent(FileEvent evt,  const std::wstring& path);
 

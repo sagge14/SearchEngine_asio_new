@@ -12,6 +12,7 @@
 #include "JSON/ConverterJSON.h"
 #include "MyUtils/LogFile.h"
 #include "MyUtils/OEMCase.h"
+#include "MyUtils/SettingsPathContract.h"
 #include "MyUtils/SqlLogger.h"
 #include "MyUtils/Utf8Path.h"
 #include "SearchServer/SearchServer.h"
@@ -76,8 +77,12 @@ void validateSettings(const search_server::Settings& settings)
     if (settings.port <= 0 || settings.port > 65535) {
         throw StartupError(ERROR_INVALID_DATA, "config.port is outside 1..65535");
     }
-    if (settings.indexRoots.empty()) {
-        throw StartupError(ERROR_INVALID_DATA, "config.index_roots is empty");
+    if (const auto paths =
+            settings_path_contract::validateConfiguredIndexPaths(
+                settings.indexRoots, settings.excludedSubtrees);
+        !paths.ok)
+    {
+        throw StartupError(ERROR_INVALID_DATA, paths.error);
     }
     if (settings.extensions.empty()) {
         throw StartupError(ERROR_INVALID_DATA, "config.extensions is empty");
