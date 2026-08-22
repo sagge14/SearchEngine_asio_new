@@ -54,8 +54,11 @@ if not exist "%PACKAGE_ROOT%Verify-Package.bat" goto :PACKAGE_MISSING
 call "%PACKAGE_ROOT%Verify-Package.bat" /quiet
 if errorlevel 1 goto :PACKAGE_DAMAGED
 
-if "%VALIDATE_ONLY%"=="1" goto :INSTANCE_READY
-if "%INSTANCE_FROM_ARGS%"=="1" goto :INSTANCE_READY
+if "%VALIDATE_ONLY%"=="1" (
+    set "UI_LANGUAGE=en"
+    goto :INSTANCE_READY
+)
+if "%INSTANCE_FROM_ARGS%"=="1" goto :SELECT_LANGUAGE_ONLY
 "%HELPER%" choose-instance --default "%SERVICE_INSTANCE%" --output "%INSTANCE_TEMP%"
 if errorlevel 1 goto :HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "SELECTED_%%A=%%B"
@@ -63,6 +66,15 @@ del /Q "%INSTANCE_TEMP%" >nul 2>&1
 if not defined SELECTED_instance goto :HELPER_FAILED
 if not defined SELECTED_language goto :HELPER_FAILED
 set "SERVICE_INSTANCE=%SELECTED_instance%"
+set "UI_LANGUAGE=%SELECTED_language%"
+goto :INSTANCE_READY
+
+:SELECT_LANGUAGE_ONLY
+"%HELPER%" choose-language --output "%INSTANCE_TEMP%"
+if errorlevel 1 goto :HELPER_FAILED
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "SELECTED_%%A=%%B"
+del /Q "%INSTANCE_TEMP%" >nul 2>&1
+if not defined SELECTED_language goto :HELPER_FAILED
 set "UI_LANGUAGE=%SELECTED_language%"
 
 :INSTANCE_READY
@@ -102,9 +114,7 @@ set "INSTALL_ROOT=%PROGRAM_ROOT%\%SERVICE_NAME%"
 set "INSTALLED_BIN=%INSTALL_ROOT%\bin"
 set "INSTALLED_TOOLS=%INSTALL_ROOT%\tools"
 
-echo SearchEngineService portable installer ^(%TARGET_ARCH%^)
-echo Instance: %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
-echo.
+call :UI install.header "%TARGET_ARCH%" "%SERVICE_INSTANCE%" "%SERVICE_NAME%"
 
 "%HELPER%" system-info > "%HELPER_OUTPUT%"
 if errorlevel 1 goto :HELPER_FAILED
@@ -128,10 +138,8 @@ if errorlevel 1 goto :OLD_SETTINGS_INSPECTED
 for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do set "OLD_%%A=%%B"
 :OLD_SETTINGS_INSPECTED
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo An installed SearchEngineService was found.
-echo   1 - Reinstall or update it ^(recommended^)
-echo   2 - Cancel
-choice.exe /C 12 /N /M "Select: "
+call :UI install.existing
+call :CHOICE 12
 if errorlevel 2 goto :CANCELLED
 call :CHOOSE_BACKUP
 if errorlevel 1 goto :CANCELLED
@@ -145,17 +153,11 @@ call :CHECK_EMPTY_DIRECTORY "%DATA_DIR%"
 if errorlevel 1 set "LEFTOVER_DIRECTORIES=1"
 if "%LEFTOVER_DIRECTORIES%"=="0" goto :CONFIGURE
 
-echo.
-echo Files remain from an earlier incomplete uninstall, but the Windows
-echo service %SERVICE_NAME% is not registered.
-if exist "%INSTALL_ROOT%\" echo   Application: %INSTALL_ROOT%
-if exist "%DATA_DIR%\" echo   Data:        %DATA_DIR%
-echo.
-echo Removing these folders permanently deletes their settings, indexes,
-echo databases, messages and logs.
-echo   1 - Delete the leftover folders and continue installation
-echo   2 - Cancel ^(recommended if the files must be preserved^)
-choice.exe /C 12 /N /M "Select: "
+call :UI install.leftovers "%SERVICE_NAME%"
+if exist "%INSTALL_ROOT%\" call :UI install.application_path "%INSTALL_ROOT%"
+if exist "%DATA_DIR%\" call :UI install.data_path "%DATA_DIR%"
+call :UI install.leftovers_warning
+call :CHOICE 12
 if errorlevel 2 goto :CANCELLED
 call :DELETE_DIRECTORY_RETRY "%INSTALL_ROOT%"
 if errorlevel 1 goto :INSTALL_LEFTOVER_DELETE_FAILED
@@ -207,72 +209,63 @@ if errorlevel 1 goto :HELPER_FAILED
 if not exist "%ENDPOINT_TEMP%" goto :HELPER_FAILED
 
 :DIRECTORIES_VALID
-echo.
-echo Selected configuration:
-echo   Port:                 %SERVICE_PORT%
-echo   Year:                 %SERVICE_YEAR%
-echo   Executor threads:     %SERVICE_THREADS%
-echo   One-file timeout:     %FILE_TIMEOUT% sec
-if "%PRM_AUTODETECT%"=="1" echo   PRM short content:    enabled
-if "%PRM_AUTODETECT%"=="0" echo   PRM short content:    disabled
-echo   Document catalog:     %DOCUMENT_CATALOG_STORAGE%
-echo.
+call :UI install.config_header
+call :UI install.config_port "%SERVICE_PORT%"
+call :UI install.config_year "%SERVICE_YEAR%"
+call :UI install.config_threads "%SERVICE_THREADS%"
+call :UI install.config_timeout "%FILE_TIMEOUT%"
+if "%PRM_AUTODETECT%"=="1" call :UI install.config_prm_on
+if "%PRM_AUTODETECT%"=="0" call :UI install.config_prm_off
+call :UI install.config_catalog "%DOCUMENT_CATALOG_STORAGE%"
 
-echo [1/8] Ensuring Microsoft Visual C++ Runtime...
+call :UI install.step_runtime
 if "%SKIP_VC_REDIST%"=="1" goto :REDIST_SKIP_FLAG
 set "CRT_PROBE_OK=0"
 call :PROBE_VC_RUNTIME
 if not errorlevel 1 set "CRT_PROBE_OK=1"
 if "%CRT_PROBE_OK%"=="1" goto :REDIST_ASK_WHEN_PRESENT
-echo Visual C++ Runtime files were not detected for architecture %TARGET_ARCH%.
-echo   1 - Install or update the packaged redistributable ^(recommended^)
-echo   2 - Skip redistributable setup
-choice.exe /C 12 /N /M "Select: "
+call :UI install.runtime_missing "%TARGET_ARCH%"
+call :CHOICE 12
 if errorlevel 2 goto :REDIST_SKIP_CHOICE
 goto :REDIST_INSTALL
 
 :REDIST_ASK_WHEN_PRESENT
-echo Visual C++ Runtime files were found on this computer.
-echo   1 - Skip redistributable setup ^(recommended^)
-echo   2 - Install or update the packaged redistributable anyway
-choice.exe /C 12 /N /M "Select: "
+call :UI install.runtime_present
+call :CHOICE 12
 if errorlevel 2 goto :REDIST_INSTALL
 goto :REDIST_SKIP_CHOICE
 
 :REDIST_INSTALL
-echo Installing Microsoft Visual C++ Runtime...
+call :UI install.runtime_installing
 start "" /wait "%VC_REDIST%" /install /quiet /norestart
 set "REDIST_EXIT=%ERRORLEVEL%"
 if "%REDIST_EXIT%"=="0" goto :REDIST_OK
 if "%REDIST_EXIT%"=="1638" goto :REDIST_OK
 if "%REDIST_EXIT%"=="3010" goto :REDIST_RESTART
-echo WARNING: Visual C++ Runtime setup failed with exit code %REDIST_EXIT%.
-echo SearchEngineConfig.exe already ran, so the runtime is likely already present.
-echo   1 - Continue installation
-echo   2 - Cancel
-choice.exe /C 12 /N /M "Select: "
+call :UI install.runtime_failed "%REDIST_EXIT%"
+call :CHOICE 12
 if errorlevel 2 goto :FAILED
 goto :REDIST_OK
 
 :REDIST_SKIP_FLAG
-echo Skipping Visual C++ Runtime setup because /SkipVcRedist was specified.
+call :UI install.runtime_skip_flag
 goto :REDIST_OK
 
 :REDIST_SKIP_CHOICE
-echo Skipping Visual C++ Runtime redistributable setup by user choice.
+call :UI install.runtime_skip_choice
 goto :REDIST_OK
 
 :REDIST_RESTART
-echo WARNING: Windows must be restarted after the installation.
+call :UI install.runtime_restart
 
 :REDIST_OK
 if "%REINSTALL%"=="0" goto :CHECK_NEW_PORT
-echo [2/8] Stopping the installed service...
+call :UI install.step_stop
 call :STOP_SERVICE
 if errorlevel 1 goto :FAILED
 
 if "%BACKUP_MODE%"=="none" goto :CHECK_NEW_PORT
-echo [3/8] Exporting the previous installation...
+call :UI install.step_export
 "%HELPER%" backup --install-root "%INSTALL_ROOT%" --data-dir "%DATA_DIR%" --destination "%BACKUP_DESTINATION%" --mode %BACKUP_MODE%
 if errorlevel 1 goto :RESTART_OLD_SERVICE_AND_FAIL
 
@@ -281,7 +274,7 @@ if errorlevel 1 goto :RESTART_OLD_SERVICE_AND_FAIL
 if errorlevel 1 goto :PORT_IN_USE
 if "%REINSTALL%"=="0" goto :COPY_APPLICATION
 
-echo Preparing application rollback...
+call :UI install.preparing_rollback
 set "ROLLBACK_INSTALL=%INSTALL_ROOT%.rollback-%RANDOM%-%RANDOM%"
 set "ROLLBACK_RUNTIME=%DATA_DIR%.runtime-update-%RANDOM%-%RANDOM%"
 if exist "%ROLLBACK_INSTALL%" goto :ROLLBACK_PREPARE_FAILED
@@ -291,7 +284,7 @@ if exist "%INSTALL_ROOT%" goto :ROLLBACK_PREPARE_FAILED
 set "APP_ROLLBACK_READY=1"
 
 :COPY_APPLICATION
-echo [4/8] Copying application files...
+call :UI install.step_copy
 md "%INSTALLED_BIN%" >nul 2>&1
 md "%INSTALLED_TOOLS%" >nul 2>&1
 if not exist "%INSTALLED_BIN%\" goto :COPY_FAILED
@@ -307,19 +300,16 @@ if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
 if errorlevel 1 goto :COPY_FAILED
 
-echo.
-echo Is GET_ATTACHMENTS / "Save attachments" used on this server instance?
-echo   1 - Yes
-echo   2 - No
+call :UI install.attachments_menu
 set "GET_ATTACHMENTS_USED=0"
-choice.exe /C 12 /N /M "Select: "
+call :CHOICE 12
 if errorlevel 2 goto :AFTER_ATTACHMENTS_CHOICE
 if errorlevel 1 set "GET_ATTACHMENTS_USED=1"
 :AFTER_ATTACHMENTS_CHOICE
 if "%REINSTALL%"=="1" goto :UPDATE_DATA
 
 :FRESH_DATA
-echo [5/8] Creating data directory from package...
+call :UI install.step_fresh_data
 md "%DATA_DIR%" >nul 2>&1
 md "%DATA_DIR%\logs" >nul 2>&1
 if not exist "%DATA_DIR%\" goto :COPY_FAILED
@@ -342,19 +332,19 @@ if errorlevel 1 goto :COPY_FAILED
 goto :REGISTER_SERVICE
 
 :FRESH_PREFIX_MAP_MISSING
-set "PREFIX_MAP_WARN=The package does not contain data\prefix_map.json."
+set "PREFIX_MAP_WARN_ID=install.prefix_package_missing"
 call :OFFER_PREFIX_MAP_CONTINUE
 if errorlevel 1 goto :ROLLBACK_OR_FAIL
 goto :REGISTER_SERVICE
 
 :FRESH_PREFIX_MAP_INVALID
-set "PREFIX_MAP_WARN=Package data\prefix_map.json is invalid."
+set "PREFIX_MAP_WARN_ID=install.prefix_package_invalid"
 call :OFFER_PREFIX_MAP_CONTINUE
 if errorlevel 1 goto :ROLLBACK_OR_FAIL
 goto :REGISTER_SERVICE
 
 :UPDATE_DATA
-echo [5/8] Updating managed runtime files...
+call :UI install.step_update_data
 "%HELPER%" runtime-update-apply --data-dir "%DATA_DIR%" --package-data "%PACKAGE_ROOT%data" --generated-settings "%CONFIG_TEMP%" --generated-endpoint "%ENDPOINT_TEMP%" --rollback-dir "%ROLLBACK_RUNTIME%"
 if errorlevel 2 goto :RUNTIME_APPLY_FAILED_BEFORE_MUTATION
 if errorlevel 1 goto :RUNTIME_APPLY_FAILED
@@ -370,22 +360,20 @@ if errorlevel 1 goto :UPDATE_PREFIX_MAP_INVALID
 goto :REGISTER_SERVICE
 
 :UPDATE_PREFIX_MAP_MISSING
-set "PREFIX_MAP_WARN=This instance has no prefix_map.json."
+set "PREFIX_MAP_WARN_ID=install.prefix_instance_missing"
 call :OFFER_PREFIX_MAP_CONTINUE
 if errorlevel 1 goto :ROLLBACK_OR_FAIL
 goto :REGISTER_SERVICE
 
 :UPDATE_PREFIX_MAP_INVALID
-set "PREFIX_MAP_WARN=Existing prefix_map.json is invalid and was not replaced."
+set "PREFIX_MAP_WARN_ID=install.prefix_instance_invalid"
 call :OFFER_PREFIX_MAP_CONTINUE
 if errorlevel 1 goto :ROLLBACK_OR_FAIL
 goto :REGISTER_SERVICE
 
 :REGISTER_SERVICE
-echo [6/8] Registering and configuring the Windows service...
-echo Service account: LocalSystem
-echo Runtime paths must be accessible to LocalSystem.
-echo User mapped drives are not available to the Windows service.
+call :UI install.step_register
+call :UI install.localsystem
 if "%REINSTALL%"=="1" goto :CONFIG_EXISTING_SERVICE
 sc.exe create "%SERVICE_NAME%" binPath= "\"%INSTALLED_BIN%\SearchEngine.exe\" --service --service-name \"%SERVICE_NAME%\" --data-dir \"%DATA_DIR%\"" start= delayed-auto DisplayName= "%DISPLAY_NAME%" >nul
 if errorlevel 1 goto :SERVICE_SETUP_FAILED
@@ -405,12 +393,12 @@ if errorlevel 1 goto :SERVICE_SETUP_FAILED
 reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\%SERVICE_NAME%" /v PreshutdownTimeout /t REG_DWORD /d 180000 /f >nul
 if errorlevel 1 goto :SERVICE_SETUP_FAILED
 
-echo [7/8] Configuring Windows Firewall for TCP port %SERVICE_PORT%...
+call :UI install.step_firewall "%SERVICE_PORT%"
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 netsh.exe advfirewall firewall add rule name="%FIREWALL_RULE%" dir=in action=allow protocol=TCP localport=%SERVICE_PORT% program="%INSTALLED_BIN%\SearchEngine.exe" enable=yes >nul
 if errorlevel 1 goto :SERVICE_SETUP_FAILED
 
-echo [8/8] Starting the service and checking PING/PONG...
+call :UI install.step_start
 sc.exe start "%SERVICE_NAME%" >nul
 if errorlevel 1 goto :SERVICE_START_FAILED
 call :WAIT_FOR_RUNNING
@@ -420,13 +408,13 @@ if errorlevel 1 goto :SERVICE_HEALTH_FAILED
 
 if "%APP_ROLLBACK_READY%"=="0" goto :COMMIT_RUNTIME
 rmdir /S /Q "%ROLLBACK_INSTALL%" >nul 2>&1
-if exist "%ROLLBACK_INSTALL%" echo WARNING: old application directory could not be removed: %ROLLBACK_INSTALL%
+if exist "%ROLLBACK_INSTALL%" call :UI install.old_app_warning "%ROLLBACK_INSTALL%"
 set "APP_ROLLBACK_READY=0"
 
 :COMMIT_RUNTIME
 if "%RUNTIME_TX_APPLIED%"=="0" goto :INSTALLED
 "%HELPER%" runtime-update-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
-if errorlevel 1 echo WARNING: runtime transaction directory was left for diagnostics: %ROLLBACK_RUNTIME%
+if errorlevel 1 call :UI install.runtime_tx_warning "%ROLLBACK_RUNTIME%"
 set "RUNTIME_TX_READY=0"
 set "RUNTIME_TX_APPLIED=0"
 
@@ -434,60 +422,39 @@ set "RUNTIME_TX_APPLIED=0"
 del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo.
-echo Installation completed successfully.
-echo Service:     %SERVICE_NAME% ^(RUNNING and PING/PONG OK^)
-echo Service account: LocalSystem
-echo Runtime paths must be accessible to LocalSystem.
-echo User mapped drives are not available to the Windows service.
-echo Application: %INSTALLED_BIN%
-echo Data:        %DATA_DIR%
-echo Logs:        %DATA_DIR%\logs
-echo Client hint: %DATA_DIR%\client-endpoint.txt
-echo.
-pause
+call :UI install.success "%SERVICE_NAME%" "%INSTALLED_BIN%" "%DATA_DIR%"
+call :PAUSE_UI
 exit /b 0
 
 :VALIDATED
-echo Package verification completed successfully.
+call :UI install.validated
 exit /b 0
 
 :CHOOSE_BACKUP
-echo.
-echo Backup before replacing the installed files:
-echo   1 - Full application and data backup ^(recommended^)
-echo   2 - Settings and logs only
-echo   3 - Do not create a backup
-choice.exe /C 123 /N /M "Select: "
+call :UI install.backup_menu
+call :CHOICE 123
 if errorlevel 3 goto :CONFIRM_NO_BACKUP
 if errorlevel 2 set "BACKUP_MODE=settings-logs"
 if errorlevel 2 goto :READ_BACKUP_DESTINATION
 set "BACKUP_MODE=full"
 :READ_BACKUP_DESTINATION
 set "BACKUP_DESTINATION="
-set /p "BACKUP_DESTINATION=Destination disk or folder, for example E:\Backups: "
+call :UI common.backup_destination
+set /p "BACKUP_DESTINATION="
 if "%BACKUP_DESTINATION%"=="" goto :READ_BACKUP_DESTINATION
 exit /b 0
 :CONFIRM_NO_BACKUP
-echo Skipping the optional export does not delete ProgramData.
-echo The index, authorization database, messages, logs, prefix_map.json,
-echo user ignore.txt and other runtime files stay in place. Export is an
-echo extra operator backup only.
-echo   1 - Cancel ^(recommended^)
-echo   2 - Continue without export
-choice.exe /C 12 /N /M "Select: "
+call :UI install.no_export
+call :CHOICE 12
 if errorlevel 2 set "BACKUP_MODE=none"
 if errorlevel 2 exit /b 0
 exit /b 1
 
 :OFFER_PREFIX_MAP_CONTINUE
-echo.
-echo WARNING: GET_ATTACHMENTS will not work until a valid file exists:
-echo   %DATA_DIR%\prefix_map.json
-echo %PREFIX_MAP_WARN%
-echo   1 - Continue
-echo   2 - Cancel
-choice.exe /C 12 /N /M "Select: "
+call :UI install.prefix_warning "%DATA_DIR%\prefix_map.json"
+call :UI "%PREFIX_MAP_WARN_ID%"
+call :UI install.continue_cancel
+call :CHOICE 12
 if errorlevel 2 exit /b 1
 exit /b 0
 
@@ -532,10 +499,8 @@ if %WAIT_SECONDS% GEQ 120 goto :OFFER_FORCE_STOP
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_STOPPED_LOOP
 :OFFER_FORCE_STOP
-echo The service did not stop within 120 seconds.
-echo   1 - Force-terminate its process and continue
-echo   2 - Cancel
-choice.exe /C 12 /N /M "Select: "
+call :UI common.stop_timeout
+call :CHOICE 12
 if errorlevel 2 exit /b 1
 set "SERVICE_PID="
 for /f "tokens=2 delims=:" %%P in ('sc.exe queryex "%SERVICE_NAME%" ^| findstr.exe /R /C:":[ ]*[1-9][0-9]*[ ]*$"') do set "SERVICE_PID=%%P"
@@ -561,10 +526,8 @@ ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_STOPPED_PROCESS_LOOP
 
 :OFFER_FORCE_STOPPED_PROCESS
-echo The service is STOPPED, but process PID %STOPPED_SERVICE_PID% still holds files.
-echo   1 - Force-terminate this service process and continue
-echo   2 - Cancel without deleting files
-choice.exe /C 12 /N /M "Select: "
+call :UI common.stopped_process "%STOPPED_SERVICE_PID%"
+call :CHOICE 12
 if errorlevel 2 exit /b 1
 taskkill.exe /PID %STOPPED_SERVICE_PID% /T /F >nul 2>&1
 if errorlevel 1 exit /b 1
@@ -613,14 +576,8 @@ ping.exe 127.0.0.1 -n 2 >nul
 goto :DELETE_DIRECTORY_LOOP
 
 :OFFER_DIRECTORY_DELETE_RETRY
-echo.
-echo Directory is still in use or access is denied:
-echo   %DELETE_TARGET%
-echo Close Explorer, Total Commander, database tools and other programs that
-echo may have this directory open.
-echo   1 - Retry deletion
-echo   2 - Cancel and preserve the remaining files
-choice.exe /C 12 /N /M "Select: "
+call :UI common.directory_retry "%DELETE_TARGET%"
+call :CHOICE 12
 if errorlevel 2 exit /b 1
 set /a DELETE_ATTEMPT=0
 attrib.exe -R -S -H "%DELETE_TARGET%\*" /S /D >nul 2>&1
@@ -631,33 +588,32 @@ sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 
 :ROLLBACK_PREPARE_FAILED
-echo ERROR: Cannot move the previous application into a rollback directory.
+call :UI install.rollback_prepare_failed
 if exist "%ROLLBACK_INSTALL%" if not exist "%INSTALL_ROOT%" move "%ROLLBACK_INSTALL%" "%INSTALL_ROOT%" >nul
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 
 :PORT_IN_USE
-echo ERROR: TCP port %SERVICE_PORT% is already occupied by another process.
+call :UI install.port_in_use "%SERVICE_PORT%"
 if "%REINSTALL%"=="0" goto :ROLLBACK_OR_FAIL
 if "%APP_ROLLBACK_READY%"=="1" goto :ROLLBACK_OR_FAIL
 goto :RESTART_OLD_SERVICE_AND_FAIL
 
 :COPY_FAILED
-echo ERROR: Cannot copy installation files.
+call :UI install.copy_failed
 goto :ROLLBACK_OR_FAIL
 
 :SERVICE_SETUP_FAILED
-echo ERROR: Cannot configure the Windows service.
+call :UI install.service_setup_failed
 goto :ROLLBACK_OR_FAIL
 
 :SERVICE_START_FAILED
-echo ERROR: The service did not reach RUNNING state within 120 seconds.
+call :UI install.service_start_failed
 sc.exe query "%SERVICE_NAME%"
 goto :ROLLBACK_OR_FAIL
 
 :SERVICE_HEALTH_FAILED
-echo ERROR: The service process is running but did not answer PING within the timeout.
-echo Check logs in %DATA_DIR%\logs
+call :UI install.health_failed "%DATA_DIR%"
 goto :ROLLBACK_OR_FAIL
 
 :ROLLBACK_OR_FAIL
@@ -687,7 +643,7 @@ set "RUNTIME_TX_APPLIED=1"
 goto :ROLLBACK_OR_FAIL
 
 :ROLLBACK_REINSTALL
-echo Restoring the previous working installation...
+call :UI install.restoring
 set "ROLLBACK_APP_OK=0"
 set "ROLLBACK_RUNTIME_OK=0"
 set "ROLLBACK_HEALTH_OK=0"
@@ -744,52 +700,49 @@ if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 if not exist "%ROLLBACK_RUNTIME%\" goto :ROLLBACK_OLD_SERVICE_OK
 "%HELPER%" runtime-update-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_RUNTIME%"
-if errorlevel 1 echo WARNING: runtime transaction directory was left for diagnostics: %ROLLBACK_RUNTIME%
+if errorlevel 1 call :UI install.runtime_tx_warning "%ROLLBACK_RUNTIME%"
 :ROLLBACK_OLD_SERVICE_OK
 set "RUNTIME_TX_READY=0"
-echo Previous application, managed files and old-port PING/PONG were restored.
+call :UI install.rollback_ok
 goto :FAILED
 
 :ROLLBACK_NO_HEALTH
 if "%ROLLBACK_APP_OK%"=="0" goto :ROLLBACK_INCOMPLETE
 if "%ROLLBACK_RUNTIME_OK%"=="0" goto :ROLLBACK_INCOMPLETE
-echo Previous application and managed files were restored.
-echo Old service port is unknown, so PING/PONG was not verified.
-if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
+call :UI install.rollback_no_health
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" call :UI install.runtime_transaction "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :ROLLBACK_STOP_FAILED
-echo ERROR: The new service could not be stopped for automatic rollback.
-if defined ROLLBACK_INSTALL echo   Application rollback: %ROLLBACK_INSTALL%
-if defined ROLLBACK_RUNTIME echo   Runtime transaction: %ROLLBACK_RUNTIME%
+call :UI install.rollback_stop_failed
+if defined ROLLBACK_INSTALL call :UI install.application_rollback "%ROLLBACK_INSTALL%"
+if defined ROLLBACK_RUNTIME call :UI install.runtime_transaction "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :ROLLBACK_FILES_FAILED
-echo ERROR: Automatic rollback could not restore the previous application directory.
-if defined ROLLBACK_INSTALL echo   Application rollback: %ROLLBACK_INSTALL%
-if defined ROLLBACK_RUNTIME echo   Runtime transaction: %ROLLBACK_RUNTIME%
+call :UI install.rollback_files_failed
+if defined ROLLBACK_INSTALL call :UI install.application_rollback "%ROLLBACK_INSTALL%"
+if defined ROLLBACK_RUNTIME call :UI install.runtime_transaction "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :ROLLBACK_RUNTIME_FAILED
-echo ERROR: Runtime managed-file rollback did not complete.
-echo Transaction directory preserved:
-echo   %ROLLBACK_RUNTIME%
+call :UI install.rollback_runtime_failed "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :ROLLBACK_HEALTH_FAILED
-echo ERROR: The previous service was started but old-port PING/PONG was not confirmed.
-if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
+call :UI install.rollback_health_failed
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" call :UI install.runtime_transaction "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :ROLLBACK_INCOMPLETE
-echo ERROR: Automatic rollback did not fully restore the previous installation.
-if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" echo   Runtime transaction: %ROLLBACK_RUNTIME%
+call :UI install.rollback_incomplete
+if defined ROLLBACK_RUNTIME if exist "%ROLLBACK_RUNTIME%\" call :UI install.runtime_transaction "%ROLLBACK_RUNTIME%"
 goto :FAILED
 
 :INVALID_INSTANCE
-echo ERROR: Invalid service instance id "%SERVICE_INSTANCE%".
-echo Use 1-32 ASCII letters, digits, underscore or hyphen; the first character must be alphanumeric.
-pause
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+call :UI common.invalid_instance "%SERVICE_INSTANCE%"
+call :PAUSE_UI
 exit /b 1
 
 :UNKNOWN_ARGUMENT
@@ -798,40 +751,70 @@ echo Supported: /validate, /SkipVcRedist, and an optional instance id.
 goto :FAILED
 
 :NOT_ADMIN
-echo ERROR: Run Install-SearchEngineService.bat as Administrator.
+call :UI install.not_admin
 goto :FAILED
 :PACKAGE_MISSING
-echo ERROR: The portable package is incomplete. Copy the entire folder again.
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+if exist "%HELPER%" (
+    call :UI install.package_missing
+) else (
+    echo ERROR: The portable package is incomplete. Copy the entire folder again.
+)
 goto :FAILED
 :PACKAGE_DAMAGED
-echo ERROR: Package verification failed. Copy the entire folder again.
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+call :UI install.package_damaged
 goto :FAILED
 :HELPER_FAILED
-echo ERROR: SearchEngineConfig could not validate or generate settings.
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+if exist "%HELPER%" (
+    call :UI install.helper_failed
+) else (
+    echo ERROR: SearchEngineConfig could not validate or generate settings.
+)
 goto :FAILED
 :INSTALL_LEFTOVER_DELETE_FAILED
-echo ERROR: Leftover application directory could not be deleted: %INSTALL_ROOT%
+call :UI install.leftover_app_failed "%INSTALL_ROOT%"
 goto :FAILED
 :DATA_LEFTOVER_DELETE_FAILED
-echo ERROR: Leftover data directory could not be deleted: %DATA_DIR%
+call :UI install.leftover_data_failed "%DATA_DIR%"
 goto :FAILED
 :FAILED_WITH_FILES
-echo Partial files were preserved for diagnostics:
-echo   %INSTALL_ROOT%
-echo   %DATA_DIR%
+call :UI install.partial_files "%INSTALL_ROOT%" "%DATA_DIR%"
 :FAILED
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo.
-echo Installation failed. Read the error above.
-pause
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+if exist "%HELPER%" (
+    call :UI install.failed
+    call :PAUSE_UI
+) else (
+    echo.
+    echo Installation failed. Read the error above.
+    pause
+)
 exit /b 1
 :CANCELLED
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo Installation cancelled. No installed files were changed.
+call :UI install.cancelled
+call :PAUSE_UI
 exit /b 1
+
+:CHOICE
+call :UI common.select
+choice.exe /C %~1 /N /M ""
+exit /b %ERRORLEVEL%
+
+:PAUSE_UI
+call :UI common.press_any_key
+pause >nul
+exit /b 0
+
+:UI
+"%HELPER%" script-message --language "%UI_LANGUAGE%" --id "%~1" --arg1 "%~2" --arg2 "%~3" --arg3 "%~4" --arg4 "%~5" --arg5 "%~6" --arg6 "%~7" --arg7 "%~8"
+exit /b 0

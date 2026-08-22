@@ -210,6 +210,7 @@ if(BUILD_CONFIG_TOOL)
     add_executable(
             SearchEngineConfig
             tools/config/main.cpp
+            tools/config/ScriptMessages.cpp
             tools/config/RuntimeDataTransaction.cpp
             src/MyUtils/FileExtensionContract.cpp
             src/SearchServer/QueryWordMatch.cpp
@@ -1325,6 +1326,14 @@ if(TARGET SearchEngineConfig)
             "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-format-json-test"
             -P
             "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigFormatJson.cmake"
+    )
+    add_test(
+            NAME SearchEngineConfigScriptMessages_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigScriptMessages.cmake"
     )
     add_test(
             NAME SearchEngineConfigBlock1Legacy_test

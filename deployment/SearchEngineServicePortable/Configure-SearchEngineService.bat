@@ -19,16 +19,10 @@ set "PACKAGE_ROOT=%~dp0"
 set "HELPER=%~dp0tools\SearchEngineConfig.exe"
 set "STOP_TIMEOUT_SECONDS=1800"
 set "START_TIMEOUT_SECONDS=1800"
+set "UI_LANGUAGE=auto"
 
 if not exist "%HELPER%" (
     echo ERROR: SearchEngineConfig.exe is missing. Use the complete portable folder.
-    pause
-    exit /b 1
-)
-
-fsutil.exe dirty query %SystemDrive% >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Run Configure-SearchEngineService.bat as Administrator.
     pause
     exit /b 1
 )
@@ -37,39 +31,60 @@ rem --- Instance selection ---
 set "SERVICE_INSTANCE="
 if not "%~1"=="" (
     set "SERVICE_INSTANCE=%~1"
-    goto :INSTANCE_RESOLVED
+    goto :SELECT_LANGUAGE_ONLY
 )
 
 rem No argument: use interactive picker
-echo Selecting installed SearchEngine service...
 set "SELECTION_FILE=%TEMP%\SE-Configure-picker-%RANDOM%-%RANDOM%.txt"
 "%HELPER%" choose-installed-instance --purpose configure --output "%SELECTION_FILE%"
-if errorlevel 3 goto :PICKER_NO_INSTALLED
-if errorlevel 2 goto :PICKER_CANCELLED
+set "PICKER_EXIT=%ERRORLEVEL%"
+for /f "usebackq tokens=1,* delims==" %%A in ("%SELECTION_FILE%") do set "SELECTED_%%A=%%B"
+del /Q "%SELECTION_FILE%" >nul 2>&1
+if defined SELECTED_language set "UI_LANGUAGE=%SELECTED_language%"
+if "%PICKER_EXIT%"=="3" goto :PICKER_NO_INSTALLED
+if "%PICKER_EXIT%"=="2" goto :PICKER_CANCELLED
+if not "%PICKER_EXIT%"=="0" goto :PICKER_HELPER_FAILED
+if not defined SELECTED_instance goto :PICKER_HELPER_FAILED
+if not defined SELECTED_language goto :PICKER_HELPER_FAILED
+set "SERVICE_INSTANCE=%SELECTED_instance%"
+goto :LANGUAGE_READY
+
+:SELECT_LANGUAGE_ONLY
+set "SELECTION_FILE=%TEMP%\SE-Configure-language-%RANDOM%-%RANDOM%.txt"
+"%HELPER%" choose-language --output "%SELECTION_FILE%"
 if errorlevel 1 goto :PICKER_HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%SELECTION_FILE%") do set "SELECTED_%%A=%%B"
 del /Q "%SELECTION_FILE%" >nul 2>&1
-if not defined SELECTED_instance goto :PICKER_HELPER_FAILED
-set "SERVICE_INSTANCE=%SELECTED_instance%"
-goto :INSTANCE_RESOLVED
+if not defined SELECTED_language goto :PICKER_HELPER_FAILED
+set "UI_LANGUAGE=%SELECTED_language%"
+goto :LANGUAGE_READY
 
 :PICKER_NO_INSTALLED
 del /Q "%SELECTION_FILE%" >nul 2>&1
-echo ERROR: No installed SearchEngine services were found.
-pause
+call :UI configure.no_services
+call :PAUSE_UI
 exit /b 1
 
 :PICKER_CANCELLED
 del /Q "%SELECTION_FILE%" >nul 2>&1
-echo Configuration cancelled.
-pause
+call :UI configure.cancelled
+call :PAUSE_UI
 exit /b 0
 
 :PICKER_HELPER_FAILED
 del /Q "%SELECTION_FILE%" >nul 2>&1
-echo ERROR: SearchEngineConfig could not list installed services.
-pause
+if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+call :UI configure.helper_failed
+call :PAUSE_UI
 exit /b 1
+
+:LANGUAGE_READY
+fsutil.exe dirty query %SystemDrive% >nul 2>&1
+if errorlevel 1 (
+    call :UI configure.not_admin
+    call :PAUSE_UI
+    exit /b 1
+)
 
 :INSTANCE_RESOLVED
 echo(%SERVICE_INSTANCE%| findstr.exe /R /X "[A-Za-z0-9][A-Za-z0-9_-]*" >nul
@@ -117,21 +132,20 @@ set "ENDPOINT_MANAGED="
 
 sc.exe query "%SERVICE_NAME%" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Service %SERVICE_NAME% is not installed.
-    pause
+    call :UI configure.service_missing "%SERVICE_NAME%"
+    call :PAUSE_UI
     exit /b 1
 )
 
 rem --- Step 1: Resolve actual data-dir via SCM ---
-echo Resolving installed data directory from Service Control Manager...
+call :UI configure.resolving
 chcp 65001 >nul
 "%HELPER%" inspect-installed --instance "%SERVICE_INSTANCE%" > "%HELPER_OUTPUT%" 2>&1
 if errorlevel 1 (
     type "%HELPER_OUTPUT%"
     del /Q "%HELPER_OUTPUT%" >nul 2>&1
-    echo ERROR: Could not resolve data-dir for %SERVICE_NAME%.
-    echo Verify that the service has a --data-dir argument in its ImagePath.
-    pause
+    call :UI configure.resolve_failed "%SERVICE_NAME%"
+    call :PAUSE_UI
     exit /b 1
 )
 for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
@@ -142,21 +156,18 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
 )
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 if not defined DATA_DIR (
-    echo ERROR: inspect-installed did not return data_dir.
-    pause
+    call :UI configure.inspect_missing
+    call :PAUSE_UI
     exit /b 1
 )
-echo Instance  : %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
-echo Data dir  : %DATA_DIR%
-echo Settings  : %SETTINGS_PATH%
-echo Endpoint  : %ENDPOINT_PATH%
+call :UI configure.instance_info "%SERVICE_INSTANCE%" "%SERVICE_NAME%" "%DATA_DIR%" "%SETTINGS_PATH%" "%ENDPOINT_PATH%"
 
 rem --- Step 2: Inspect current settings (old port/year) ---
 "%HELPER%" inspect --settings "%SETTINGS_PATH%" > "%HELPER_OUTPUT%" 2>&1
 if errorlevel 1 (
     del /Q "%HELPER_OUTPUT%" >nul 2>&1
-    echo ERROR: Current Settings.json is missing or invalid.
-    pause
+    call :UI configure.settings_invalid
+    call :PAUSE_UI
     exit /b 1
 )
 for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
@@ -164,19 +175,19 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
     if /I "%%A"=="year" set "OLD_YEAR=%%B"
 )
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo Current port: %OLD_PORT%   year: %OLD_YEAR%
+call :UI configure.current "%OLD_PORT%" "%OLD_YEAR%"
 
 rem --- Step 3: Copy active Settings.json to temp for editing ---
 copy /Y "%SETTINGS_PATH%" "%EDIT_TEMP%" >nul
 if errorlevel 1 (
-    echo ERROR: Cannot copy Settings.json to temp file.
+    call :UI configure.copy_failed
     goto :CLEANUP_TEMPS_ERR
 )
 
 rem --- Step 3b: Pretty-format temp copy once for Notepad readability ---
 "%HELPER%" format-json --settings "%EDIT_TEMP%" --line-ending crlf
 if errorlevel 1 (
-    echo ERROR: Cannot format Settings.json because the temporary copy contains invalid JSON.
+    call :UI configure.format_failed
     goto :CLEANUP_TEMPS_ERR
 )
 
@@ -187,14 +198,11 @@ notepad.exe "%EDIT_TEMP%"
 "%HELPER%" validate --settings "%EDIT_TEMP%" > "%HELPER_OUTPUT%" 2>&1
 if not errorlevel 1 goto :EDIT_VALID
 
-echo.
-echo === VALIDATION FAILED ===
+call :UI configure.validation_header
 type "%HELPER_OUTPUT%"
-echo ========================
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo.
-echo The edited Settings.json is invalid.
-choice /C YN /M "Open editor again to fix? [Y=yes, N=cancel]"
+call :UI configure.validation_footer
+call :CHOICE 12
 if errorlevel 2 goto :CANCELLED
 goto :EDIT_LOOP
 
@@ -208,9 +216,7 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
     if /I "%%A"=="year" set "NEW_YEAR=%%B"
 )
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-echo.
-echo Old port: %OLD_PORT%   New port: %NEW_PORT%
-echo Old year: %OLD_YEAR%   New year: %NEW_YEAR%
+call :UI configure.old_new "%OLD_PORT%" "%NEW_PORT%" "%OLD_YEAR%" "%NEW_YEAR%"
 
 rem --- Step 6: Build endpoint temp if port or year changed ---
 if not defined NEW_PORT set "NEW_PORT=%OLD_PORT%"
@@ -218,8 +224,7 @@ if not defined NEW_YEAR set "NEW_YEAR=%OLD_YEAR%"
 if /I "%NEW_PORT%"=="%OLD_PORT%" if /I "%NEW_YEAR%"=="%OLD_YEAR%" goto :NO_ENDPOINT_CHANGE
 
 if not exist "%ENDPOINT_PATH%" (
-    echo WARNING: client-endpoint.txt does not exist; it will not be updated.
-    echo After applying the new port, update client connection settings manually.
+    call :UI configure.endpoint_missing
     goto :NO_ENDPOINT_CHANGE
 )
 call :BUILD_ENDPOINT_TEMP
@@ -229,18 +234,17 @@ set "ENDPOINT_MANAGED=1"
 :NO_ENDPOINT_CHANGE
 
 rem --- Step 7: Confirm ---
-echo.
 if defined ENDPOINT_MANAGED (
-    echo Will update: Settings.json + client-endpoint.txt
+    call :UI configure.confirm_both
 ) else (
-    echo Will update: Settings.json only
+    call :UI configure.confirm_settings
 )
-choice /C YN /M "Apply this configuration? Stop service, replace, start, verify. [Y=apply, N=cancel]"
+call :UI configure.apply_menu
+call :CHOICE 12
 if errorlevel 2 goto :CANCELLED
 
 rem --- Step 8: Stop service gracefully ---
-echo.
-echo Stopping %SERVICE_NAME%...
+call :UI configure.stopping "%SERVICE_NAME%"
 sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
 if not errorlevel 1 goto :SERVICE_STOPPED
 
@@ -252,24 +256,23 @@ sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
 if not errorlevel 1 goto :SERVICE_STOPPED
 set /a WAIT_SECONDS+=1
 set /a PROGRESS_MOD=WAIT_SECONDS %% 30
-if %PROGRESS_MOD%==0 echo Still waiting for STOPPED... %WAIT_SECONDS%s / %STOP_TIMEOUT_SECONDS%s
+if %PROGRESS_MOD%==0 call :UI configure.wait_stopped "%WAIT_SECONDS%" "%STOP_TIMEOUT_SECONDS%"
 if %WAIT_SECONDS% GEQ %STOP_TIMEOUT_SECONDS% goto :STOP_FAILED
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_STOPPED_LOOP
 
 :SERVICE_STOPPED
-echo %SERVICE_NAME% is STOPPED.
+call :UI configure.stopped "%SERVICE_NAME%"
 
 rem --- Step 9: Apply config transaction (atomic replace + snapshot) ---
-echo Applying configuration...
+call :UI configure.applying
 if defined ENDPOINT_MANAGED (
     "%HELPER%" settings-transaction-apply --data-dir "%DATA_DIR%" --settings-temp "%EDIT_TEMP%" --rollback-dir "%ROLLBACK_DIR%" --endpoint-temp "%ENDPOINT_TEMP%"
 ) else (
     "%HELPER%" settings-transaction-apply --data-dir "%DATA_DIR%" --settings-temp "%EDIT_TEMP%" --rollback-dir "%ROLLBACK_DIR%"
 )
 if errorlevel 1 (
-    echo ERROR: settings-transaction-apply failed; files may be rolled back already.
-    echo Review the output above and check %DATA_DIR%\Settings.json manually.
+    call :UI configure.apply_failed "%DATA_DIR%"
     call :START_SERVICE_BEST_EFFORT
     goto :CLEANUP_TEMPS_ERR
 )
@@ -282,7 +285,7 @@ if errorlevel 1 goto :START_FAILED_ROLLBACK
 :SKIP_FIREWALL
 
 rem --- Step 11: Start service ---
-echo Starting %SERVICE_NAME%...
+call :UI configure.starting "%SERVICE_NAME%"
 sc.exe start "%SERVICE_NAME%" >nul
 if errorlevel 1 goto :START_FAILED_ROLLBACK
 
@@ -295,41 +298,33 @@ sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]1[ ]*STOPPED" >nul
 if not errorlevel 1 goto :START_FAILED_ROLLBACK
 set /a WAIT_SECONDS+=1
 set /a PROGRESS_MOD=WAIT_SECONDS %% 30
-if %PROGRESS_MOD%==0 echo Waiting for RUNNING... %WAIT_SECONDS%s / %START_TIMEOUT_SECONDS%s
+if %PROGRESS_MOD%==0 call :UI configure.wait_running "%WAIT_SECONDS%" "%START_TIMEOUT_SECONDS%"
 if %WAIT_SECONDS% GEQ %START_TIMEOUT_SECONDS% goto :START_FAILED_ROLLBACK
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_RUNNING_LOOP
 
 :HEALTH_CHECK
-echo %SERVICE_NAME% reached RUNNING; checking PING/PONG on port %NEW_PORT%...
+call :UI configure.health "%SERVICE_NAME%" "%NEW_PORT%"
 "%HELPER%" health --port %NEW_PORT% --timeout-ms 15000 >nul 2>&1
 if errorlevel 1 goto :HEALTH_FAILED_ROLLBACK
 
 rem --- Step 12: Commit transaction ---
-echo PING/PONG confirmed. Committing transaction...
+call :UI configure.committing
 "%HELPER%" settings-transaction-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_DIR%"
 if errorlevel 1 (
-    echo WARNING: settings-transaction-commit failed; rollback-dir may remain: %ROLLBACK_DIR%
-    echo The new configuration is active and the service is healthy. Do NOT roll back.
-    echo Remove %ROLLBACK_DIR% manually when safe.
+    call :UI configure.commit_warning "%ROLLBACK_DIR%"
 )
 
-echo.
-echo === Configuration applied successfully ===
-echo Instance : %SERVICE_INSTANCE% ^(%SERVICE_NAME%^)
-echo New port : %NEW_PORT%
-echo Data dir : %DATA_DIR%
-echo Logs     : %DATA_DIR%\logs
+call :UI configure.success "%SERVICE_INSTANCE%" "%SERVICE_NAME%" "%NEW_PORT%" "%DATA_DIR%"
 goto :CLEANUP_TEMPS_OK
 
 rem ============================================================
 :START_FAILED_ROLLBACK
-echo ERROR: Service failed to reach RUNNING state after config apply.
+call :UI configure.start_failed
 goto :DO_ROLLBACK
 
 :HEALTH_FAILED_ROLLBACK
-echo ERROR: Service is RUNNING but PING/PONG failed on port %NEW_PORT%.
-echo Initiating rollback...
+call :UI configure.health_failed "%NEW_PORT%"
 
 rem ============================================================
 rem ROLLBACK SEQUENCE
@@ -353,12 +348,12 @@ sc.exe query "%SERVICE_NAME%" | findstr.exe /R /C:"[ ]2[ ]*START_PENDING" >nul
 if not errorlevel 1 goto :ROLLBACK_ISSUE_STOP
 
 rem Unknown/unsupported transitional state - do not touch files
-echo ERROR: Service is in an unexpected state; cannot safely perform rollback.
+call :UI configure.unexpected_state
 sc.exe query "%SERVICE_NAME%"
 goto :ROLLBACK_CANNOT_STOP
 
 :ROLLBACK_ISSUE_STOP
-echo Stopping %SERVICE_NAME% before rollback...
+call :UI configure.stopping_rollback "%SERVICE_NAME%"
 sc.exe stop "%SERVICE_NAME%" >nul 2>&1
 
 :ROLLBACK_WAIT_STOPPED
@@ -383,43 +378,30 @@ if not errorlevel 1 (
 
 set /a RB_WAIT+=1
 set /a PROGRESS_MOD=RB_WAIT %% 30
-if %PROGRESS_MOD%==0 echo Waiting for STOPPED (rollback)... %RB_WAIT%s / %STOP_TIMEOUT_SECONDS%s
+if %PROGRESS_MOD%==0 call :UI configure.wait_rollback "%RB_WAIT%" "%STOP_TIMEOUT_SECONDS%"
 if %RB_WAIT% GEQ %STOP_TIMEOUT_SECONDS% goto :ROLLBACK_CANNOT_STOP
 ping.exe 127.0.0.1 -n 2 >nul
 goto :ROLLBACK_WAIT_LOOP
 
 :ROLLBACK_CANNOT_STOP
-echo ERROR: Service did not reach STOPPED within %STOP_TIMEOUT_SECONDS% seconds.
-echo Rollback aborted to preserve data integrity. No files were restored.
-echo   Service    : %SERVICE_NAME%
+call :UI configure.rollback_cannot_stop "%STOP_TIMEOUT_SECONDS%" "%SERVICE_NAME%" "%DATA_DIR%" "%ROLLBACK_DIR%" "%OLD_PORT%" "%NEW_PORT%"
 sc.exe query "%SERVICE_NAME%"
-echo   Data-dir   : %DATA_DIR%
-echo   Rollback   : %ROLLBACK_DIR%
-echo   Old port   : %OLD_PORT%
-echo   New port   : %NEW_PORT%
-echo Snapshots preserved in rollback-dir for manual recovery.
 goto :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
 
 :ROLLBACK_DO_FILES
-echo Service is STOPPED. Restoring files...
+call :UI configure.restoring_files
 "%HELPER%" settings-transaction-rollback --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_DIR%"
 if errorlevel 1 (
-    echo ERROR: settings-transaction-rollback failed. Snapshots preserved.
-    echo   Rollback-dir: %ROLLBACK_DIR%
-    echo Do NOT commit; old configuration may be partially restored. Recover manually.
+    call :UI configure.rollback_files_failed "%ROLLBACK_DIR%"
     goto :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
 )
-echo Files restored to old configuration.
+call :UI configure.files_restored
 
 rem --- Restore firewall if it was modified ---
 if not defined FIREWALL_MODIFIED if not defined FIREWALL_MUTATION_STARTED goto :ROLLBACK_FIREWALL_DONE
 call :RESTORE_FIREWALL_CHECKED
 if errorlevel 1 (
-    echo ERROR: Firewall restore failed for installer-owned rule.
-    echo   The old service configuration has been restored in files, but the
-    echo   firewall rule may still point to the new port %NEW_PORT%.
-    echo   Snapshots preserved; do NOT commit. Restore firewall manually.
-    echo   Rollback-dir: %ROLLBACK_DIR%
+    call :UI configure.firewall_restore_failed "%NEW_PORT%" "%ROLLBACK_DIR%"
     rem Old service can still be started (files are restored), but rollback incomplete
     call :START_SERVICE_BEST_EFFORT
     goto :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
@@ -427,7 +409,7 @@ if errorlevel 1 (
 :ROLLBACK_FIREWALL_DONE
 
 rem --- Restart service on old configuration ---
-echo Restarting service on old configuration (port %OLD_PORT%)...
+call :UI configure.restart_old "%OLD_PORT%"
 sc.exe start "%SERVICE_NAME%" >nul
 set /a RB_WAIT=0
 :ROLLBACK_START_LOOP
@@ -441,44 +423,37 @@ ping.exe 127.0.0.1 -n 2 >nul
 goto :ROLLBACK_START_LOOP
 
 :ROLLBACK_START_FAILED
-echo ERROR: Old service did not reach RUNNING after rollback.
-echo Snapshots preserved for manual recovery: %ROLLBACK_DIR%
-echo Check %DATA_DIR%\logs for details.
+call :UI configure.old_start_failed "%ROLLBACK_DIR%" "%DATA_DIR%"
 goto :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
 
 :ROLLBACK_HEALTH
 "%HELPER%" health --port %OLD_PORT% --timeout-ms 15000 >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Old service is RUNNING but PING/PONG on port %OLD_PORT% failed.
-    echo Snapshots preserved for manual recovery: %ROLLBACK_DIR%
-    echo Check %DATA_DIR%\logs for details.
+    call :UI configure.old_health_failed "%OLD_PORT%" "%ROLLBACK_DIR%" "%DATA_DIR%"
     goto :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
 )
-echo Rollback successful. Service is RUNNING on old port %OLD_PORT%.
+call :UI configure.rollback_success "%OLD_PORT%"
 
 rem Only commit after old config health is confirmed
 "%HELPER%" settings-transaction-commit --data-dir "%DATA_DIR%" --rollback-dir "%ROLLBACK_DIR%"
 if errorlevel 1 (
-    echo WARNING: settings-transaction-commit failed; rollback-dir remains: %ROLLBACK_DIR%
-    echo Remove it manually when safe.
+    call :UI configure.rollback_commit_warning "%ROLLBACK_DIR%"
 )
 goto :CLEANUP_TEMPS_ERR
 
 rem ============================================================
 :CANCELLED
-echo Configuration cancelled. No changes were made.
+call :UI configure.cancelled
 goto :CLEANUP_TEMPS_OK
 
 :STOP_FAILED
-echo ERROR: Service did not reach STOPPED state within %STOP_TIMEOUT_SECONDS% seconds.
-echo No configuration changes were made.
+call :UI configure.stop_failed "%STOP_TIMEOUT_SECONDS%"
 sc.exe query "%SERVICE_NAME%"
 goto :CLEANUP_TEMPS_ERR
 
 :INVALID_INSTANCE
-echo ERROR: Invalid service instance id "%SERVICE_INSTANCE%".
-echo Use 1-32 ASCII letters, digits, underscore or hyphen; first character must be alphanumeric.
-pause
+call :UI common.invalid_instance "%SERVICE_INSTANCE%"
+call :PAUSE_UI
 exit /b 1
 
 rem ============================================================
@@ -488,14 +463,14 @@ rem ============================================================
 del /Q "%EDIT_TEMP%"     >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-pause
+call :PAUSE_UI
 exit /b 0
 
 :CLEANUP_TEMPS_ERR
 del /Q "%EDIT_TEMP%"     >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-pause
+call :PAUSE_UI
 exit /b 1
 
 :CLEANUP_TEMPS_ERR_KEEP_ROLLBACK
@@ -503,7 +478,7 @@ rem Rollback-dir intentionally preserved for manual recovery
 del /Q "%EDIT_TEMP%"     >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-pause
+call :PAUSE_UI
 exit /b 1
 
 rem ============================================================
@@ -530,7 +505,7 @@ for /f "usebackq delims=" %%L in ("%ENDPOINT_PATH%") do (
 )
 endlocal
 if not exist "%ENDPOINT_TEMP%" (
-    echo ERROR: Failed to build endpoint temp file.
+    call :UI configure.endpoint_temp_failed
     exit /b 1
 )
 exit /b 0
@@ -562,15 +537,15 @@ if not errorlevel 1 (
     goto :DO_FIREWALL_UPDATE
 )
 
-echo NOTE: No installer-owned firewall rule found; skipping firewall update.
+call :UI configure.firewall_none
 exit /b 0
 
 :DO_FIREWALL_UPDATE
 if /I "%MATCHED_FIREWALL_TYPE%"=="portable" (
-    echo Updating firewall rule "%MATCHED_FIREWALL_RULE%": port %OLD_PORT% -^> %NEW_PORT%
+    call :UI configure.firewall_update "%MATCHED_FIREWALL_RULE%" "%OLD_PORT%" "%NEW_PORT%"
     netsh.exe advfirewall firewall set rule name="%MATCHED_FIREWALL_RULE%" new localport=%NEW_PORT% >nul 2>&1
     if errorlevel 1 (
-        echo ERROR: Could not update portable firewall rule "%MATCHED_FIREWALL_RULE%".
+        call :UI configure.firewall_update_failed "%MATCHED_FIREWALL_RULE%"
         exit /b 1
     )
     set "FIREWALL_MODIFIED=1"
@@ -578,22 +553,22 @@ if /I "%MATCHED_FIREWALL_TYPE%"=="portable" (
 )
 
 rem PowerShell-style rule: delete old name, create new name with new port
-echo Renaming firewall rule: "%OLD_PS_RULE_NAME%" -^> "%NEW_PS_RULE_NAME%"
+call :UI configure.firewall_rename "%OLD_PS_RULE_NAME%" "%NEW_PS_RULE_NAME%"
 rem Export the existing rule's remoteport/protocol/direction before deletion
 rem (contract baseline preserved: inbound TCP allow, new TCP port, exact SearchEngine.exe program binding, enabled)
 if not defined PROGRAM_PATH (
-    echo ERROR: PROGRAM_PATH is empty; cannot safely recreate PowerShell-owned firewall rule.
+    call :UI configure.firewall_program_empty
     exit /b 1
 )
 netsh.exe advfirewall firewall delete rule name="%OLD_PS_RULE_NAME%" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Could not delete old PowerShell firewall rule "%OLD_PS_RULE_NAME%".
+    call :UI configure.firewall_delete_old_failed "%OLD_PS_RULE_NAME%"
     exit /b 1
 )
 set "FIREWALL_MUTATION_STARTED=1"
 netsh.exe advfirewall firewall add rule name="%NEW_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%NEW_PORT% program="%PROGRAM_PATH%" enable=yes >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Could not create new PowerShell firewall rule "%NEW_PS_RULE_NAME%".
+    call :UI configure.firewall_create_new_failed "%NEW_PS_RULE_NAME%"
     exit /b 1
 )
 set "FIREWALL_MODIFIED=1"
@@ -602,19 +577,19 @@ exit /b 0
 :RESTORE_FIREWALL_CHECKED
 rem Restore firewall to old state. Returns errorlevel 1 if known rule restore fails.
 if /I "%MATCHED_FIREWALL_TYPE%"=="portable" (
-    echo Restoring firewall rule "%MATCHED_FIREWALL_RULE%": port %NEW_PORT% -^> %OLD_PORT%
+    call :UI configure.firewall_restore "%MATCHED_FIREWALL_RULE%" "%NEW_PORT%" "%OLD_PORT%"
     netsh.exe advfirewall firewall set rule name="%MATCHED_FIREWALL_RULE%" new localport=%OLD_PORT% >nul 2>&1
     if errorlevel 1 (
-        echo ERROR: Could not restore portable firewall rule "%MATCHED_FIREWALL_RULE%".
+        call :UI configure.firewall_restore_failed_rule "%MATCHED_FIREWALL_RULE%"
         exit /b 1
     )
     exit /b 0
 )
 
 if /I "%MATCHED_FIREWALL_TYPE%"=="ps" (
-    echo Restoring firewall rule: "%NEW_PS_RULE_NAME%" -^> "%OLD_PS_RULE_NAME%"
+    call :UI configure.firewall_restore_rename "%NEW_PS_RULE_NAME%" "%OLD_PS_RULE_NAME%"
     if not defined PROGRAM_PATH (
-        echo ERROR: PROGRAM_PATH is empty; cannot safely restore PowerShell-owned firewall rule.
+        call :UI configure.firewall_program_restore_empty
         exit /b 1
     )
     rem NEW-rule: delete only if it exists; always check delete errorlevel.
@@ -622,7 +597,7 @@ if /I "%MATCHED_FIREWALL_TYPE%"=="ps" (
     if not errorlevel 1 (
         netsh.exe advfirewall firewall delete rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
         if errorlevel 1 (
-            echo ERROR: Could not delete NEW PowerShell firewall rule "%NEW_PS_RULE_NAME%".
+            call :UI configure.firewall_delete_new_failed "%NEW_PS_RULE_NAME%"
             exit /b 1
         )
     )
@@ -630,19 +605,19 @@ if /I "%MATCHED_FIREWALL_TYPE%"=="ps" (
     rem OLD-rule: create/restore with checked errorlevel.
     netsh.exe advfirewall firewall add rule name="%OLD_PS_RULE_NAME%" dir=in action=allow protocol=TCP localport=%OLD_PORT% program="%PROGRAM_PATH%" enable=yes >nul 2>&1
     if errorlevel 1 (
-        echo ERROR: Could not restore PowerShell firewall rule "%OLD_PS_RULE_NAME%".
+        call :UI configure.firewall_restore_old_failed "%OLD_PS_RULE_NAME%"
         exit /b 1
     )
 
     rem Contract check: OLD must exist; NEW must not exist after restore.
     netsh.exe advfirewall firewall show rule name="%OLD_PS_RULE_NAME%" >nul 2>&1
     if errorlevel 1 (
-        echo ERROR: Firewall restore verification failed: OLD rule "%OLD_PS_RULE_NAME%" not found.
+        call :UI configure.firewall_verify_old_missing "%OLD_PS_RULE_NAME%"
         exit /b 1
     )
     netsh.exe advfirewall firewall show rule name="%NEW_PS_RULE_NAME%" >nul 2>&1
     if not errorlevel 1 (
-        echo ERROR: Firewall restore verification failed: NEW rule "%NEW_PS_RULE_NAME%" still exists.
+        call :UI configure.firewall_verify_new_exists "%NEW_PS_RULE_NAME%"
         exit /b 1
     )
     exit /b 0
@@ -652,4 +627,22 @@ exit /b 0
 
 :START_SERVICE_BEST_EFFORT
 sc.exe start "%SERVICE_NAME%" >nul 2>&1
+exit /b 0
+
+:CHOICE
+call :UI common.select
+choice.exe /C %~1 /N /M ""
+exit /b %ERRORLEVEL%
+
+:PAUSE_UI
+if /I "%UI_LANGUAGE%"=="auto" (
+    pause
+) else (
+    call :UI common.press_any_key
+    pause >nul
+)
+exit /b 0
+
+:UI
+"%HELPER%" script-message --language "%UI_LANGUAGE%" --id "%~1" --arg1 "%~2" --arg2 "%~3" --arg3 "%~4" --arg4 "%~5" --arg5 "%~6" --arg6 "%~7" --arg7 "%~8"
 exit /b 0

@@ -6,6 +6,8 @@ function Assert-SearchEngineConfigSourceFreshness {
 
     $relativeSources = @(
         'tools\config\main.cpp',
+        'tools\config\ScriptMessages.cpp',
+        'tools\config\ScriptMessages.h',
         'tools\config\RuntimeDataTransaction.cpp',
         'tools\config\RuntimeDataTransaction.h'
     )

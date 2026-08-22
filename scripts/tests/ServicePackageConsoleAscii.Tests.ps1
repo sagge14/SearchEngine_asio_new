@@ -202,8 +202,8 @@ if ($updateStart -ge 0) {
 Assert-True (-not $installText.Contains(
     'old settings, indexes and logs will be deleted'
 )) '5. no-backup text does not claim ProgramData will be deleted'
-Assert-True ($installText.Contains('Skipping the optional export does not delete ProgramData')) (
-    '5. no-backup text says ProgramData is preserved'
+Assert-True ($installText.Contains('call :UI install.no_export')) (
+    '5. no-backup path uses the localized ProgramData-preservation message'
 )
 
 $rollbackStart = $installText.IndexOf("`n:ROLLBACK_REINSTALL")
@@ -257,8 +257,8 @@ Assert-True ($packagerText.Contains('validate-prefix-map')) (
 Assert-True ($packagerText.Contains('Portable prefix_map.json')) (
     '7. Packager missing-template error names prefix_map.json'
 )
-Assert-True ($installText.Contains('Is GET_ATTACHMENTS / "Save attachments" used on this server instance?')) (
-    '7. Fresh installer has a GET_ATTACHMENTS choice'
+Assert-True ($installText.Contains('call :UI install.attachments_menu')) (
+    '7. Fresh installer has a localized GET_ATTACHMENTS choice'
 )
 Assert-True ($installText.Contains(':FRESH_PREFIX_MAP_YES')) (
     '7. Fresh YES path is a separate label'
@@ -314,15 +314,18 @@ Assert-True (-not $asioCpp.Contains('make_unique<GetAttachmentsCmd>()')) (
 )
 
 # 8. SVC-002 LocalSystem + SVC-011 no hidden production D:\ fallback.
-Assert-True ($installText.Contains('Service account: LocalSystem')) (
-    '8. Installer prints Service account: LocalSystem'
+Assert-True ($installText.Contains('call :UI install.localsystem')) (
+    '8. Installer delegates LocalSystem guidance to localized UI'
 )
-Assert-True ($installText.Contains(
+$scriptMessagesText = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot 'tools\config\ScriptMessages.cpp')
+)
+Assert-True ($scriptMessagesText.Contains(
     'Runtime paths must be accessible to LocalSystem.'
-)) '8. Installer warns that runtime paths must be accessible to LocalSystem'
-Assert-True ($installText.Contains(
+)) '8. English catalog warns that runtime paths must be accessible to LocalSystem'
+Assert-True ($scriptMessagesText.Contains(
     'User mapped drives are not available to the Windows service.'
-)) '8. Installer warns that user mapped drives are not available'
+)) '8. English catalog warns that user mapped drives are not available'
 $registerStart = $installText.IndexOf("`n:REGISTER_SERVICE")
 Assert-True ($registerStart -ge 0) '8. REGISTER_SERVICE label found'
 if ($registerStart -ge 0) {
@@ -416,20 +419,20 @@ Assert-True ($configureText.Contains('--purpose configure')) (
 )
 
 # 9a. SVC-001 configure picker: common installed-instance selection (Register BAT parity).
-Assert-True ($configureText.Contains('if errorlevel 3 goto :PICKER_NO_INSTALLED')) (
+Assert-True ($configureText.Contains('if "%PICKER_EXIT%"=="3" goto :PICKER_NO_INSTALLED')) (
     '9a. Configure picker distinguishes helper exit code 3 (no installed services)'
 )
-Assert-True ($configureText.Contains('if errorlevel 2 goto :PICKER_CANCELLED')) (
+Assert-True ($configureText.Contains('if "%PICKER_EXIT%"=="2" goto :PICKER_CANCELLED')) (
     '9a. Configure picker distinguishes helper exit code 2 (cancelled)'
 )
-Assert-True ($configureText.Contains('if errorlevel 1 goto :PICKER_HELPER_FAILED')) (
+Assert-True ($configureText.Contains('if not "%PICKER_EXIT%"=="0" goto :PICKER_HELPER_FAILED')) (
     '9a. Configure picker distinguishes helper exit code 1 (helper failure)'
 )
-Assert-True ($configureText.Contains('No installed SearchEngine services were found.')) (
-    '9a. Configure picker reports no installed services'
+Assert-True ($configureText.Contains('call :UI configure.no_services')) (
+    '9a. Configure picker reports no installed services in the selected language'
 )
-Assert-True ($configureText.Contains('SearchEngineConfig could not list installed services.')) (
-    '9a. Configure picker reports helper failure'
+Assert-True ($configureText.Contains('call :UI configure.helper_failed')) (
+    '9a. Configure picker reports helper failure in the selected language'
 )
 Assert-True ($configureText.Contains('tokens=1,* delims==')) (
     '9a. Configure picker parses helper output with tokens=1,* delims=='
@@ -439,6 +442,9 @@ Assert-True ($configureText.Contains('set "SELECTED_%%A=%%B"')) (
 )
 Assert-True ($configureText.Contains('SELECTED_instance')) (
     '9a. Configure picker reads SELECTED_instance from helper output'
+)
+Assert-True ($configureText.Contains('SELECTED_language')) (
+    '9a. Configure picker propagates the selected language'
 )
 
 $pickerBlockStart = $configureText.IndexOf('rem No argument: use interactive picker')
@@ -540,12 +546,12 @@ Assert-True ($configureText.Contains('program="%PROGRAM_PATH%" enable=yes')) (
 )
 
 # 9c. SVC-001 firewall rollback: NEW delete failure must be checked.
-$restorePatternHasError = '(?s):RESTORE_FIREWALL_CHECKED.*Could not delete NEW PowerShell firewall rule.*exit /b 1'
+$restorePatternHasError = '(?s):RESTORE_FIREWALL_CHECKED.*configure\.firewall_delete_new_failed.*exit /b 1'
 Assert-True ([regex]::IsMatch($configureText, $restorePatternHasError)) (
     '9c. RESTORE_FIREWALL_CHECKED has checked error path for failed delete NEW rule'
 )
 
-$restorePatternOrder = '(?s):RESTORE_FIREWALL_CHECKED.*Could not delete NEW PowerShell firewall rule.*exit /b 1.*exit /b 0'
+$restorePatternOrder = '(?s):RESTORE_FIREWALL_CHECKED.*configure\.firewall_delete_new_failed.*exit /b 1.*exit /b 0'
 Assert-True ([regex]::IsMatch($configureText, $restorePatternOrder)) (
     '9c. RESTORE_FIREWALL_CHECKED aborts (exit /b 1) before rollback success (exit /b 0)'
 )
@@ -561,6 +567,89 @@ Assert-True ($protectedSection.Contains("'Configure-SearchEngineService.bat'")) 
     '9. Packager protectedFiles list includes Configure-SearchEngineService.bat'
 )
 
+# 10. Installer/uninstaller/configurator keep the selected UI language end-to-end.
+$uninstallBat = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\Uninstall-SearchEngineService-Windows7.bat'
+$uninstallText = [IO.File]::ReadAllText($uninstallBat)
+$localizedScripts = @(
+    @{ Name = 'installer'; Text = $installText },
+    @{ Name = 'uninstaller'; Text = $uninstallText },
+    @{ Name = 'configurator'; Text = $configureText }
+)
+foreach ($localizedScript in $localizedScripts) {
+    Assert-True ($localizedScript.Text.Contains('set "UI_LANGUAGE=')) (
+        "10. $($localizedScript.Name) initializes UI_LANGUAGE"
+    )
+    Assert-True ($localizedScript.Text.Contains('SELECTED_language')) (
+        "10. $($localizedScript.Name) reads the selected language"
+    )
+    Assert-True ($localizedScript.Text.Contains('script-message --language')) (
+        "10. $($localizedScript.Name) delegates user text to Unicode helper"
+    )
+
+    $labels = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($match in [regex]::Matches(
+        $localizedScript.Text,
+        '(?im)^:([a-z0-9_]+)\s*$'
+    )) {
+        [void]$labels.Add($match.Groups[1].Value)
+    }
+    foreach ($match in [regex]::Matches(
+        $localizedScript.Text,
+        '(?im)\b(?:goto|call)\s+:([a-z0-9_]+)'
+    )) {
+        $label = $match.Groups[1].Value
+        Assert-True ($labels.Contains($label)) (
+            "10. $($localizedScript.Name) referenced label exists: $label"
+        )
+    }
+}
+Assert-True (-not $uninstallText.Contains('Backup before uninstall:')) (
+    '10. Uninstaller has no hard-coded English backup prompt after language selection'
+)
+Assert-True (-not $configureText.Contains('Will update: Settings.json only')) (
+    '10. Configurator has no hard-coded English confirmation after language selection'
+)
+Assert-True (-not $installText.Contains('Installation completed successfully.')) (
+    '10. Installer has no hard-coded English success text after language selection'
+)
+
+$catalogIds = [System.Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::Ordinal
+)
+$catalogPattern = '(?m)^\s*(?:\{\s*)?L"([a-z][a-z0-9_.-]+)"\s*,'
+foreach ($match in [regex]::Matches($scriptMessagesText, $catalogPattern)) {
+    [void]$catalogIds.Add($match.Groups[1].Value)
+}
+$literalUiPattern = '(?im)call\s+:UI\s+"?([a-z][a-z0-9_.-]+)"?'
+foreach ($localizedScript in $localizedScripts) {
+    foreach ($match in [regex]::Matches($localizedScript.Text, $literalUiPattern)) {
+        $id = $match.Groups[1].Value
+        Assert-True ($catalogIds.Contains($id)) (
+            "10. $($localizedScript.Name) message id exists: $id"
+        )
+    }
+}
+foreach ($match in [regex]::Matches(
+    $installText,
+    'PREFIX_MAP_WARN_ID=([a-z][a-z0-9_.-]+)'
+)) {
+    $id = $match.Groups[1].Value
+    Assert-True ($catalogIds.Contains($id)) "10. Dynamic installer message id exists: $id"
+}
+
+$configMainText = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot 'tools\config\main.cpp')
+)
+Assert-True ($configMainText.Contains('writeLanguageSelection(outputPath, language)')) (
+    '10. Installed-instance picker writes language even on cancel/no-services paths'
+)
+Assert-True ($configMainText.Contains('command == L"script-message"')) (
+    '10. SearchEngineConfig exposes script-message command'
+)
+
 # 6. SearchEngineConfig freshness considers RuntimeDataTransaction sources.
 . (Join-Path $scriptsRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
 $freshRoot = Join-Path ([IO.Path]::GetTempPath()) (
@@ -569,17 +658,23 @@ $freshRoot = Join-Path ([IO.Path]::GetTempPath()) (
 New-Item -ItemType Directory -Path (Join-Path $freshRoot 'tools\config') | Out-Null
 $fakeExe = Join-Path $freshRoot 'SearchEngineConfig.exe'
 $fakeMain = Join-Path $freshRoot 'tools\config\main.cpp'
+$fakeMessagesCpp = Join-Path $freshRoot 'tools\config\ScriptMessages.cpp'
+$fakeMessagesH = Join-Path $freshRoot 'tools\config\ScriptMessages.h'
 $fakeCpp = Join-Path $freshRoot 'tools\config\RuntimeDataTransaction.cpp'
 $fakeH = Join-Path $freshRoot 'tools\config\RuntimeDataTransaction.h'
 try {
     'exe' | Set-Content -LiteralPath $fakeExe -Encoding ASCII
     'main' | Set-Content -LiteralPath $fakeMain -Encoding ASCII
+    'messages cpp' | Set-Content -LiteralPath $fakeMessagesCpp -Encoding ASCII
+    'messages hdr' | Set-Content -LiteralPath $fakeMessagesH -Encoding ASCII
     'cpp' | Set-Content -LiteralPath $fakeCpp -Encoding ASCII
     'hdr' | Set-Content -LiteralPath $fakeH -Encoding ASCII
     $old = [DateTime]::UtcNow.AddHours(-2)
     $mid = [DateTime]::UtcNow.AddHours(-1)
     (Get-Item -LiteralPath $fakeExe).LastWriteTimeUtc = $mid
     (Get-Item -LiteralPath $fakeMain).LastWriteTimeUtc = $old
+    (Get-Item -LiteralPath $fakeMessagesCpp).LastWriteTimeUtc = $old
+    (Get-Item -LiteralPath $fakeMessagesH).LastWriteTimeUtc = $old
     (Get-Item -LiteralPath $fakeH).LastWriteTimeUtc = $old
     (Get-Item -LiteralPath $fakeCpp).LastWriteTimeUtc = $old
     try {

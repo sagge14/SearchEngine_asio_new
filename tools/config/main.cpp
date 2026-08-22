@@ -9,6 +9,7 @@
 #include "MyUtils/FileExtensionContract.h"
 #include "MyUtils/WindowsPath.h"
 #include "RuntimeDataTransaction.h"
+#include "ScriptMessages.h"
 #include "SearchServer/QueryWordMatch.h"
 
 #include <algorithm>
@@ -195,6 +196,64 @@ UiLanguage interactiveLanguage(const std::vector<std::wstring>& args)
         }
     }
     return chooseLanguage();
+}
+
+UiLanguage requiredUiLanguage(const std::vector<std::wstring>& args)
+{
+    const std::wstring value = requiredOption(args, L"--language");
+    if (value == L"ru") {
+        return UiLanguage::Russian;
+    }
+    if (value == L"en") {
+        return UiLanguage::English;
+    }
+    throw std::runtime_error("language must be ru or en");
+}
+
+void writeLanguageSelection(const fs::path& outputPath, UiLanguage language)
+{
+    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("cannot write language selection");
+    }
+    output << "language="
+           << (language == UiLanguage::Russian ? "ru" : "en") << "\r\n";
+    output.close();
+    if (!output) {
+        throw std::runtime_error("cannot finish language selection");
+    }
+}
+
+int chooseLanguageCommand(const std::vector<std::wstring>& args)
+{
+    writeLanguageSelection(
+        fs::path(requiredOption(args, L"--output")),
+        chooseLanguage());
+    return 0;
+}
+
+int scriptMessageCommand(const std::vector<std::wstring>& args)
+{
+    const UiLanguage language = requiredUiLanguage(args);
+    const std::wstring id = requiredOption(args, L"--id");
+    std::vector<std::wstring> arguments;
+    arguments.reserve(8);
+    for (int index = 1; index <= 8; ++index) {
+        arguments.emplace_back(
+            option(args, L"--arg" + std::to_wstring(index)).value_or(L""));
+    }
+    writeInteractive(script_messages::render(
+        id,
+        language == UiLanguage::Russian,
+        arguments));
+    return 0;
+}
+
+int validateScriptMessagesCommand()
+{
+    script_messages::validateCatalog();
+    std::cout << "script_messages_valid=1\n";
+    return 0;
 }
 
 bool isValidInstanceId(const std::wstring& value)
@@ -504,6 +563,7 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
     }
 
     const UiLanguage language = chooseLanguage();
+    writeLanguageSelection(outputPath, language);
     const std::vector<InstalledSearchEngineService> instances =
         installedSearchEngineInstances();
     if (instances.empty()) {
@@ -567,7 +627,7 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
             ? L"Введите номер из списка.\n" : L"Enter a number from the list.\n");
     }
 
-    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    std::ofstream output(outputPath, std::ios::binary | std::ios::app);
     if (!output) {
         throw std::runtime_error("cannot write service selection");
     }
@@ -2329,9 +2389,12 @@ void printUsage()
         << "            [--opis-base-dir PATH] [--f12-base-dir PATH]\n"
         << "  configure-interactive --template FILE --output FILE\n"
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
+        << "  choose-language --output FILE\n"
         << "  choose-instance --default ID --output FILE\n"
         << "  choose-installed-instance --output FILE\n"
         << "            [--purpose uninstall|register-auth|configure]\n"
+        << "  script-message --language ru|en --id ID [--arg1 VALUE ...]\n"
+        << "  validate-script-messages\n"
         << "  inspect-installed [--instance ID]\n"
         << "  check-port --port N\n"
         << "  health --port N [--timeout-ms N]\n"
@@ -2387,11 +2450,20 @@ int wmain(int argc, wchar_t* argv[])
         if (command == L"configure-interactive") {
             return configureInteractiveCommand(args);
         }
+        if (command == L"choose-language") {
+            return chooseLanguageCommand(args);
+        }
         if (command == L"choose-instance") {
             return chooseInstanceCommand(args);
         }
         if (command == L"choose-installed-instance") {
             return chooseInstalledInstanceCommand(args);
+        }
+        if (command == L"script-message") {
+            return scriptMessageCommand(args);
+        }
+        if (command == L"validate-script-messages") {
+            return validateScriptMessagesCommand();
         }
         if (command == L"inspect-installed") {
             return inspectInstalledCommand(args);
