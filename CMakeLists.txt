@@ -587,6 +587,11 @@ if(BUILD_SEARCHENGINE)
         target_link_libraries(SearchEngine PRIVATE ws2_32 advapi32)
     endif()
     searchengine_configure_target(SearchEngine)
+    target_compile_options(
+            SearchEngine
+            PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/MP>
+    )
     searchengine_target_win32_versioninfo(
             SearchEngine
             PRODUCT_NAME "SearchEngineService"
