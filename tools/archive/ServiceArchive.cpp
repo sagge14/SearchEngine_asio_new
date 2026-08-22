@@ -669,37 +669,86 @@ void removeEmptyDirectoryTree(const fs::path& root)
 
 void publishMergedTree(const fs::path& staging, const fs::path& target)
 {
+    if (!fs::is_directory(staging) || isReparsePoint(staging)) {
+        throw std::runtime_error(
+            "restore staging is not a safe directory: " + utf8(staging));
+    }
+    if (fs::exists(target) &&
+        (!fs::is_directory(target) || isReparsePoint(target)))
+    {
+        throw std::runtime_error(
+            "restore merge target is not a safe directory: " + utf8(target));
+    }
     fs::create_directories(target);
+
+    std::vector<fs::path> directories;
+    std::vector<fs::path> files;
     for (fs::recursive_directory_iterator it(staging), end; it != end; ++it) {
-        const fs::path relative = it->path().lexically_relative(staging);
-        const fs::path destination = target / relative;
+        if (isReparsePoint(it->path())) {
+            throw std::runtime_error(
+                "reparse point in restore staging: " + utf8(it->path()));
+        }
         if (it->is_directory()) {
-            fs::create_directories(destination);
+            directories.push_back(it->path());
         } else if (it->is_regular_file()) {
-            if (fs::exists(destination)) {
-                const FileHashResult stagedHash = sha256File(it->path());
-                const FileHashResult targetHash = sha256File(destination);
-                if (!stagedHash.ok || !targetHash.ok ||
-                    stagedHash.size != targetHash.size ||
-                    stagedHash.sha256 != targetHash.sha256)
-                {
-                    throw std::runtime_error(
-                        "restore merge target already differs: " +
-                        utf8(destination));
-                }
-                continue;
-            }
-            std::error_code error;
-            fs::rename(it->path(), destination, error);
-            if (error) {
-                throw std::runtime_error(
-                    "cannot publish restored file: " + error.message());
-            }
+            files.push_back(it->path());
         } else {
             throw std::runtime_error(
                 "unsupported entry in restore staging: " + utf8(it->path()));
         }
     }
+
+    for (const auto& directory : directories) {
+        const fs::path relative = directory.lexically_relative(staging);
+        const fs::path destination = target / relative;
+        if (fs::exists(destination) &&
+            (!fs::is_directory(destination) || isReparsePoint(destination)))
+        {
+            throw std::runtime_error(
+                "restore merge directory already differs: " +
+                utf8(destination));
+        }
+        fs::create_directories(destination);
+    }
+
+    for (const auto& file : files) {
+        const fs::path relative = file.lexically_relative(staging);
+        const fs::path destination = target / relative;
+        if (fs::exists(destination)) {
+            if (!fs::is_regular_file(destination) ||
+                isReparsePoint(destination))
+            {
+                throw std::runtime_error(
+                    "restore merge target already differs: " +
+                    utf8(destination));
+            }
+            const FileHashResult stagedHash = sha256File(file);
+            const FileHashResult targetHash = sha256File(destination);
+            if (!stagedHash.ok || !targetHash.ok ||
+                stagedHash.size != targetHash.size ||
+                stagedHash.sha256 != targetHash.sha256)
+            {
+                throw std::runtime_error(
+                    "restore merge target already differs: " +
+                    utf8(destination));
+            }
+            std::error_code error;
+            if (!fs::remove(file, error) || error) {
+                throw std::runtime_error(
+                    "cannot remove duplicate restore staging file: " +
+                    utf8(file));
+            }
+            continue;
+        }
+        std::error_code error;
+        fs::rename(file, destination, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot publish restored file: " + error.message());
+        }
+    }
+
+    removeEmptyDirectoryTree(staging);
 }
 
 bool directoryTreesEqual(const fs::path& left, const fs::path& right)
@@ -771,6 +820,13 @@ void ensureArchiveTreeHasNoReparsePoints(const fs::path& archiveDirectory)
 }
 
 } // namespace
+
+void mergeRestoreStagingTree(
+    const fs::path& staging,
+    const fs::path& target)
+{
+    publishMergedTree(staging, target);
+}
 
 ServiceInvocation parseServiceInvocation(const std::wstring& imagePath)
 {
@@ -1728,7 +1784,8 @@ ServiceArchiveResult restoreServiceArchive(
 
                 for (const auto& tree : restoreTrees) {
                     if (isTlgRoot(tree.mapping.source)) {
-                        publishMergedTree(tree.staging, tree.mapping.source);
+                        mergeRestoreStagingTree(
+                            tree.staging, tree.mapping.source);
                         continue;
                     }
                     if (fs::exists(tree.mapping.source)) {

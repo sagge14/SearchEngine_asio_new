@@ -9,6 +9,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,15 @@ void writeTextFile(const fs::path& path, const std::string& value)
     ASSERT_TRUE(output.is_open());
     output << value;
     ASSERT_TRUE(output.good());
+}
+
+std::string readTextFile(const fs::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    EXPECT_TRUE(input.is_open());
+    return std::string(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
 }
 
 class RestoredArchiveDeletionTest : public ::testing::Test
@@ -282,6 +292,39 @@ TEST(ServiceArchiveSettings, FreezesAndRestoresExplicitMonthlyDirectories)
               "D:\\BASES_PRD\\METH_BASES");
     EXPECT_EQ(active.at("prm_base_dir"), "D:\\BASES");
     EXPECT_EQ(active.at("prd_base_dir"), "D:\\BASES_PRD");
+}
+
+TEST(ServiceArchiveRestoreMerge, RemovesStagingAfterSuccessfulTlgMerge)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path staging = temporary.path() / L".TLG.restore-123-1";
+    const fs::path target = temporary.path() / L"TLG";
+    writeTextFile(staging / L"2026" / L"new.txt", "new");
+    writeTextFile(staging / L"COMMON" / L"same.txt", "same");
+    writeTextFile(target / L"COMMON" / L"same.txt", "same");
+
+    ASSERT_NO_THROW(
+        searchengine_archive::mergeRestoreStagingTree(staging, target));
+
+    EXPECT_FALSE(fs::exists(staging));
+    EXPECT_EQ(readTextFile(target / L"2026" / L"new.txt"), "new");
+    EXPECT_EQ(readTextFile(target / L"COMMON" / L"same.txt"), "same");
+}
+
+TEST(ServiceArchiveRestoreMerge, PreservesStagingWhenTargetFileDiffers)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path staging = temporary.path() / L".TLG.restore-123-1";
+    const fs::path target = temporary.path() / L"TLG";
+    writeTextFile(staging / L"2026" / L"conflict.txt", "archive");
+    writeTextFile(target / L"2026" / L"conflict.txt", "current");
+
+    EXPECT_THROW(
+        searchengine_archive::mergeRestoreStagingTree(staging, target),
+        std::runtime_error);
+
+    EXPECT_TRUE(fs::exists(staging / L"2026" / L"conflict.txt"));
+    EXPECT_EQ(readTextFile(target / L"2026" / L"conflict.txt"), "current");
 }
 
 TEST_F(RestoredArchiveDeletionTest, ValidRestoredArchivePassesWithoutScmAccess)

@@ -84,6 +84,10 @@ void rewriteSettingsForActive(
     const fs::path& prmMonthlyDirectory,
     const fs::path& prdMonthlyDirectory);
 
+void mergeRestoreStagingTree(
+    const fs::path& staging,
+    const fs::path& target);
+
 [[nodiscard]] ServiceArchiveResult executeServiceArchive(
     const ServiceArchivePlan& plan,
     const ProgressCallback& progress = {});
