@@ -188,6 +188,9 @@ $binaryPath = Resolve-RequiredFile `
 $configToolPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
     'SearchEngineConfig Release helper'
+$archiveToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngineArchive.exe') `
+    'SearchEngineArchive Release helper'
 Assert-SearchEngineConfigSourceFreshness `
     -ConfigToolPath $configToolPath `
     -ProjectRoot $projectRoot
@@ -215,6 +218,12 @@ Assert-PeMatchesAppVersion `
     -ExpectedFileVersion $versionInfo.FileVersion `
     -ExpectedProductName $productName `
     -ExpectedOriginalFilename 'SearchEngineConfig.exe'
+Assert-PeMatchesAppVersion `
+    -BinaryPath $archiveToolPath `
+    -ExpectedProductVersion $versionInfo.Version `
+    -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName `
+    -ExpectedOriginalFilename 'SearchEngineArchive.exe'
 $settingsTemplatePath = Resolve-RequiredFile `
     $SettingsPath 'Portable Settings.json template'
 $IgnorePath = Resolve-RequiredFile $IgnorePath 'Portable ignore.txt'
@@ -234,6 +243,11 @@ $configToolMachine = Get-PeMachine $configToolPath
 if ($configToolMachine -ne $expectedMachine) {
     throw ('SearchEngineConfig.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $configToolMachine)
+}
+$archiveToolMachine = Get-PeMachine $archiveToolPath
+if ($archiveToolMachine -ne $expectedMachine) {
+    throw ('SearchEngineArchive.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $archiveToolMachine)
 }
 $authDbToolMachine = Get-PeMachine $authDbToolPath
 if ($authDbToolMachine -ne $expectedMachine) {
@@ -387,6 +401,8 @@ try {
         -Destination (Join-Path $stagingDirectory 'app\SearchEngine.exe')
     Copy-Item -LiteralPath $configToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\SearchEngineConfig.exe')
+    Copy-Item -LiteralPath $archiveToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchEngineArchive.exe')
     Copy-Item -LiteralPath $authDbToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
     Copy-Item -LiteralPath $tokenIssuerPath `
@@ -476,6 +492,10 @@ try {
         @{
             Source = 'Configure-SearchEngineService.bat'
             Destination = 'Configure-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Archive-SearchEngineService.bat'
+            Destination = 'Archive-SearchEngineService.bat'
         }
     )
     foreach ($batchFile in $portableBatchFiles) {
@@ -539,7 +559,8 @@ try {
         'Register-AuthClient-FromToken.bat',
         'Issue-SearchClientToken.bat',
         'Verify-Package.bat',
-        'Configure-SearchEngineService.bat'
+        'Configure-SearchEngineService.bat',
+        'Archive-SearchEngineService.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `
             (Join-Path $stagingDirectory $name)

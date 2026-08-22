@@ -35,7 +35,10 @@ struct Telega {
     static inline std::vector<std::string> b_prd = {};
     static inline std::string prm_base_dir = {};
     static inline std::string prd_base_dir = {};
+    static inline std::string prm_monthly_bases_dir = {};
+    static inline std::string prd_monthly_bases_dir = {};
     static inline std::string year = {};
+    static inline bool archive_mode = false;
 
     enum class SourceAvailability
     {
@@ -82,6 +85,7 @@ public:
     static std::string getNumFromFileName(const std::filesystem::path& path);
 
     [[nodiscard]] static const std::string& baseDir(TYPE type) noexcept;
+    [[nodiscard]] static std::string monthlyBaseDir(TYPE type);
     [[nodiscard]] static bool isSourceConfigured(TYPE type) noexcept;
     [[nodiscard]] static const char* sourceLabel(TYPE type) noexcept;
     [[nodiscard]] static std::string disabledDiagnostic(TYPE type);

@@ -39,6 +39,33 @@
 ошибкой запуска; автоматическое удаление или fallback на пустой каталог не
 выполняются.
 
+## Заморозка и перенос годового сервера
+
+Цель `SearchEngineArchive` собирает отдельную консольную утилиту
+`SearchEngineArchive.exe`. Первый пункт её меню всегда работает без службы:
+переносит файлы выбранного года и месячные AutoPad-базы в новый архив,
+исправляя `DirectTo` только в копиях баз.
+
+Второй сценарий сканирует службы `SearchEngineService[-instance]`. Для
+переноса службы требуется `document_catalog_storage=sqlite`. Утилита
+останавливает выбранный экземпляр, копирует программу, data-dir, индексируемые
+корни и базы во staging, проверяет SHA-256/SQLite, исправляет `docs.path` и
+`DirectTo`, атомарно публикует архив, устанавливает `server_mode=archive`,
+переключает SCM `ImagePath` и запускает архивную копию. Исходники удаляются
+только отдельной операцией после ручной проверки. Откат поддерживается и после
+этой очистки.
+
+В `archive`-режиме не запускаются watcher, стартовое сканирование и плановое
+обновление. `START_UPDATE_BASE` оставлен только точному имени `admin`, причём
+любой сеанс с этим именем принимается только с TCP peer `127.0.0.1`.
+
+Каталоги месячных баз задаются явно полями
+`config.prm_monthly_bases_dir` и `config.prd_monthly_bases_dir`. При отсутствии
+полей старые конфигурации получают `<prm_base_dir>\METH_BASES` и
+`<prd_base_dir>\METH_BASES`. Для PRD обязателен `12-<year>.db3`; эту
+декабрьскую базу утилита никогда автоматически не удаляет. Январь обрабатывается
+как обычная месячная база.
+
 ## Быстрый старт
 
 ```powershell
@@ -67,7 +94,7 @@ Presets размещают их раздельно в `out/build/`.
 
 | Продукт | JSON | EXE |
 |---|---|---|
-| SearchEngineService | `app-version.json` | `SearchEngine.exe`, `SearchEngineConfig.exe` (общая версия) |
+| SearchEngineService | `app-version.json` | `SearchEngine.exe`, `SearchEngineConfig.exe`, `SearchEngineArchive.exe` (общая версия) |
 | BackupService | `app-version.BackupService.json` | `BackupService.exe` |
 | ZagEditor | `app-version.ZagEditor.json` | `ZagEditor.exe` |
 | BackupRestore | `app-version.BackupRestore.json` | `BackupRestore.exe` |

@@ -78,11 +78,12 @@ foreach ($build in $builds) {
             }
             & cmake --build --preset $build.Build `
                 --target SearchEngine SearchEngineConfig AuthDbTool `
-                SearchClientTokenIssuer -- /m
+                SearchClientTokenIssuer SearchEngineArchive -- /m
             if ($LASTEXITCODE -ne 0) {
                 throw (
-                    "SearchEngine, SearchEngineConfig, AuthDbTool, and " +
-                    "SearchClientTokenIssuer $($build.Architecture) Release " +
+                    "SearchEngine, SearchEngineConfig, AuthDbTool, " +
+                    "SearchClientTokenIssuer, and SearchEngineArchive " +
+                    "$($build.Architecture) Release " +
                     "build failed with exit code $LASTEXITCODE."
                 )
             }

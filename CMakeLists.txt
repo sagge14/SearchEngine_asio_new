@@ -45,6 +45,7 @@ endif()
 
 option(BUILD_SEARCHENGINE "Build the SearchEngine executable" ON)
 option(BUILD_CONFIG_TOOL "Build the portable SearchEngineConfig helper" ${WIN32})
+option(BUILD_ARCHIVE_TOOL "Build the SearchEngineArchive migration helper" ${WIN32})
 option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
@@ -180,7 +181,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
+if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_ARCHIVE_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
     set(_build_any_target ON)
 endif()
 
@@ -238,6 +239,62 @@ if(BUILD_CONFIG_TOOL)
             SearchEngineConfig
             PRODUCT_NAME "SearchEngineService"
             ORIGINAL_FILENAME "SearchEngineConfig.exe"
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# Annual data and SearchEngine service archive helper
+# ---------------------------------------------------------------------------
+if(BUILD_ARCHIVE_TOOL)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SearchEngineArchive currently supports Windows only")
+    endif()
+
+    add_executable(
+            SearchEngineArchive
+            tools/archive/main.cpp
+            tools/archive/ArchiveCore.cpp
+            tools/archive/ServiceArchive.cpp
+            tools/archive/InteractivePaths.cpp
+            src/Backup/FileHash.cpp
+            src/Backup/SQLiteBackup.cpp
+            src/MyUtils/Encoding.cpp
+            lib/backup_sqlite/sqlite3.c
+    )
+    target_include_directories(
+            SearchEngineArchive
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/archive"
+    )
+    target_link_libraries(
+            SearchEngineArchive
+            PRIVATE
+            nlohmann_json::nlohmann_json
+            advapi32
+            shell32
+            ole32
+            uuid
+    )
+    target_compile_definitions(
+            SearchEngineArchive
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    if(MSVC)
+        set_source_files_properties(
+                lib/backup_sqlite/sqlite3.c
+                PROPERTIES LANGUAGE C
+        )
+    endif()
+    searchengine_configure_target(SearchEngineArchive)
+    searchengine_target_win32_versioninfo(
+            SearchEngineArchive
+            PRODUCT_NAME "SearchEngineService"
+            ORIGINAL_FILENAME "SearchEngineArchive.exe"
     )
 endif()
 
@@ -492,10 +549,39 @@ if(BUILD_SEARCHENGINE)
             Boost::system
             Boost::filesystem
             Boost::serialization
-            OpenSSL::Crypto
-            OpenSSL::SSL
             SearchEngine::utf8proc
     )
+    # Prefer the architecture-specific Shining Light VC import libraries.
+    # FindOpenSSL can retain a Release cache entry from another installation
+    # (for example, the ARM64 prefix in C:/Program Files/OpenSSL) even when
+    # SEARCHENGINE_OPENSSL_ROOT points at OpenSSL-Win64.
+    if(
+            WIN32
+            AND SEARCHENGINE_OPENSSL_ROOT
+            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
+            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libssl.lib"
+    )
+        target_include_directories(
+                SearchEngine
+                PRIVATE
+                "${SEARCHENGINE_OPENSSL_ROOT}/include"
+        )
+        target_link_libraries(
+                SearchEngine
+                PRIVATE
+                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib>"
+                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libssl.lib>"
+                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib>"
+                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libssl.lib>"
+        )
+    else()
+        target_link_libraries(
+                SearchEngine
+                PRIVATE
+                OpenSSL::Crypto
+                OpenSSL::SSL
+        )
+    endif()
     if(WIN32)
         target_link_libraries(SearchEngine PRIVATE ws2_32 advapi32)
     endif()
@@ -752,6 +838,12 @@ if(
             )
         endif()
     endif()
+    if(TARGET SearchEngineArchive)
+        searchengine_attach_release_version_bump(
+                SearchEngineService
+                SearchEngineArchive
+        )
+    endif()
     if(TARGET BackupService)
         searchengine_attach_release_version_bump(BackupService BackupService)
     endif()
@@ -766,6 +858,9 @@ if(
         endif()
         if(TARGET SearchClientTokenIssuer)
             add_dependencies(SearchEngine SearchClientTokenIssuer)
+        endif()
+        if(TARGET SearchEngineArchive)
+            add_dependencies(SearchEngine SearchEngineArchive)
         endif()
         add_custom_command(
                 TARGET SearchEngine
@@ -1034,6 +1129,9 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/Backup/Restore/MirrorHistoryStore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/Restore/MirrorHistoryRestore.cpp"
             "${PROJECT_SOURCE_DIR}/src/Backup/SQLiteBackup.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/archive/ArchiveCore.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/archive/ServiceArchive.cpp"
+            "${PROJECT_SOURCE_DIR}/tools/archive/InteractivePaths.cpp"
             "${PROJECT_SOURCE_DIR}/lib/backup_sqlite/sqlite3.c"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetFile/GetFileCmd.cpp"
             "${PROJECT_SOURCE_DIR}/src/Commands/GetAttachments/GetAttachmentsCmd.cpp"
@@ -1092,6 +1190,7 @@ if(BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/tools/backup"
             "${PROJECT_SOURCE_DIR}/tools/auth"
             "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+            "${PROJECT_SOURCE_DIR}/tools/archive"
     )
     target_link_libraries(
             SearchEngine_test
@@ -1106,7 +1205,16 @@ if(BUILD_TESTS)
             SearchEngine::utf8proc
     )
     if(WIN32)
-        target_link_libraries(SearchEngine_test PRIVATE ws2_32 user32)
+        target_link_libraries(
+                SearchEngine_test
+                PRIVATE
+                ws2_32
+                user32
+                advapi32
+                shell32
+                ole32
+                uuid
+        )
     endif()
     searchengine_configure_target(SearchEngine_test)
     add_test(NAME SearchEngine_test COMMAND SearchEngine_test)

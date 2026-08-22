@@ -37,6 +37,10 @@ function Get-SearchEngineProductBinaries {
                 @{
                     OriginalFilename = 'SearchEngineConfig.exe'
                     FileDescription  = 'SearchEngine portable configuration helper'
+                },
+                @{
+                    OriginalFilename = 'SearchEngineArchive.exe'
+                    FileDescription  = 'SearchEngine annual archive and migration helper'
                 }
             )
         }

@@ -78,6 +78,9 @@ TEST(ProductionRootsSettingsTest, CustomValuesRoundtrip)
     original.indexedExtensions = {"txt"};
     original.prm_base_dir = "";
     original.prd_base_dir = "";
+    original.prm_monthly_bases_dir = "E:\\monthly-prm";
+    original.prd_monthly_bases_dir = "E:\\monthly-prd";
+    original.serverMode = search_server::ServerMode::Archive;
     original.tlg_send_root = "E:\\tlg-root";
     original.razn_output_dir = "E:\\OPIS ADMIN\\razn";
     original.opis_base_dir = "F:\\OPIS_ADMIN";
@@ -89,6 +92,13 @@ TEST(ProductionRootsSettingsTest, CustomValuesRoundtrip)
     EXPECT_EQ(loaded.razn_output_dir, original.razn_output_dir);
     EXPECT_EQ(loaded.opis_base_dir, original.opis_base_dir);
     EXPECT_EQ(loaded.f12_base_dir, original.f12_base_dir);
+    EXPECT_EQ(
+        loaded.prm_monthly_bases_dir,
+        original.prm_monthly_bases_dir);
+    EXPECT_EQ(
+        loaded.prd_monthly_bases_dir,
+        original.prd_monthly_bases_dir);
+    EXPECT_EQ(loaded.serverMode, search_server::ServerMode::Archive);
 }
 
 TEST(ProductionRootsSettingsTest, MissingFieldsUseProductionDefaultsAndResave)
@@ -104,6 +114,9 @@ TEST(ProductionRootsSettingsTest, MissingFieldsUseProductionDefaultsAndResave)
         "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ");
     EXPECT_EQ(loaded.opis_base_dir, "D:\\OPIS_ADMIN");
     EXPECT_EQ(loaded.f12_base_dir, "D:\\F12");
+    EXPECT_TRUE(loaded.prm_monthly_bases_dir.empty());
+    EXPECT_TRUE(loaded.prd_monthly_bases_dir.empty());
+    EXPECT_EQ(loaded.serverMode, search_server::ServerMode::Active);
 
     std::ifstream input(settingsPath, std::ios::binary);
     const auto saved = nh::json::parse(input);
@@ -116,6 +129,15 @@ TEST(ProductionRootsSettingsTest, MissingFieldsUseProductionDefaultsAndResave)
         saved["config"].at("opis_base_dir").get<std::string>(),
         "D:\\OPIS_ADMIN");
     EXPECT_EQ(saved["config"].at("f12_base_dir").get<std::string>(), "D:\\F12");
+    EXPECT_EQ(
+        saved["config"].at("server_mode").get<std::string>(),
+        "active");
+    EXPECT_EQ(
+        saved["config"].at("prm_monthly_bases_dir").get<std::string>(),
+        "");
+    EXPECT_EQ(
+        saved["config"].at("prd_monthly_bases_dir").get<std::string>(),
+        "");
 }
 
 TEST(ProductionRootsSettingsTest, WrongJsonTypeIsConfigError)

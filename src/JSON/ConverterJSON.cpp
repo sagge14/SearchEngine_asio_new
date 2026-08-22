@@ -58,10 +58,16 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["include_extensionless_files"] =
         val.includeExtensionlessFiles;
     jsonSettings["config"]["year"] = val.year;
+    jsonSettings["config"]["server_mode"] =
+        std::string(search_server::toString(val.serverMode));
     jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
     jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
+    jsonSettings["config"]["prm_monthly_bases_dir"] =
+        val.prm_monthly_bases_dir;
+    jsonSettings["config"]["prd_monthly_bases_dir"] =
+        val.prd_monthly_bases_dir;
     jsonSettings["config"]["tlg_send_root"] = val.tlg_send_root;
     jsonSettings["config"]["razn_output_dir"] = val.razn_output_dir;
     jsonSettings["config"]["opis_base_dir"] = val.opis_base_dir;
@@ -248,6 +254,54 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             config.at("prd_base_dir").get_to(s.prd_base_dir);
         } else {
             criticalErrors.push_back("config.prd_base_dir (must be a string; empty disables PRD)");
+        }
+
+        const auto legacyMonthlyDirectory = [](const std::string& base) {
+            return base.empty() ? std::string() : base + "\\METH_BASES";
+        };
+        const auto loadMonthlyDirectory = [&](const char* name,
+                                              std::string& destination,
+                                              const std::string& base) {
+            if (!config.contains(name)) {
+                destination = legacyMonthlyDirectory(base);
+                // Backward-compatible derived default. Merely reading a
+                // complete legacy Settings.json must not canonicalize the
+                // whole document and discard aliases/unknown fields.
+                return;
+            }
+            if (!config[name].is_string()) {
+                throw std::invalid_argument(
+                    std::string("config.") + name + " must be a string");
+            }
+            config.at(name).get_to(destination);
+        };
+        loadMonthlyDirectory(
+            "prm_monthly_bases_dir",
+            s.prm_monthly_bases_dir,
+            s.prm_base_dir);
+        loadMonthlyDirectory(
+            "prd_monthly_bases_dir",
+            s.prd_monthly_bases_dir,
+            s.prd_base_dir);
+
+        if (config.contains("server_mode")) {
+            if (!config["server_mode"].is_string()) {
+                throw std::invalid_argument(
+                    "config.server_mode must be active or archive");
+            }
+            const std::string mode = config["server_mode"].get<std::string>();
+            if (mode == "active") {
+                s.serverMode = search_server::ServerMode::Active;
+            } else if (mode == "archive") {
+                s.serverMode = search_server::ServerMode::Archive;
+            } else {
+                throw std::invalid_argument(
+                    "config.server_mode must be active or archive");
+            }
+        } else {
+            s.serverMode = search_server::ServerMode::Active;
+            // Missing mode is the historical active behavior. Do not force a
+            // destructive full-file rewrite solely to persist this default.
         }
 
         const auto loadOptionalRoot = [&](const char* name, std::string& dest) {

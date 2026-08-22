@@ -113,7 +113,7 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
             auto sql_qry = ss.str();
 
-            auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+            auto db = SQLiteConnectionManager::instance().getReadOnlyConnection(base_name);
             db->execSql(sql_qry);
 
             if (!db->empty()) {
@@ -150,7 +150,33 @@ const std::string& Telega::baseDir(TYPE type) noexcept
 
 bool Telega::isSourceConfigured(TYPE type) noexcept
 {
-    return !baseDir(type).empty();
+    if (!archive_mode)
+        return !baseDir(type).empty();
+    switch (type)
+    {
+        case TYPE::VHOD:
+            return !prm_monthly_bases_dir.empty() || !prm_base_dir.empty();
+        case TYPE::ISHOD:
+            return !prd_monthly_bases_dir.empty() || !prd_base_dir.empty();
+        case TYPE::NOTTG:
+            return false;
+    }
+    return false;
+}
+
+std::string Telega::monthlyBaseDir(TYPE type)
+{
+    const std::string* explicitDirectory = nullptr;
+    switch (type)
+    {
+        case TYPE::VHOD: explicitDirectory = &prm_monthly_bases_dir; break;
+        case TYPE::ISHOD: explicitDirectory = &prd_monthly_bases_dir; break;
+        case TYPE::NOTTG: return {};
+    }
+    if (explicitDirectory && !explicitDirectory->empty())
+        return *explicitDirectory;
+    const auto& base = baseDir(type);
+    return base.empty() ? std::string() : base + "\\METH_BASES";
 }
 
 const char* Telega::sourceLabel(TYPE type) noexcept
@@ -180,7 +206,8 @@ Telega::SourceAvailability Telega::probeSource(TYPE type)
         return SourceAvailability::Disabled;
 
     std::error_code ec;
-    const auto path = std::filesystem::u8path(baseDir(type));
+    const auto path = std::filesystem::u8path(
+        archive_mode ? monthlyBaseDir(type) : baseDir(type));
     if (!std::filesystem::is_directory(path, ec) || ec)
         return SourceAvailability::Unavailable;
     return SourceAvailability::Configured;
@@ -225,6 +252,11 @@ void Telega::ensureBasesLoaded(TYPE type)
 
 std::string Telega::archiveDbPathFor(TYPE type)
 {
+    // A frozen server is backed exclusively by year/month databases.  Never
+    // expose a synthetic ARCHIVE.db3 path: writable maintenance code must not
+    // create an operational database inside the archive.
+    if (archive_mode)
+        return {};
     const auto& dir = baseDir(type);
     if (dir.empty())
         return {};
@@ -257,17 +289,21 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
 
     // Empty path means the source is disabled: never touch the filesystem
     // and never build rooted paths like "\ARCHIVE.db3".
-    if (bases_dir.empty())
+    if (!isSourceConfigured(_type))
         return res;
 
-    if(getYearNow() == Telega::year)
-        res.push_back(bases_dir + "\\ARCHIVE.db3");
+    const std::string archive_database = bases_dir + "\\ARCHIVE.db3";
+    if(!archive_mode && getYearNow() == Telega::year &&
+       std::filesystem::is_regular_file(archive_database))
+        res.push_back(archive_database);
+
+    const std::string monthly_dir = monthlyBaseDir(_type);
 
     for(int i = 12; i >= 0; i--)
     {
 
         std::ostringstream oss;
-        oss << bases_dir << "\\METH_BASES\\" << ms[i] << "-" << Telega::year << ".db3";
+        oss << monthly_dir << "\\" << ms[i] << "-" << Telega::year << ".db3";
         auto base_name = oss.str();
 
         if (!std::filesystem::exists(base_name))
@@ -278,8 +314,9 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
 
     }
 
-    if(res.empty() && getYearNow() != Telega::year)
-        res.push_back(bases_dir + "\\ARCHIVE.db3");
+    if(!archive_mode && res.empty() && getYearNow() != Telega::year &&
+       std::filesystem::is_regular_file(archive_database))
+        res.push_back(archive_database);
 
     return res;
 }

@@ -880,7 +880,8 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
 
         // Session authorization gate: data commands require
         // USER_REGISTRY("admin") from TCP peer 127.0.0.1, or successful
-        // AUTHENTICATE_V1 (any peer). Unauthenticated data access fails closed.
+        // AUTHENTICATE_V1. The name "admin" is local-only for either path.
+        // Unauthenticated data access fails closed.
         const auto gate = evaluateSessionCommandGate(
             requestHeader.command,
             authenticated_);
@@ -890,6 +891,19 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 command_execution::ErrorCode::AuthRequired,
                 "session is not authenticated",
                 gate.close_after_auth_required,
+                requestHeader.command);
+            co_return;
+        }
+
+        if (const auto rejection = archiveCommandRejection(
+                requestHeader.command,
+                Interface::isArchiveMode(),
+                admin_session_))
+        {
+            co_await queueError(
+                *rejection,
+                "archive mode permits START_UPDATE_BASE only for local admin",
+                false,
                 requestHeader.command);
             co_return;
         }
@@ -989,6 +1003,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 std::lock_guard<std::mutex> lock(user_name_mutex_);
                 userName_ = "admin";
                 authenticated_ = true;
+                admin_session_ = true;
                 const std::string answer_str = "OK";
                 answer = std::vector<BYTE>(answer_str.begin(), answer_str.end());
             }
@@ -1048,12 +1063,20 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                         }
                     } catch (...) {
                     }
-                    std::lock_guard<std::mutex> lock(user_name_mutex_);
-                    userName_ = client_name;
-                    clientId_ = client_id;
-                    deviceType_ = std::move(device_type);
-                    deviceId_ = std::move(device_id);
-                    authenticated_ = true;
+                    if (client_name == "admin" && !isLocalAdminPeer()) {
+                        authSessionError =
+                            command_execution::CommandResult::failure(
+                                command_execution::ErrorCode::AuthFailed,
+                                "admin authorization requires TCP peer 127.0.0.1");
+                    } else {
+                        std::lock_guard<std::mutex> lock(user_name_mutex_);
+                        userName_ = client_name;
+                        clientId_ = client_id;
+                        deviceType_ = std::move(device_type);
+                        deviceId_ = std::move(device_id);
+                        authenticated_ = true;
+                        admin_session_ = client_name == "admin";
+                    }
                 } catch (const std::exception& ex) {
                     authSessionError = command_execution::CommandResult::failure(
                         command_execution::ErrorCode::SerializationFailed,
@@ -1351,6 +1374,7 @@ void asio_server::Interface::shutdown()
 {
     cmdMap.clear();
     searchServer_ = nullptr;
+    archive_mode_ = false;
     year_.clear();
     opis_base_dir_.clear();
     tlg_send_root_.clear();

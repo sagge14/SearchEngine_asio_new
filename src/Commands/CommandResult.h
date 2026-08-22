@@ -61,7 +61,8 @@ namespace command_execution
         AuthDeviceIdMismatch = 44,
         AuthSignatureInvalid = 45,
         DataSourceDisabled = 46,
-        DataSourceUnavailable = 47
+        DataSourceUnavailable = 47,
+        ArchiveAdminRequired = 48
     };
 
     [[nodiscard]] inline constexpr std::string_view toString(ErrorCode code) noexcept
@@ -115,6 +116,7 @@ namespace command_execution
             case ErrorCode::AuthSignatureInvalid: return "AuthSignatureInvalid";
             case ErrorCode::DataSourceDisabled: return "DataSourceDisabled";
             case ErrorCode::DataSourceUnavailable: return "DataSourceUnavailable";
+            case ErrorCode::ArchiveAdminRequired: return "ArchiveAdminRequired";
         }
 
         return "UnknownErrorCode";

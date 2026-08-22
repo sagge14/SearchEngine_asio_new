@@ -38,6 +38,8 @@
     "max_response": 50000,
     "prd_base_dir": "D:\\BASES_PRD",
     "prm_base_dir": "D:\\BASES",
+    "prd_monthly_bases_dir": "D:\\BASES_PRD\\METH_BASES",
+    "prm_monthly_bases_dir": "D:\\BASES\\METH_BASES",
     "tlg_send_root": "D:\\",
     "razn_output_dir": "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ",
     "opis_base_dir": "D:\\OPIS_ADMIN",
@@ -48,6 +50,7 @@
     "sqlite_mirror_max_pending_ops": 500,
     "sqlite_precount_postings": false,
     "thread_count": 4,
-    "year": "2026"
+    "year": "2026",
+    "server_mode": "active"
   }
 }

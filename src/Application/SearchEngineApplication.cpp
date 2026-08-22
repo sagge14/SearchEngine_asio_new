@@ -75,6 +75,21 @@ void validateSettings(const search_server::Settings& settings)
             "config.thread_count must be 0 (automatic) or at least 2"
         );
     }
+    if (settings.indTime < 1) {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.ind_time must be integer >= 1"
+        );
+    }
+    if (settings.serverMode == search_server::ServerMode::Archive &&
+        settings.documentCatalogStorage !=
+            inverted_index::DocumentCatalogStorage::SQLite)
+    {
+        throw StartupError(
+            ERROR_INVALID_DATA,
+            "config.server_mode=archive requires document_catalog_storage=sqlite"
+        );
+    }
     if (settings.port <= 0 || settings.port > 65535) {
         throw StartupError(ERROR_INVALID_DATA, "config.port is outside 1..65535");
     }
@@ -214,6 +229,12 @@ bool SearchEngineApplication::start()
         Telega::year = pending->settings.year;
         Telega::prd_base_dir = pending->settings.prd_base_dir;
         Telega::prm_base_dir = pending->settings.prm_base_dir;
+        Telega::prd_monthly_bases_dir =
+            pending->settings.prd_monthly_bases_dir;
+        Telega::prm_monthly_bases_dir =
+            pending->settings.prm_monthly_bases_dir;
+        Telega::archive_mode =
+            pending->settings.serverMode == search_server::ServerMode::Archive;
         RecordProcessor::setDefaultDirs(
             Telega::archiveDbPathFor(Telega::TYPE::VHOD),
             Telega::archiveDbPathFor(Telega::TYPE::ISHOD),
@@ -262,6 +283,8 @@ bool SearchEngineApplication::start()
         LG("Search index opened");
 
         asio_server::Interface::setYear(pending->settings.year);
+        asio_server::Interface::setArchiveMode(
+            pending->settings.serverMode == search_server::ServerMode::Archive);
         asio_server::Interface::setSearchServer(
             pending->search_server.get(),
             asio_server::ProductionCommandPaths{
@@ -271,56 +294,63 @@ bool SearchEngineApplication::start()
                 paths_.prefix_map});
 
         throwIfStopRequested();
-        pending->dispatcher = std::make_unique<FileEventDispatcher>(
-            pending->settings.indexRoots,
-            file_extension_contract::Selection{
-                pending->settings.indexedExtensions,
-                pending->settings.includeExtensionlessFiles},
-            pending->settings.excludedSubtrees,
-            pending->contexts->scheduler()
-        );
-        pending->scheduler =
-            std::make_unique<PeriodicTaskManager<TaskId>>();
-
-        pending->dispatcher->registerCommand(
-            FileEvent::Removed,
-            std::make_unique<RemoveFileCommand>(*pending->search_server)
-        );
-        pending->dispatcher->registerCommand(
-            FileEvent::Added,
-            std::make_unique<AddFileCommand<TaskId>>(
-                *pending->search_server,
-                *pending->scheduler,
+        if (pending->settings.serverMode == search_server::ServerMode::Active) {
+            pending->dispatcher = std::make_unique<FileEventDispatcher>(
+                pending->settings.indexRoots,
                 file_extension_contract::Selection{
                     pending->settings.indexedExtensions,
                     pending->settings.includeExtensionlessFiles},
-                pending->settings.enablePrmShortContentAutodetect
-            )
-        );
+                pending->settings.excludedSubtrees,
+                pending->contexts->scheduler()
+            );
+            pending->scheduler =
+                std::make_unique<PeriodicTaskManager<TaskId>>();
 
-        pending->scheduler->addTask<FlushPendingTask2>(
-            TaskId::FlushPendingTask,
-            pending->contexts->scheduler(),
-            pending->contexts->cpu_pool().get_executor(),
-            7s,
-            *pending->dispatcher
-        );
-        pending->scheduler->addTask<PeriodicIndexUpdateTask>(
-            TaskId::PeriodicUpdateTask,
-            pending->contexts->scheduler(),
-            pending->contexts->cpu_pool().get_executor(),
-            std::chrono::seconds(pending->settings.indTime),
-            pending->search_server.get(),
-            pending->settings.scanOnStartup
-        );
-        pending->scheduler->addTask<DelayEventTickTask<TaskId>>(
-            TaskId::DelayEventTickTask,
-            pending->contexts->scheduler(),
-            pending->contexts->cpu_pool().get_executor(),
-            2s,
-            *pending->scheduler
-        );
-        LG("File watchers and scheduler started");
+            pending->dispatcher->registerCommand(
+                FileEvent::Removed,
+                std::make_unique<RemoveFileCommand>(*pending->search_server)
+            );
+            pending->dispatcher->registerCommand(
+                FileEvent::Added,
+                std::make_unique<AddFileCommand<TaskId>>(
+                    *pending->search_server,
+                    *pending->scheduler,
+                    file_extension_contract::Selection{
+                        pending->settings.indexedExtensions,
+                        pending->settings.includeExtensionlessFiles},
+                    pending->settings.enablePrmShortContentAutodetect
+                )
+            );
+
+            pending->scheduler->addTask<FlushPendingTask2>(
+                TaskId::FlushPendingTask,
+                pending->contexts->scheduler(),
+                pending->contexts->cpu_pool().get_executor(),
+                7s,
+                *pending->dispatcher
+            );
+            pending->scheduler->addTask<PeriodicIndexUpdateTask>(
+                TaskId::PeriodicUpdateTask,
+                pending->contexts->scheduler(),
+                pending->contexts->cpu_pool().get_executor(),
+                std::chrono::seconds(pending->settings.indTime),
+                pending->search_server.get(),
+                pending->settings.scanOnStartup
+            );
+            pending->scheduler->addTask<DelayEventTickTask<TaskId>>(
+                TaskId::DelayEventTickTask,
+                pending->contexts->scheduler(),
+                pending->contexts->cpu_pool().get_executor(),
+                2s,
+                *pending->scheduler
+            );
+            LG("File watchers and scheduler started");
+        } else {
+            LG(
+                "Archive mode: file watchers, startup scan and periodic "
+                "update are disabled"
+            );
+        }
 
         throwIfStopRequested();
         try {

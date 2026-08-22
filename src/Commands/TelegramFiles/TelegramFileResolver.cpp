@@ -338,7 +338,7 @@ TelegramArchiveLookupResult lookupTelegramArchive(
     for (const auto& baseName : *bases) {
         std::shared_ptr<mySQLite> database;
         try {
-            database = SQLiteConnectionManager::instance().getConnection(baseName);
+            database = SQLiteConnectionManager::instance().getReadOnlyConnection(baseName);
         }
         catch (const SQLiteOpenError& error) {
             return lookupFail(ErrorCode::DatabaseOpenFailed, error.what());

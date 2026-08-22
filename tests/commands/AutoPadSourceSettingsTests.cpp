@@ -159,6 +159,9 @@ namespace
             Telega::year = "2099";
             Telega::prm_base_dir = prmDir_.string();
             Telega::prd_base_dir = prdDir_.string();
+            Telega::prm_monthly_bases_dir.clear();
+            Telega::prd_monthly_bases_dir.clear();
+            Telega::archive_mode = false;
             Telega::b_prm.clear();
             Telega::b_prd.clear();
         }
@@ -169,6 +172,9 @@ namespace
             Telega::b_prd.clear();
             Telega::prm_base_dir.clear();
             Telega::prd_base_dir.clear();
+            Telega::prm_monthly_bases_dir.clear();
+            Telega::prd_monthly_bases_dir.clear();
+            Telega::archive_mode = false;
             SQLiteConnectionManager::instance().closeConnection(prmArchive_.string());
             SQLiteConnectionManager::instance().closeConnection(prdArchive_.string());
 
@@ -252,6 +258,42 @@ TEST_F(AutoPadSourceTest, GetBasesDisabledDoesNotTouchFilesystem)
     EXPECT_EQ(
         Telega::probeSource(Telega::TYPE::VHOD),
         Telega::SourceAvailability::Disabled);
+}
+
+TEST_F(AutoPadSourceTest, ArchiveModeUsesOnlyExplicitMonthlyDirectory)
+{
+    const fs::path monthly = root_ / "archive-prm-monthly";
+    fs::create_directories(monthly);
+    createMinimalArchive(monthly / "12-2099.db3", true);
+    createMinimalArchive(monthly / "01-2100.db3", true);
+
+    Telega::archive_mode = true;
+    Telega::prm_monthly_bases_dir = monthly.string();
+    Telega::prm_base_dir = prmDir_.string();
+
+    const auto bases = Telega::getBases(Telega::TYPE::VHOD);
+    ASSERT_EQ(bases.size(), 1u);
+    EXPECT_EQ(fs::path(bases.front()), monthly / "12-2099.db3");
+    EXPECT_EQ(
+        Telega::probeSource(Telega::TYPE::VHOD),
+        Telega::SourceAvailability::Configured);
+    EXPECT_TRUE(Telega::archiveDbPathFor(Telega::TYPE::VHOD).empty());
+}
+
+TEST_F(AutoPadSourceTest, MissingOperationalArchiveIsNeverCreatedBySearch)
+{
+    SQLiteConnectionManager::instance().closeConnection(prmArchive_.string());
+    SQLiteConnectionManager::instance().closeConnection(prdArchive_.string());
+    ASSERT_TRUE(fs::remove(prmArchive_));
+    ASSERT_TRUE(fs::remove(prdArchive_));
+
+    GetJsonTelegaVhCmd command;
+    const auto result = command.executeResult(bytesOf("`index` = 1"));
+
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    EXPECT_FALSE(fs::exists(prmArchive_));
+    EXPECT_FALSE(fs::exists(prdArchive_));
+    EXPECT_TRUE(Telega::b_prm.empty());
 }
 
 TEST_F(AutoPadSourceTest, SqlVhDisabledReturnsEmptySuccess)

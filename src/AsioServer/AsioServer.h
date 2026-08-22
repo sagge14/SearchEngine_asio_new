@@ -266,6 +266,24 @@ namespace asio_server
         return {false, true};
     }
 
+    /// In archive mode, a manual index update remains available only to an
+    /// authenticated session whose exact user name is "admin". The session
+    /// layer separately guarantees that any admin authorization is localhost-only.
+    [[nodiscard]] inline constexpr std::optional<
+        command_execution::ErrorCode> archiveCommandRejection(
+            COMMAND command,
+            bool archiveMode,
+            bool adminSession) noexcept
+    {
+        if (archiveMode &&
+            command == COMMAND::START_UPDATE_BASE &&
+            !adminSession)
+        {
+            return command_execution::ErrorCode::ArchiveAdminRequired;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] inline constexpr COMMAND legacyErrorCommand(
         command_execution::ErrorCode error) noexcept
     {
@@ -374,9 +392,12 @@ namespace asio_server
         std::string clientId_;
         std::string deviceType_;
         std::string deviceId_;
-        /// Session gate: set only by USER_REGISTRY("admin")+127.0.0.1 peer
-        /// or successful AUTHENTICATE_V1 (any peer).
+        /// Session gate: set by local USER_REGISTRY("admin") or successful
+        /// AUTHENTICATE_V1. AUTHENTICATE_V1 name "admin" is also local-only.
         bool authenticated_{false};
+        /// Exact authenticated user name is "admin"; every such authorization
+        /// is additionally restricted to TCP peer 127.0.0.1.
+        bool admin_session_{false};
         std::string remoteIP_;
         mutable std::mutex user_name_mutex_;
         std::atomic_bool stopped_{false};
@@ -474,11 +495,20 @@ namespace asio_server
         inline static std::string tlg_send_root_ = {};
         inline static std::string razn_output_dir_ = {};
         inline static search_server::SearchServer* searchServer_ = nullptr;
+        inline static bool archive_mode_ = false;
         inline static std::map<COMMAND, std::unique_ptr<Command>> cmdMap{};
 
     public:
         static void setYear(const std::string& year);
         static std::string getYear();
+        static void setArchiveMode(bool archiveMode) noexcept
+        {
+            archive_mode_ = archiveMode;
+        }
+        [[nodiscard]] static bool isArchiveMode() noexcept
+        {
+            return archive_mode_;
+        }
         static void setSearchServer(
             search_server::SearchServer* _server,
             const ProductionCommandPaths& paths);

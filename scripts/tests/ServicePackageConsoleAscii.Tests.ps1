@@ -630,6 +630,12 @@ Assert-True ($packagerText.Contains("data\prefix_map.json")) (
 Assert-True ($packagerText.Contains("data\OEM866.INI")) (
     '8. Packager writes data\OEM866.INI'
 )
+Assert-True ($packagerText.Contains("tools\SearchEngineArchive.exe")) (
+    '8. Packager copies tools\SearchEngineArchive.exe'
+)
+Assert-True ($packagerText.Contains("Archive-SearchEngineService.bat")) (
+    '8. Packager copies archive launcher'
+)
 
 function Test-PackageDataLayout {
     param(
@@ -666,6 +672,7 @@ try {
         $required = @(
             (Join-Path $buildDir 'SearchEngine.exe'),
             (Join-Path $buildDir 'SearchEngineConfig.exe'),
+            (Join-Path $buildDir 'SearchEngineArchive.exe'),
             (Join-Path $buildDir 'AuthDbTool.exe'),
             (Join-Path $buildDir 'SearchClientTokenIssuer.exe'),
             (Join-Path $buildDir 'searchclient-auth-token.defaults.json')

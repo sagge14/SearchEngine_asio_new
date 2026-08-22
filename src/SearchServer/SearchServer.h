@@ -7,11 +7,23 @@
 #include "AsioServer/AsioServer.h"
 #include "SearchServer/QueryWordMatch.h"
 #include <set>
+#include <string_view>
 #include <condition_variable>
 #include "FileWatcher/MultiWatcher.h"
 
 
 namespace search_server {
+
+    enum class ServerMode
+    {
+        Active,
+        Archive
+    };
+
+    [[nodiscard]] inline constexpr std::string_view toString(ServerMode mode) noexcept
+    {
+        return mode == ServerMode::Archive ? "archive" : "active";
+    }
 
     using namespace std;
     typedef set <size_t> setFileInd;
@@ -94,8 +106,13 @@ namespace search_server {
     public:
 
         std::string year;
+        ServerMode serverMode = ServerMode::Active;
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
+        /// Explicit monthly AutoPad database roots. Empty keeps the legacy
+        /// <*_base_dir>\METH_BASES location.
+        std::string prm_monthly_bases_dir = {};
+        std::string prd_monthly_bases_dir = {};
         /// LOAD_TLG_TO_SEND destination root: <tlg_send_root>\<MONTH>\<DATE>\...
         std::string tlg_send_root = "D:\\";
         /// LOAD_RAZN destination directory.

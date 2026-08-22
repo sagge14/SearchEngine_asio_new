@@ -18,7 +18,7 @@ namespace
     using command_execution::CommandResult;
     using command_execution::ErrorCode;
 
-    constexpr std::array<ErrorCode, 47> allErrorCodes{
+    constexpr std::array<ErrorCode, 48> allErrorCodes{
         ErrorCode::PayloadTooLarge,
         ErrorCode::InvalidCommand,
         ErrorCode::CommandNotRegistered,
@@ -66,6 +66,7 @@ namespace
         ErrorCode::AuthSignatureInvalid,
         ErrorCode::DataSourceDisabled,
         ErrorCode::DataSourceUnavailable,
+        ErrorCode::ArchiveAdminRequired,
     };
 
     class LegacyCommand final : public Command

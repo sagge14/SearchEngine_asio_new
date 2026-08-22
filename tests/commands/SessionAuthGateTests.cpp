@@ -305,6 +305,22 @@ TEST(SessionAuthGate, DataCommandsRemainBlockedUntilAuthenticated)
     }
 }
 
+TEST(SessionAuthGate, ArchiveUpdateRequiresExactAdminSessionName)
+{
+    EXPECT_FALSE(asio_server::archiveCommandRejection(
+        COMMAND::START_UPDATE_BASE, false, false).has_value());
+    EXPECT_FALSE(asio_server::archiveCommandRejection(
+        COMMAND::START_UPDATE_BASE, true, true).has_value());
+
+    const auto tokenClient = asio_server::archiveCommandRejection(
+        COMMAND::START_UPDATE_BASE, true, false);
+    ASSERT_TRUE(tokenClient.has_value());
+    EXPECT_EQ(*tokenClient, ErrorCode::ArchiveAdminRequired);
+
+    EXPECT_FALSE(asio_server::archiveCommandRejection(
+        COMMAND::SOLOREQUEST, true, false).has_value());
+}
+
 TEST(SessionAuthGate, AuthenticateRejectsDisabledClient)
 {
     TempAuthDb db;
@@ -547,6 +563,7 @@ TEST(AuthenticateV1Errors, ExplicitWireNumericValues)
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceTypeMismatch), 43u);
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthDeviceIdMismatch), 44u);
     EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::AuthSignatureInvalid), 45u);
+    EXPECT_EQ(static_cast<std::uint32_t>(ErrorCode::ArchiveAdminRequired), 48u);
 }
 
 TEST(AuthenticateV1Errors, TypedErrorResponsePreservesAuthCodes)

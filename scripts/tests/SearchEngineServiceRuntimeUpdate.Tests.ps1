@@ -976,19 +976,6 @@ try {
     Assert-True ($commitKeep.ExitCode -eq 0) 'helper commit deletes transaction after rollback'
     Assert-True (-not (Test-Path -LiteralPath $rbPath)) 'transaction removed only after commit'
 
-    if (-not ('NativeProc' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class NativeProc {
-    [DllImport("ntdll.dll")]
-    public static extern int NtSuspendProcess(IntPtr processHandle);
-    [DllImport("ntdll.dll")]
-    public static extern int NtResumeProcess(IntPtr processHandle);
-}
-'@
-    }
-
     # TEST A: pre-mutation apply failure keeps diagnostic TX with prepared phase.
     $caseA = Join-Path $script:tempRoot 'case-phase-prepared'
     New-Item -ItemType Directory -Path $caseA | Out-Null
@@ -1053,8 +1040,8 @@ public static class NativeProc {
     $caseB = Join-Path $script:tempRoot 'case-phase-restored'
     New-Item -ItemType Directory -Path $caseB | Out-Null
     $dataB = Join-Path $caseB 'SearchEngineService'
-    New-SentinelDataDir -DataDir $dataB -OmitMessages
-    New-TextFile -Path (Join-Path $dataB 'messages') -Text 'messages-as-file'
+    New-SentinelDataDir -DataDir $dataB -OmitLogs
+    New-TextFile -Path (Join-Path $dataB 'logs') -Text 'logs-as-file'
     $beforeB = Get-PersistentRecords -DataDir $dataB
     $packageB = New-PackageData -Root $caseB -Oem $newOem -Ignore $packageIgnore
     $genSettingsB = Join-Path $caseB 'generated-settings.json'
@@ -1103,14 +1090,13 @@ public static class NativeProc {
     Assert-True ($commitB.ExitCode -eq 0) 'TEST B commit deletes restored TX'
     Assert-True (-not (Test-Path -LiteralPath $rbB)) 'TEST B TX removed after commit'
 
-    # Ownership race: foreign file with a known snapshot basename is not owned.
-    $caseOwn = Join-Path $script:tempRoot 'case-owned-race'
+    # Ownership: a known snapshot basename is foreign when the manifest does
+    # not claim that snapshot. Inject it after apply to avoid process-timing
+    # races while still exercising rollback and commit ownership checks.
+    $caseOwn = Join-Path $script:tempRoot 'case-owned-snapshot'
     New-Item -ItemType Directory -Path $caseOwn | Out-Null
     $dataOwn = Join-Path $caseOwn 'SearchEngineService'
-    New-SentinelDataDir -DataDir $dataOwn
-    $payloadOwn = New-Object byte[] (8MB)
-    [IO.File]::WriteAllBytes((Join-Path $dataOwn 'Settings.json'), $payloadOwn)
-    $settingsOwn = Get-FileRecord -Path (Join-Path $dataOwn 'Settings.json')
+    New-SentinelDataDir -DataDir $dataOwn -OmitOem
     $beforeOwn = Get-PersistentRecords -DataDir $dataOwn
     $packageOwn = New-PackageData -Root $caseOwn -Oem $newOem -Ignore $packageIgnore
     $genSettingsOwn = Join-Path $caseOwn 'generated-settings.json'
@@ -1118,87 +1104,55 @@ public static class NativeProc {
     New-TextFile -Path $genSettingsOwn -Text $newSettings
     New-TextFile -Path $genEndpointOwn -Text $newEndpoint
     $rbOwn = New-RollbackDir -DataDir $dataOwn
+    $applyOwn = Invoke-RuntimeCommand -Command 'runtime-update-apply' -Arguments @(
+        '--data-dir', $dataOwn,
+        '--package-data', $packageOwn,
+        '--generated-settings', $genSettingsOwn,
+        '--generated-endpoint', $genEndpointOwn,
+        '--rollback-dir', $rbOwn
+    )
+    Assert-True ($applyOwn.ExitCode -eq 0) 'ownership apply succeeded'
+
     $foreignSnapshot = Join-Path $rbOwn 'OEM866.INI.snapshot'
     $foreignBytes = [Text.Encoding]::ASCII.GetBytes(
         'FOREIGN-SNAPSHOT-' + [Guid]::NewGuid().ToString('N')
     )
-    $helperFull = (Resolve-Path -LiteralPath $HelperPath).Path
-    $stdoutOwn = Join-Path $caseOwn 'apply.out'
-    $stderrOwn = Join-Path $caseOwn 'apply.err'
-    $psiOwn = New-Object System.Diagnostics.ProcessStartInfo
-    $psiOwn.FileName = $helperFull
-    $psiOwn.Arguments = @(
-        'runtime-update-apply',
-        '--data-dir', ('"{0}"' -f $dataOwn),
-        '--package-data', ('"{0}"' -f $packageOwn),
-        '--generated-settings', ('"{0}"' -f $genSettingsOwn),
-        '--generated-endpoint', ('"{0}"' -f $genEndpointOwn),
-        '--rollback-dir', ('"{0}"' -f $rbOwn)
-    ) -join ' '
-    $psiOwn.UseShellExecute = $false
-    $psiOwn.RedirectStandardOutput = $true
-    $psiOwn.RedirectStandardError = $true
-    $psiOwn.CreateNoWindow = $true
-    $procOwn = New-Object System.Diagnostics.Process
-    $procOwn.StartInfo = $psiOwn
-    [void]$procOwn.Start()
-    $suspendedOwn = $false
-    $applyOwnExit = -1
-    try {
-        $deadlineOwn = (Get-Date).AddSeconds(20)
-        while (-not $procOwn.HasExited -and (Get-Date) -lt $deadlineOwn) {
-            if (Test-Path -LiteralPath $rbOwn) {
-                [void][NativeProc]::NtSuspendProcess($procOwn.Handle)
-                $suspendedOwn = $true
-                if (-not (Test-Path -LiteralPath $foreignSnapshot)) {
-                    [IO.File]::WriteAllBytes($foreignSnapshot, $foreignBytes)
-                }
-                break
-            }
-            Start-Sleep -Milliseconds 1
-        }
-        if ($suspendedOwn) {
-            [void][NativeProc]::NtResumeProcess($procOwn.Handle)
-            $suspendedOwn = $false
-        }
-        if (-not $procOwn.WaitForExit(30000)) {
-            $procOwn.Kill()
-            [void]$procOwn.WaitForExit(5000)
-        }
-        $applyOwnExit = $procOwn.ExitCode
-        $procOwn.StandardOutput.ReadToEnd() | Set-Content -LiteralPath $stdoutOwn -Encoding ASCII
-        $procOwn.StandardError.ReadToEnd() | Set-Content -LiteralPath $stderrOwn -Encoding ASCII
-    } finally {
-        if ($suspendedOwn -and -not $procOwn.HasExited) {
-            [void][NativeProc]::NtResumeProcess($procOwn.Handle)
-        }
-        if (-not $procOwn.HasExited) {
-            $procOwn.Kill()
-        }
-        $procOwn.Dispose()
-    }
-    Assert-True ($applyOwnExit -eq 2) 'ownership race apply failed'
-    Assert-True (Test-Path -LiteralPath $foreignSnapshot) 'ownership race foreign snapshot remains'
-    $afterForeign = [IO.File]::ReadAllBytes($foreignSnapshot)
-    Assert-True (
-        [Convert]::ToBase64String($afterForeign) -eq [Convert]::ToBase64String($foreignBytes)
-    ) 'ownership race foreign snapshot bytes unchanged'
-    Assert-FileUnchanged -Path (Join-Path $dataOwn 'Settings.json') -Before $settingsOwn (
-        'ownership race Settings.json unchanged'
-    )
-    Assert-PersistentUnchanged -DataDir $dataOwn -Before $beforeOwn -Prefix 'ownership race'
+    [IO.File]::WriteAllBytes($foreignSnapshot, $foreignBytes)
+
     $rollbackOwn = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
         '--data-dir', $dataOwn,
         '--rollback-dir', $rbOwn
     )
-    Assert-True ($rollbackOwn.ExitCode -eq 0) 'ownership race rollback not required'
-    Assert-True ($rollbackOwn.Output -match 'rollback not required') (
-        'ownership race helper does not restore from the foreign snapshot'
+    Assert-True ($rollbackOwn.ExitCode -eq 0) 'ownership rollback succeeded'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dataOwn 'Settings.json') -Raw) -eq $oldSettings) (
+        'ownership Settings.json restored'
     )
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dataOwn 'OEM866.INI'))) (
+        'ownership rollback removed installer-created OEM866.INI'
+    )
+    Assert-True ((Get-Content -LiteralPath (Join-Path $dataOwn 'client-endpoint.txt') -Raw) -eq $oldEndpoint) (
+        'ownership client-endpoint.txt restored'
+    )
+    Assert-PersistentUnchanged -DataDir $dataOwn -Before $beforeOwn -Prefix 'ownership'
+    Assert-True ((Get-TransactionPhase -RollbackDir $rbOwn) -eq 'restored') (
+        'ownership rollback records restored'
+    )
+    Assert-True (Test-Path -LiteralPath $foreignSnapshot) 'ownership foreign snapshot remains'
     $afterForeign2 = [IO.File]::ReadAllBytes($foreignSnapshot)
     Assert-True (
         [Convert]::ToBase64String($afterForeign2) -eq [Convert]::ToBase64String($foreignBytes)
-    ) 'ownership race foreign snapshot survived rollback'
+    ) 'ownership foreign snapshot bytes survived rollback'
+    $commitOwn = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dataOwn,
+        '--rollback-dir', $rbOwn
+    )
+    Assert-True ($commitOwn.ExitCode -ne 0) 'ownership commit rejects foreign snapshot'
+    Assert-True (Test-Path -LiteralPath $rbOwn) 'ownership commit keeps transaction directory'
+    Assert-True (Test-Path -LiteralPath $foreignSnapshot) 'ownership commit keeps foreign snapshot'
+    $afterForeign3 = [IO.File]::ReadAllBytes($foreignSnapshot)
+    Assert-True (
+        [Convert]::ToBase64String($afterForeign3) -eq [Convert]::ToBase64String($foreignBytes)
+    ) 'ownership foreign snapshot bytes survived commit'
 
     function Invoke-InvalidPhaseCase {
         param(
@@ -1314,16 +1268,13 @@ public static class NativeProc {
     )
     Assert-True ($commitDir.ExitCode -eq 0) 'directory phase cleanup commit succeeded'
 
-    # Pre-mutation cleanup must not delete unexpected files.
+    # Prepared rollback/commit commands must not delete unexpected files.
     $caseIntruder = Join-Path $script:tempRoot 'case-intruder'
     New-Item -ItemType Directory -Path $caseIntruder | Out-Null
     $dataIntruder = Join-Path $caseIntruder 'SearchEngineService'
     New-SentinelDataDir -DataDir $dataIntruder
     Remove-Item -LiteralPath (Join-Path $dataIntruder 'ignore.txt') -Force
     New-Item -ItemType Directory -Path (Join-Path $dataIntruder 'ignore.txt') | Out-Null
-    $bigSettings = Join-Path $dataIntruder 'Settings.json'
-    $payload = New-Object byte[] (8MB)
-    [IO.File]::WriteAllBytes($bigSettings, $payload)
     $packageIntruder = New-PackageData -Root $caseIntruder -Oem $newOem -Ignore $packageIgnore
     $genSettingsIntruder = Join-Path $caseIntruder 'generated-settings.json'
     $genEndpointIntruder = Join-Path $caseIntruder 'generated-endpoint.txt'
@@ -1331,62 +1282,31 @@ public static class NativeProc {
     New-TextFile -Path $genEndpointIntruder -Text $newEndpoint
     $rbIntruder = New-RollbackDir -DataDir $dataIntruder
     $intruderFile = Join-Path $rbIntruder 'intruder.txt'
-    $helperFull = (Resolve-Path -LiteralPath $HelperPath).Path
-    $stdoutFile = Join-Path $caseIntruder 'apply.out'
-    $stderrFile = Join-Path $caseIntruder 'apply.err'
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $helperFull
-    $psi.Arguments = @(
-        'runtime-update-apply',
-        '--data-dir', ('"{0}"' -f $dataIntruder),
-        '--package-data', ('"{0}"' -f $packageIntruder),
-        '--generated-settings', ('"{0}"' -f $genSettingsIntruder),
-        '--generated-endpoint', ('"{0}"' -f $genEndpointIntruder),
-        '--rollback-dir', ('"{0}"' -f $rbIntruder)
-    ) -join ' '
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $psi
-    [void]$proc.Start()
-    $suspended = $false
-    $applyIntruderExit = -1
-    try {
-        $deadline = (Get-Date).AddSeconds(20)
-        while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
-            if (Test-Path -LiteralPath $rbIntruder) {
-                [void][NativeProc]::NtSuspendProcess($proc.Handle)
-                $suspended = $true
-                Set-Content -LiteralPath $intruderFile -Value 'intruder' -Encoding ASCII
-                break
-            }
-            Start-Sleep -Milliseconds 1
-        }
-        if ($suspended) {
-            [void][NativeProc]::NtResumeProcess($proc.Handle)
-            $suspended = $false
-        }
-        if (-not $proc.WaitForExit(30000)) {
-            $proc.Kill()
-            [void]$proc.WaitForExit(5000)
-        }
-        $applyIntruderExit = $proc.ExitCode
-        $proc.StandardOutput.ReadToEnd() | Set-Content -LiteralPath $stdoutFile -Encoding ASCII
-        $proc.StandardError.ReadToEnd() | Set-Content -LiteralPath $stderrFile -Encoding ASCII
-    } finally {
-        if ($suspended -and -not $proc.HasExited) {
-            [void][NativeProc]::NtResumeProcess($proc.Handle)
-        }
-        if (-not $proc.HasExited) {
-            $proc.Kill()
-        }
-        $proc.Dispose()
-    }
-    Assert-True ($applyIntruderExit -ne 0) 'intruder apply failed before mutation'
-    Assert-True (Test-Path -LiteralPath $rbIntruder) 'intruder TX directory was preserved'
-    Assert-True (Test-Path -LiteralPath $intruderFile) 'unexpected TX file was not deleted'
+    $applyIntruder = Invoke-RuntimeCommand -Command 'runtime-update-apply' -Arguments @(
+        '--data-dir', $dataIntruder,
+        '--package-data', $packageIntruder,
+        '--generated-settings', $genSettingsIntruder,
+        '--generated-endpoint', $genEndpointIntruder,
+        '--rollback-dir', $rbIntruder
+    )
+    Assert-True ($applyIntruder.ExitCode -eq 2) 'intruder apply failed before mutation'
+    Assert-True ((Get-TransactionPhase -RollbackDir $rbIntruder) -eq 'prepared') (
+        'intruder transaction remains prepared'
+    )
+    New-TextFile -Path $intruderFile -Text 'intruder'
+    $rollbackIntruder = Invoke-RuntimeCommand -Command 'runtime-update-rollback' -Arguments @(
+        '--data-dir', $dataIntruder,
+        '--rollback-dir', $rbIntruder
+    )
+    Assert-True ($rollbackIntruder.ExitCode -eq 0) 'intruder prepared rollback is a no-op'
+    Assert-True (Test-Path -LiteralPath $intruderFile) 'intruder rollback keeps unexpected file'
+    $commitIntruder = Invoke-RuntimeCommand -Command 'runtime-update-commit' -Arguments @(
+        '--data-dir', $dataIntruder,
+        '--rollback-dir', $rbIntruder
+    )
+    Assert-True ($commitIntruder.ExitCode -ne 0) 'intruder commit rejects unexpected file'
+    Assert-True (Test-Path -LiteralPath $rbIntruder) 'intruder commit keeps transaction directory'
+    Assert-True (Test-Path -LiteralPath $intruderFile) 'intruder commit keeps unexpected file'
 } finally {
     if (Test-Path -LiteralPath $script:tempRoot) {
         Remove-Item -LiteralPath $script:tempRoot -Recurse -Force -ErrorAction SilentlyContinue

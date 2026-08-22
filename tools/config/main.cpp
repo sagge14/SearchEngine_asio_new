@@ -1037,6 +1037,45 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
     requireBaseDirString("prm_base_dir");
     requireBaseDirString("prd_base_dir");
 
+    for (const char* name : {
+            "prm_monthly_bases_dir", "prd_monthly_bases_dir"}) {
+        if (!config.contains(name))
+            continue; // Legacy Settings derive <base_dir>\METH_BASES.
+        if (!config[name].is_string()) {
+            errors.emplace_back(
+                std::string("config.") + name + " must be a string");
+            continue;
+        }
+        const auto& value = config[name].get_ref<const std::string&>();
+        if (!value.empty() && !isAbsoluteWindowsLocalPath(value)) {
+            errors.emplace_back(
+                std::string("config.") + name +
+                " must be empty or an absolute local Windows path");
+        }
+    }
+
+    if (config.contains("server_mode")) {
+        if (!config["server_mode"].is_string()) {
+            errors.emplace_back("config.server_mode must be active or archive");
+        } else {
+            const auto& value =
+                config["server_mode"].get_ref<const std::string&>();
+            if (value != "active" && value != "archive") {
+                errors.emplace_back(
+                    "config.server_mode must be active or archive");
+            }
+        }
+    }
+
+    if (config.value("server_mode", std::string("active")) == "archive" &&
+        config.value(
+            "document_catalog_storage", std::string("memory")) != "sqlite")
+    {
+        errors.emplace_back(
+            "config.server_mode=archive requires "
+            "config.document_catalog_storage=sqlite");
+    }
+
     const auto requireAbsoluteLocalRoot = [&](const char* name) {
         if (!config.contains(name) || !config[name].is_string() ||
             config[name].get_ref<const std::string&>().empty())
@@ -1378,7 +1417,11 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
     if (checkDirectories) {
-        for (const char* name : {"prm_base_dir", "prd_base_dir"}) {
+        for (const char* name : {
+                 "prm_base_dir",
+                 "prd_base_dir",
+                 "prm_monthly_bases_dir",
+                 "prd_monthly_bases_dir"}) {
             if (!config.contains(name) || !config[name].is_string())
                 continue;
             const auto& value = config[name].get_ref<const std::string&>();
@@ -1528,6 +1571,8 @@ int inspectCommand(const std::vector<std::wstring>& args)
               << "document_catalog_storage="
               << config.value(
                     "document_catalog_storage", std::string("memory")) << '\n'
+              << "server_mode="
+              << config.value("server_mode", std::string("active")) << '\n'
               << "batch_reader_threads="
               << config.value("batch_reader_threads", 1) << '\n'
               << "batch_indexer_threads="
@@ -1551,6 +1596,10 @@ int inspectCommand(const std::vector<std::wstring>& args)
               << config.value("opis_base_dir", std::string()) << '\n'
               << "f12_base_dir="
               << config.value("f12_base_dir", std::string()) << '\n'
+              << "prm_monthly_bases_dir="
+              << config.value("prm_monthly_bases_dir", std::string()) << '\n'
+              << "prd_monthly_bases_dir="
+              << config.value("prd_monthly_bases_dir", std::string()) << '\n'
               << "settings_valid=" << (errors.empty() ? 1 : 0) << '\n';
     return errors.empty() ? 0 : 2;
 }
