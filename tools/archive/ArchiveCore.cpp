@@ -61,7 +61,60 @@ std::wstring normalizedWindowsPath(const fs::path& value)
 
 bool pathComponentBoundary(const std::wstring& value, std::size_t offset)
 {
-    return offset == value.size() || value[offset] == L'\\';
+    return offset == value.size() ||
+        (offset > 0 && value[offset - 1] == L'\\') ||
+        value[offset] == L'\\';
+}
+
+fs::path absoluteNormalizedPreservingCase(const fs::path& value)
+{
+    std::error_code error;
+    fs::path result = fs::absolute(value, error);
+    if (error)
+        result = value;
+    return result.lexically_normal();
+}
+
+std::wstring lowerPathComponent(const fs::path& value)
+{
+    std::wstring result = value.wstring();
+    std::replace(result.begin(), result.end(), L'/', L'\\');
+    std::transform(
+        result.begin(), result.end(), result.begin(),
+        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return result;
+}
+
+fs::path withoutTrailingSeparator(const fs::path& path);
+
+fs::path relativePathCaseInsensitive(
+    const fs::path& value,
+    const fs::path& root)
+{
+    const fs::path normalizedValue =
+        withoutTrailingSeparator(absoluteNormalizedPreservingCase(value));
+    const fs::path normalizedRoot =
+        withoutTrailingSeparator(absoluteNormalizedPreservingCase(root));
+    auto valuePart = normalizedValue.begin();
+    const auto valueEnd = normalizedValue.end();
+    for (auto rootPart = normalizedRoot.begin();
+         rootPart != normalizedRoot.end();
+         ++rootPart, ++valuePart)
+    {
+        if (valuePart == valueEnd ||
+            lowerPathComponent(*valuePart) != lowerPathComponent(*rootPart))
+        {
+            throw std::runtime_error(
+                "path is outside the selected mapping root: " + utf8(value));
+        }
+    }
+
+    fs::path relative;
+    for (; valuePart != valueEnd; ++valuePart) {
+        if (!valuePart->empty() && *valuePart != L".")
+            relative /= *valuePart;
+    }
+    return relative;
 }
 
 bool isDriveRoot(const fs::path& path)
@@ -519,9 +572,9 @@ fs::path rebasePath(
     }
     if (!best)
         throw std::runtime_error("path is outside the move plan: " + utf8(source));
-    const fs::path relative = source.lexically_normal().lexically_relative(
-        best->source.lexically_normal());
-    if (relative.empty() || relative == L".")
+    const fs::path relative = relativePathCaseInsensitive(
+        source, best->source);
+    if (relative.empty())
         return best->target;
     return best->target / relative;
 }

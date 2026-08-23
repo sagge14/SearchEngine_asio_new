@@ -70,6 +70,25 @@
         "SEARCHENGINE_BOOST_ROOT": "C:/Boost/windows32",
         "SEARCHENGINE_OPENSSL_ROOT": "C:/Program Files (x86)/OpenSSL-Win32"
       }
+    },
+    {
+      "name": "windows7-x86-archive-e2e-stand",
+      "displayName": "Archive E2E stand tools (Windows 7 SP1 x86)",
+      "inherits": "windows7-x86",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "BUILD_SEARCHENGINE": "OFF",
+        "BUILD_CONFIG_TOOL": "OFF",
+        "BUILD_ARCHIVE_TOOL": "OFF",
+        "BUILD_ARCHIVE_E2E_STAND_TOOL": "ON",
+        "BUILD_TESTS": "OFF",
+        "BUILD_ZAGEDITOR": "OFF",
+        "BUILD_BACKUP_SERVICE": "OFF",
+        "BUILD_BACKUP_RESTORE": "OFF",
+        "BUILD_AUTH_DB_TOOL": "OFF",
+        "BUILD_TOKEN_ISSUER": "OFF",
+        "SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -96,6 +115,11 @@
     {
       "name": "windows7-x86-release",
       "configurePreset": "windows7-x86",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows7-x86-archive-e2e-stand-release",
+      "configurePreset": "windows7-x86-archive-e2e-stand",
       "configuration": "Release"
     }
   ]

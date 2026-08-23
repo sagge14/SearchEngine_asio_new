@@ -46,6 +46,11 @@ endif()
 option(BUILD_SEARCHENGINE "Build the SearchEngine executable" ON)
 option(BUILD_CONFIG_TOOL "Build the portable SearchEngineConfig helper" ${WIN32})
 option(BUILD_ARCHIVE_TOOL "Build the SearchEngineArchive migration helper" ${WIN32})
+option(
+        BUILD_ARCHIVE_E2E_STAND_TOOL
+        "Build the disposable SearchEngine archive E2E stand generator"
+        OFF
+)
 option(BUILD_TESTS "Build legacy unit tests" OFF)
 option(BUILD_ZAGEDITOR "Build the standalone ZagEditor tool" ON)
 option(BUILD_BACKUP_SERVICE "Build the standalone BackupService tool" ON)
@@ -181,7 +186,7 @@ function(searchengine_validate_boost_target target_name)
 endfunction()
 
 set(_build_any_target OFF)
-if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_ARCHIVE_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
+if(BUILD_SEARCHENGINE OR BUILD_CONFIG_TOOL OR BUILD_ARCHIVE_TOOL OR BUILD_ARCHIVE_E2E_STAND_TOOL OR BUILD_TESTS OR BUILD_ZAGEDITOR OR BUILD_BACKUP_SERVICE OR BUILD_BACKUP_RESTORE OR BUILD_AUTH_DB_TOOL)
     set(_build_any_target ON)
 endif()
 
@@ -295,6 +300,55 @@ if(BUILD_ARCHIVE_TOOL)
             SearchEngineArchive
             PRODUCT_NAME "SearchEngineService"
             ORIGINAL_FILENAME "SearchEngineArchive.exe"
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# Disposable full-data stand for archive/indexing E2E tests
+# ---------------------------------------------------------------------------
+if(BUILD_ARCHIVE_E2E_STAND_TOOL)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SearchEngineArchiveE2EStand currently supports Windows only")
+    endif()
+
+    add_executable(
+            SearchEngineArchiveE2EStand
+            tools/archive_e2e_stand/main.cpp
+            tools/archive_e2e_stand/StandBuilder.cpp
+            src/Backup/FileHash.cpp
+            src/MyUtils/Encoding.cpp
+            lib/backup_sqlite/sqlite3.c
+    )
+    target_include_directories(
+            SearchEngineArchiveE2EStand
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/archive_e2e_stand"
+    )
+    target_link_libraries(
+            SearchEngineArchiveE2EStand
+            PRIVATE
+            nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+            SearchEngineArchiveE2EStand
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    if(MSVC)
+        set_source_files_properties(
+                lib/backup_sqlite/sqlite3.c
+                PROPERTIES LANGUAGE C
+        )
+    endif()
+    searchengine_configure_target(SearchEngineArchiveE2EStand)
+    searchengine_target_win32_versioninfo(
+            SearchEngineArchiveE2EStand
+            PRODUCT_NAME "SearchEngineArchiveE2EStand"
+            ORIGINAL_FILENAME "SearchEngineArchiveE2EStand.exe"
     )
 endif()
 
@@ -1110,6 +1164,10 @@ if(BUILD_TESTS)
             FILTER test_sources
             EXCLUDE REGEX "/tests/index/InvertedIndexSQLiteIntegrationTests\\.cpp$"
     )
+    list(
+            FILTER test_sources
+            EXCLUDE REGEX "/tests/archive/ArchiveE2EStandTests\\.cpp$"
+    )
     if(NOT test_sources)
         message(
                 WARNING
@@ -1218,6 +1276,46 @@ if(BUILD_TESTS)
     endif()
     searchengine_configure_target(SearchEngine_test)
     add_test(NAME SearchEngine_test COMMAND SearchEngine_test)
+
+    add_executable(
+            ArchiveE2EStand_test
+            tests/archive/ArchiveE2EStandTests.cpp
+            tools/archive_e2e_stand/StandBuilder.cpp
+            tools/archive/ArchiveCore.cpp
+            tools/archive/ServiceArchive.cpp
+            src/Backup/FileHash.cpp
+            src/Backup/SQLiteBackup.cpp
+            src/MyUtils/Encoding.cpp
+            lib/backup_sqlite/sqlite3.c
+    )
+    target_include_directories(
+            ArchiveE2EStand_test
+            PRIVATE
+            "${PROJECT_SOURCE_DIR}/lib"
+            "${PROJECT_SOURCE_DIR}/lib/backup_sqlite"
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/tools/archive"
+            "${PROJECT_SOURCE_DIR}/tools/archive_e2e_stand"
+    )
+    target_link_libraries(
+            ArchiveE2EStand_test
+            PRIVATE
+            GTest::gtest
+            GTest::gtest_main
+            nlohmann_json::nlohmann_json
+            advapi32
+            shell32
+            ole32
+            uuid
+    )
+    target_compile_definitions(
+            ArchiveE2EStand_test
+            PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+    searchengine_configure_target(ArchiveE2EStand_test)
+    add_test(NAME ArchiveE2EStand_test COMMAND ArchiveE2EStand_test)
 
     add_executable(
             InvertedIndexSQLiteIntegration_test
