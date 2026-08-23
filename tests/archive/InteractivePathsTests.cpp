@@ -61,6 +61,20 @@ TEST(ArchiveInteractivePaths, ManualPathDoesNotOpenPicker)
     EXPECT_EQ(result.path, fs::path(L"D:\\manual"));
 }
 
+TEST(ArchiveInteractivePaths, BareDriveDesignatorMeansDriveRoot)
+{
+    bool called = false;
+    const auto result = searchengine_archive::resolveDirectoryInput(
+        L"D:", {}, false,
+        [&](const fs::path&) -> std::optional<fs::path> {
+            called = true;
+            return L"E:\\wrong";
+        });
+    EXPECT_FALSE(called);
+    EXPECT_EQ(result.action, DirectoryInputAction::Selected);
+    EXPECT_EQ(result.path, fs::path(L"D:\\"));
+}
+
 TEST(ArchiveInteractivePaths, AssumeYesNeverDeletesRestoredArchive)
 {
     EXPECT_FALSE(searchengine_archive::shouldDeleteRestoredArchive(true, true));

@@ -68,6 +68,14 @@ function Get-SearchEngineProductBinaries {
                 }
             )
         }
+        'SearchEngineArchiveE2EStand' {
+            return @(
+                @{
+                    OriginalFilename = 'SearchEngineArchiveE2EStand.exe'
+                    FileDescription  = 'SearchEngine archive E2E stand generator'
+                }
+            )
+        }
         default {
             throw "Unknown product for version binaries: $ProductName"
         }

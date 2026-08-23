@@ -82,7 +82,8 @@ Presets размещают их раздельно в `out/build/`.
 ## App-версия и release-пакеты
 
 Канон версии продукта — `app-version.json` (SearchEngineService) и
-`app-version.<Product>.json` для BackupService / ZagEditor / BackupRestore.
+`app-version.<Product>.json` для BackupService / ZagEditor / BackupRestore /
+SearchEngineArchiveE2EStand.
 
 - Формат: `major.minor.patch`
 - PE: `ProductVersion=A.B.C`, `FileVersion=A.B.C.0`
@@ -98,6 +99,13 @@ Presets размещают их раздельно в `out/build/`.
 | BackupService | `app-version.BackupService.json` | `BackupService.exe` |
 | ZagEditor | `app-version.ZagEditor.json` | `ZagEditor.exe` |
 | BackupRestore | `app-version.BackupRestore.json` | `BackupRestore.exe` |
+| SearchEngineArchiveE2EStand | `app-version.SearchEngineArchiveE2EStand.json` | `SearchEngineArchiveE2EStand.exe` |
+
+`SearchEngineArchiveE2EStand` — отдельный тестовый продукт. Его CMake-опция
+по умолчанию выключена, штатные пакеты SearchEngineService его не содержат.
+Сборка и публикация полного синтетического стенда выполняются только через
+`scripts\Build-SearchEngineArchiveE2EStandRelease.ps1`; подробности — в
+`docs\ARCHIVE_E2E_STAND.md`.
 
 ### Кто повышает patch
 
@@ -107,6 +115,7 @@ Presets размещают их раздельно в `out/build/`.
 | `Build-*Package.ps1` | Да, один раз в начале скрипта (до configure/build); `Architecture=All` — одна версия на все архитектуры | Затем build + `New-*Package`; CMake bump отключён (`PACKAGE_ON=OFF` и/или `SEARCHENGINE_VERSION_BUMP_MODE=skip`) |
 | `Build-*Package.ps1 -SkipVersionBump` | Нет | Текущая версия в PE и пакете |
 | `New-*Package.ps1` (повторная упаковка) | Нет | Текущая версия из JSON / PE |
+| `Build-SearchEngineArchiveE2EStandRelease.ps1` | Да, только версия stand-продукта | Отдельный stand-каталог и отдельный ZIP-канал; обычный серверный пакет не меняется |
 | Debug / RelWithDebInfo / MinSizeRel | Нет | Пакет не публикуется |
 | `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF` | Нет (IDE/CMake path) | POST_BUILD упаковки нет |
 

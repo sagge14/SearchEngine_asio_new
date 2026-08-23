@@ -52,6 +52,34 @@ struct ServiceArchiveResult {
     std::string message;
 };
 
+enum class ServiceRestoreMode {
+    OriginalLocations,
+    SelectedRoot
+};
+
+/// Pure, SCM-independent restore layout. Archive paths are rebased under the
+/// recorded original locations or under an operator-selected root.
+struct ServiceRestorePlan {
+    ServiceRestoreMode mode{ServiceRestoreMode::SelectedRoot};
+    fs::path archiveDirectory;
+    fs::path restoreRoot;
+    bool sourceCleanupCompleted{false};
+    int year{};
+    std::wstring serviceName;
+    std::wstring archivedImagePath;
+    fs::path restoredExecutable;
+    fs::path restoredDataDirectory;
+    std::wstring restoredImagePath;
+    fs::path restoredPrmMonthlyDirectory;
+    fs::path restoredPrdMonthlyDirectory;
+    /// Directory trees: archived source -> final destination.
+    std::vector<PathMapping> mappings;
+    /// Individual monthly SQLite files: archived source -> final destination.
+    std::vector<PathMapping> monthlyDatabases;
+    /// Every destination directory that must be absent before copying starts.
+    std::vector<fs::path> requiredDirectories;
+};
+
 [[nodiscard]] ServiceInvocation parseServiceInvocation(
     const std::wstring& imagePath);
 
@@ -88,11 +116,28 @@ void mergeRestoreStagingTree(
     const fs::path& staging,
     const fs::path& target);
 
+/// Resolves the operator's restore destination without Win32 drive-relative
+/// ambiguity. A bare drive designator (for example D:) means D:\.
+[[nodiscard]] fs::path normalizeServiceRestoreRoot(
+    const fs::path& restoreRoot);
+
+[[nodiscard]] ServiceRestorePlan planServiceRestore(
+    const fs::path& archiveDirectory,
+    const fs::path& restoreRoot);
+
+[[nodiscard]] ServiceRestorePlan planServiceRestoreOriginalLocations(
+    const fs::path& archiveDirectory);
+
 [[nodiscard]] ServiceArchiveResult executeServiceArchive(
     const ServiceArchivePlan& plan,
     const ProgressCallback& progress = {});
 
 [[nodiscard]] ServiceArchiveResult restoreServiceArchive(
+    const fs::path& archiveDirectory,
+    const fs::path& restoreRoot,
+    const ProgressCallback& progress = {});
+
+[[nodiscard]] ServiceArchiveResult restoreServiceArchiveOriginalLocations(
     const fs::path& archiveDirectory,
     const ProgressCallback& progress = {});
 

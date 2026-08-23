@@ -4,6 +4,7 @@
 #include <ShObjIdl.h>
 #include <ShlObj.h>
 
+#include <cwctype>
 #include <stdexcept>
 
 namespace searchengine_archive {
@@ -75,8 +76,17 @@ DirectoryInputResult resolveDirectoryInput(
             throw std::invalid_argument("'-' is allowed only for an optional directory");
         return {DirectoryInputAction::Disabled, {}};
     }
-    if (!input.empty())
+    if (!input.empty()) {
+        // In Win32, a bare drive designator such as "D:" is drive-relative:
+        // filesystem::absolute may append it to the process working directory
+        // (often C:\Windows\System32 for an elevated BAT). Operators naturally
+        // mean the drive root here, so make that intent explicit.
+        if (input.size() == 2 && std::iswalpha(input[0]) && input[1] == L':')
+            return {
+                DirectoryInputAction::Selected,
+                fs::path(input + L"\\")};
         return {DirectoryInputAction::Selected, fs::path(input)};
+    }
     if (!picker)
         throw std::invalid_argument("folder picker callback is missing");
     const auto selected = picker(suggestedDirectory);

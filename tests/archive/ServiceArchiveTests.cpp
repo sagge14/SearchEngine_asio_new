@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <Windows.h>
@@ -195,13 +196,16 @@ TEST(ServiceArchiveCatalog, RewritesOnlyDocumentPathsAndPreservesIdentifiers)
     ASSERT_NE(database, nullptr);
     executeSql(
         database,
-        "PRAGMA journal_mode=DELETE;"
+        "PRAGMA journal_mode=WAL;"
         "CREATE TABLE docs ("
         "doc_id INTEGER PRIMARY KEY, path TEXT NOT NULL, "
         "mtime_ticks INTEGER NOT NULL, size_int64 INTEGER NOT NULL, "
         "deleted INTEGER NOT NULL DEFAULT 0);"
+        "CREATE UNIQUE INDEX idx_docs_path_unique ON docs(path);"
         "CREATE TABLE postings (token TEXT NOT NULL, doc_id INTEGER NOT NULL);"
         "INSERT INTO docs VALUES (7,'D:\\SOURCE\\2026\\file.txt',101,202,0);"
+        "INSERT INTO docs VALUES (8,'D:\\SOURCE\\2026\\second.txt',102,203,0);"
+        "INSERT INTO docs VALUES (9,'D:\\SOURCE\\TLG\\third.ATL',103,204,0);"
         "INSERT INTO postings VALUES ('needle',7);");
     ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
 
@@ -234,6 +238,71 @@ TEST(ServiceArchiveCatalog, RewritesOnlyDocumentPathsAndPreservesIdentifiers)
     EXPECT_EQ(sqlite3_close(database), SQLITE_OK);
 }
 
+TEST(ServiceArchiveCatalog, PreservesFileNamesWhenRootCaseDiffers)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path databasePath = temporary.path() / L"inverted_index.sqlite";
+    sqlite3* database = nullptr;
+    ASSERT_EQ(sqlite3_open(utf8(databasePath).c_str(), &database), SQLITE_OK);
+    ASSERT_NE(database, nullptr);
+    executeSql(
+        database,
+        "PRAGMA journal_mode=WAL;"
+        "CREATE TABLE docs ("
+        "doc_id INTEGER PRIMARY KEY, path TEXT NOT NULL, "
+        "mtime_ticks INTEGER NOT NULL, size_int64 INTEGER NOT NULL, "
+        "deleted INTEGER NOT NULL DEFAULT 0);"
+        "CREATE UNIQUE INDEX idx_docs_path_unique ON docs(path);"
+        "CREATE TABLE postings("
+        "word_id INTEGER NOT NULL,doc_id INTEGER NOT NULL,cnt INTEGER NOT NULL,"
+        "PRIMARY KEY(word_id,doc_id)) WITHOUT ROWID;"
+        "INSERT INTO docs VALUES (10,'d:\\source\\tlg\\first.ATL',100,10,0);"
+        "INSERT INTO docs VALUES (11,'D:\\Source\\Tlg\\second.SHP',200,20,0);"
+        "INSERT INTO postings VALUES (1,10,2);"
+        "INSERT INTO postings VALUES (2,11,3);");
+    ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
+
+    const std::vector<searchengine_archive::PathMapping> mappings{
+        {L"D:\\SOURCE\\TLG", L"E:\\ARCHIVE\\content\\TLG"}};
+    ASSERT_NO_THROW(searchengine_archive::rewriteDocumentCatalogPaths(
+        databasePath, mappings));
+
+    ASSERT_EQ(sqlite3_open_v2(
+        utf8(databasePath).c_str(), &database,
+        SQLITE_OPEN_READONLY, nullptr), SQLITE_OK);
+    sqlite3_stmt* statement = nullptr;
+    ASSERT_EQ(sqlite3_prepare_v2(
+        database,
+        "SELECT doc_id,path,mtime_ticks,size_int64,deleted FROM docs",
+        -1, &statement, nullptr), SQLITE_OK);
+    ASSERT_EQ(sqlite3_step(statement), SQLITE_ROW);
+    EXPECT_EQ(sqlite3_column_int64(statement, 0), 10);
+    EXPECT_STREQ(
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        "E:\\ARCHIVE\\content\\TLG\\first.ATL");
+    EXPECT_EQ(sqlite3_column_int64(statement, 2), 100);
+    EXPECT_EQ(sqlite3_column_int64(statement, 3), 10);
+    EXPECT_EQ(sqlite3_column_int(statement, 4), 0);
+    ASSERT_EQ(sqlite3_step(statement), SQLITE_ROW);
+    EXPECT_EQ(sqlite3_column_int64(statement, 0), 11);
+    EXPECT_STREQ(
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        "E:\\ARCHIVE\\content\\TLG\\second.SHP");
+    EXPECT_EQ(sqlite3_column_int64(statement, 2), 200);
+    EXPECT_EQ(sqlite3_column_int64(statement, 3), 20);
+    EXPECT_EQ(sqlite3_column_int(statement, 4), 0);
+    EXPECT_EQ(sqlite3_step(statement), SQLITE_DONE);
+    sqlite3_finalize(statement);
+
+    ASSERT_EQ(sqlite3_prepare_v2(
+        database, "SELECT COUNT(*) FROM postings", -1,
+        &statement, nullptr), SQLITE_OK);
+    ASSERT_EQ(sqlite3_step(statement), SQLITE_ROW);
+    EXPECT_EQ(sqlite3_column_int(statement, 0), 2);
+    sqlite3_finalize(statement);
+    EXPECT_EQ(sqlite3_close(database), SQLITE_OK);
+}
+
 TEST(ServiceArchiveSettings, FreezesAndRestoresExplicitMonthlyDirectories)
 {
     ServiceArchiveTemporaryDirectory temporary;
@@ -247,6 +316,10 @@ TEST(ServiceArchiveSettings, FreezesAndRestoresExplicitMonthlyDirectories)
             {"scan_on_startup", true},
             {"index_roots", json::array({"D:\\SOURCE\\2026"})},
             {"excluded_subtrees", json::array({"D:\\SOURCE\\2026\\TEMP"})},
+            {"tlg_send_root", "D:\\SOURCE\\2026"},
+            {"razn_output_dir", "D:\\SOURCE\\production\\RAZN"},
+            {"opis_base_dir", "D:\\SOURCE\\production\\OPIS"},
+            {"f12_base_dir", "D:\\SOURCE\\production\\F12"},
             {"prm_base_dir", "D:\\BASES"},
             {"prd_base_dir", "D:\\BASES_PRD"},
             {"prm_monthly_bases_dir", "D:\\BASES\\METH_BASES"},
@@ -267,6 +340,14 @@ TEST(ServiceArchiveSettings, FreezesAndRestoresExplicitMonthlyDirectories)
     EXPECT_FALSE(archived.at("scan_on_startup").get<bool>());
     EXPECT_EQ(archived.at("index_roots").at(0),
               "E:\\ARCHIVE\\content\\2026");
+    EXPECT_EQ(archived.at("tlg_send_root"),
+              "E:\\ARCHIVE\\content\\2026");
+    EXPECT_EQ(archived.at("razn_output_dir"),
+              "E:\\ARCHIVE\\content\\production\\RAZN");
+    EXPECT_EQ(archived.at("opis_base_dir"),
+              "E:\\ARCHIVE\\content\\production\\OPIS");
+    EXPECT_EQ(archived.at("f12_base_dir"),
+              "E:\\ARCHIVE\\content\\production\\F12");
     EXPECT_EQ(archived.at("prm_monthly_bases_dir"),
               "E:\\ARCHIVE\\autopad\\PRM\\monthly");
     EXPECT_EQ(archived.at("prd_monthly_bases_dir"),
@@ -286,6 +367,13 @@ TEST(ServiceArchiveSettings, FreezesAndRestoresExplicitMonthlyDirectories)
     const json& active = settings.at("config");
     EXPECT_EQ(active.at("server_mode"), "active");
     EXPECT_EQ(active.at("index_roots").at(0), "D:\\SOURCE\\2026");
+    EXPECT_EQ(active.at("tlg_send_root"), "D:\\SOURCE\\2026");
+    EXPECT_EQ(active.at("razn_output_dir"),
+              "D:\\SOURCE\\production\\RAZN");
+    EXPECT_EQ(active.at("opis_base_dir"),
+              "D:\\SOURCE\\production\\OPIS");
+    EXPECT_EQ(active.at("f12_base_dir"),
+              "D:\\SOURCE\\production\\F12");
     EXPECT_EQ(active.at("prm_monthly_bases_dir"),
               "D:\\BASES\\METH_BASES");
     EXPECT_EQ(active.at("prd_monthly_bases_dir"),
@@ -332,6 +420,38 @@ TEST_F(RestoredArchiveDeletionTest, ValidRestoredArchivePassesWithoutScmAccess)
     const auto result =
         searchengine_archive::validateRestoredServiceArchiveDeletion(
             archiveDirectory_, {selected_});
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(fs::exists(archiveDirectory_));
+}
+
+TEST_F(RestoredArchiveDeletionTest, AcceptsSelectedNonOriginalRestoreRoot)
+{
+    const fs::path restoredExecutable =
+        temporary_.path() / L"selected-restore" / L"program" /
+        L"SearchEngine.exe";
+    const fs::path restoredData =
+        temporary_.path() / L"selected-restore" / L"data";
+    writeTextFile(restoredExecutable, "restored-exe");
+    writeTextFile(restoredData / L"Settings.json", "{}");
+    writeTextFile(restoredData / L"inverted_index.sqlite", "index");
+    const std::wstring restoredImage =
+        searchengine_archive::buildServiceImagePath(
+            restoredExecutable, serviceName_, restoredData);
+    manifest_["restore_root"] = utf8(temporary_.path() / L"selected-restore");
+    manifest_["restored_image_path"] =
+        encoding::wstring_to_utf8(restoredImage);
+    manifest_["restored_executable"] = utf8(restoredExecutable);
+    manifest_["restored_data_directory"] = utf8(restoredData);
+    saveManifest();
+
+    auto restored = selected_;
+    restored.imagePath = restoredImage;
+    restored.executable = restoredExecutable;
+    restored.dataDirectory = restoredData;
+    const auto result =
+        searchengine_archive::validateRestoredServiceArchiveDeletion(
+            archiveDirectory_, {restored});
+
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(fs::exists(archiveDirectory_));
 }

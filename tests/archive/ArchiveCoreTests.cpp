@@ -136,6 +136,32 @@ TEST(ArchivePathContract, UsesLongestComponentBoundedMapping)
         fs::path(L"C:\\DATABASE\\file.txt"), fs::path(L"C:\\DATA")));
 }
 
+TEST(ArchivePathContract, PreservesRelativePathAcrossRootCaseDifferences)
+{
+    const std::vector<searchengine_archive::PathMapping> mappings{
+        {fs::path(L"D:\\TLG"),
+         fs::path(L"E:\\ARCHIVE\\content\\TLG")}};
+
+    EXPECT_EQ(
+        searchengine_archive::rebasePath(
+            fs::path(L"d:\\tlg\\2026\\226001001.ATL"), mappings),
+        fs::path(L"E:\\ARCHIVE\\content\\TLG\\2026\\226001001.ATL"));
+    EXPECT_EQ(
+        searchengine_archive::rebasePath(
+            fs::path(L"D:\\Tlg\\226001002.SHP"), mappings),
+        fs::path(L"E:\\ARCHIVE\\content\\TLG\\226001002.SHP"));
+}
+
+TEST(ArchivePathContract, RecognizesPathsBelowDriveRoot)
+{
+    EXPECT_TRUE(searchengine_archive::isPathEqualOrBelow(
+        fs::path(L"D:\\program"), fs::path(L"D:\\")));
+    EXPECT_TRUE(searchengine_archive::isPathEqualOrBelow(
+        fs::path(L"D:\\"), fs::path(L"D:\\")));
+    EXPECT_FALSE(searchengine_archive::isPathEqualOrBelow(
+        fs::path(L"E:\\program"), fs::path(L"D:\\")));
+}
+
 TEST(ArchivePathContract, KeepsOnlySelectedTlgYearAndAlwaysSkipsOut)
 {
     const auto skipDirectory = [](const fs::path& name) {

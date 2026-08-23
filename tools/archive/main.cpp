@@ -252,6 +252,41 @@ void printServicePlan(const searchengine_archive::ServiceArchivePlan& plan)
         L"копирования и переключения. Исходники пока не удаляются.\n");
 }
 
+void printServiceRestorePlan(
+    const searchengine_archive::ServiceRestorePlan& plan)
+{
+    output(
+        L"\nАрхив: ", plan.archiveDirectory.wstring(),
+        L"\nРежим: ",
+        plan.mode == searchengine_archive::ServiceRestoreMode::OriginalLocations
+            ? L"возврат в записанные исходные места 1:1"
+            : L"переносимый возврат под выбранный каталог",
+        L"\nНовый ImagePath: ", plan.restoredImagePath,
+        L"\nМесячных баз: ", plan.monthlyDatabases.size(),
+        L"\n\nВосстанавливаемые каталоги:\n");
+    if (plan.mode == searchengine_archive::ServiceRestoreMode::SelectedRoot) {
+        output(
+            L"Целевой корневой каталог: ",
+            plan.restoreRoot.wstring(), L'\n');
+    }
+    for (const auto& mapping : plan.mappings) {
+        output(
+            L"  ", mapping.source.wstring(),
+            L"\n    -> ", mapping.target.wstring(), L'\n');
+    }
+    if (plan.mode == searchengine_archive::ServiceRestoreMode::OriginalLocations) {
+        output(
+            L"\nПрограмма и данные службы возвращаются строго в исходные "
+            L"места. Каталоги индексируемого содержимого безопасно "
+            L"дополняются без перезаписи существующих файлов.\n");
+    } else {
+        output(
+            L"\nСлияние и перезапись запрещены. Если в выбранном корне "
+            L"уже есть хотя бы один целевой каталог, операция не начнётся. "
+            L"Сам корень диска использовать можно.\n");
+    }
+}
+
 YearMoveOptions interactiveYearOptions()
 {
     YearMoveOptions options;
@@ -373,24 +408,89 @@ int runServiceArchive(
     return 0;
 }
 
-int runServiceRestore(const fs::path& archiveDirectory, bool assumeYes)
+int runServiceRestore(
+    const fs::path& archiveDirectory,
+    std::optional<searchengine_archive::ServiceRestoreMode> restoreMode,
+    std::optional<fs::path> restoreRoot,
+    bool assumeYes)
 {
+    using searchengine_archive::ServiceRestoreMode;
+    if (!restoreMode) {
+        if (restoreRoot) {
+            restoreMode = ServiceRestoreMode::SelectedRoot;
+        } else if (assumeYes) {
+            throw std::runtime_error(
+                "--restore-original or --restore-root is required together "
+                "with --yes");
+        } else {
+            output(
+                L"\nВыберите способ разморозки:\n"
+                L"  1 - Вернуть в записанные исходные места 1:1 "
+                L"(рекомендуется)\n"
+                L"  2 - Восстановить всё под выбранный каталог "
+                L"(переносимый режим)\n"
+                L"  0 - Назад\n"
+                L"Ваш выбор: ");
+            const std::wstring choice = readLine();
+            if (choice == L"0" || choice.empty())
+                return 0;
+            if (choice == L"1")
+                restoreMode = ServiceRestoreMode::OriginalLocations;
+            else if (choice == L"2")
+                restoreMode = ServiceRestoreMode::SelectedRoot;
+            else
+                throw std::runtime_error("unknown restore mode choice");
+        }
+    }
+    if (*restoreMode == ServiceRestoreMode::OriginalLocations && restoreRoot) {
+        throw std::runtime_error(
+            "--restore-original and --restore-root cannot be used together");
+    }
+    if (*restoreMode == ServiceRestoreMode::SelectedRoot && !restoreRoot) {
+        if (assumeYes)
+            throw std::runtime_error("--restore-root is required with --yes");
+        output(
+            L"\nВарианты места восстановления:\n"
+            L"  D: или D:\\    — прямо в корень диска D:\\\n"
+            L"  D:\\StandV3    — внутрь отдельной папки\n"
+            L"  Enter          — выбрать каталог в окне\n"
+            L"Существующие целевые каталоги не объединяются и не "
+            L"перезаписываются.\n\n");
+        restoreRoot = promptDirectory(
+            L"Новый корневой каталог восстановленной службы");
+    }
+    const auto plan = *restoreMode == ServiceRestoreMode::OriginalLocations
+        ? searchengine_archive::planServiceRestoreOriginalLocations(
+            archiveDirectory)
+        : searchengine_archive::planServiceRestore(
+            archiveDirectory, *restoreRoot);
+    printServiceRestorePlan(plan);
     if (!assumeYes && !confirm(
-            L"Остановить архивную службу, вернуть исходный ImagePath и разморозить сервер?"))
+            *restoreMode == ServiceRestoreMode::OriginalLocations
+                ? L"Остановить архивную службу, вернуть все данные в "
+                  L"исходные места и разморозить сервер?"
+                : L"Остановить архивную службу, восстановить её под "
+                  L"выбранный каталог и разморозить сервер?"))
     {
         output(L"Операция отменена.\n");
         return 2;
     }
-    const auto result = searchengine_archive::restoreServiceArchive(
-        archiveDirectory,
-        [](const std::wstring& message) { output(message, L'\n'); });
+    const auto progress =
+        [](const std::wstring& message) { output(message, L'\n'); };
+    const auto result = *restoreMode == ServiceRestoreMode::OriginalLocations
+        ? searchengine_archive::restoreServiceArchiveOriginalLocations(
+            archiveDirectory, progress)
+        : searchengine_archive::restoreServiceArchive(
+            archiveDirectory, *restoreRoot, progress);
     if (!result.ok) {
         outputError(
             L"ОШИБКА: ", encoding::utf8_to_wstring(result.message), L'\n');
         return 1;
     }
     output(
-        L"Служба восстановлена и работает из исходного места: ",
+        *restoreMode == ServiceRestoreMode::OriginalLocations
+            ? L"Служба восстановлена в исходные места: "
+            : L"Служба восстановлена под выбранный каталог: ",
         encoding::utf8_to_wstring(result.message), L'\n');
     bool deleteConfirmed = false;
     if (!assumeYes) {
@@ -412,7 +512,7 @@ int runServiceRestore(const fs::path& archiveDirectory, bool assumeYes)
         outputError(
             L"ОШИБКА УДАЛЕНИЯ АРХИВА: ",
             encoding::utf8_to_wstring(deletion.message),
-            L"\nСлужба уже работает из исходного места. "
+            L"\nСлужба уже работает из восстановленного места. "
             L"Архив сохранён либо удалён не полностью.\n");
         return 1;
     }
@@ -472,7 +572,10 @@ int interactiveServiceOperation()
         return 0;
     if (choice == L"2") {
         return runServiceRestore(
-            promptDirectory(L"Каталог архивированной службы"), false);
+            promptDirectory(L"Каталог архивированной службы"),
+            std::nullopt,
+            std::nullopt,
+            false);
     }
     if (choice == L"3") {
         return runServiceCleanup(
@@ -510,7 +613,8 @@ void usage()
         L"  --cleanup-year DIR [--delete-monthly-databases] [--yes]\n",
         L"  --archive-service --service-name NAME --archive-root DIR [--yes]\n",
         L"  --cleanup-service-source DIR [--keep-monthly-databases] [--yes]\n",
-        L"  --restore-service DIR [--yes]\n");
+        L"  --restore-service DIR --restore-original [--yes]\n",
+        L"  --restore-service DIR --restore-root DIR [--yes]\n");
 }
 
 } // namespace
@@ -571,7 +675,21 @@ int wmain(int argc, wchar_t* argv[])
             return runServiceArchive(options, hasFlag(args, L"--yes"));
         }
         if (const auto restore = option(args, L"--restore-service")) {
-            return runServiceRestore(*restore, hasFlag(args, L"--yes"));
+            const auto restoreRoot = option(args, L"--restore-root");
+            const bool restoreOriginal = hasFlag(args, L"--restore-original");
+            if (restoreOriginal && restoreRoot) {
+                throw std::runtime_error(
+                    "--restore-original and --restore-root cannot be used "
+                    "together");
+            }
+            return runServiceRestore(
+                *restore,
+                restoreOriginal
+                    ? std::optional<searchengine_archive::ServiceRestoreMode>(
+                        searchengine_archive::ServiceRestoreMode::OriginalLocations)
+                    : std::nullopt,
+                restoreRoot ? std::optional<fs::path>(*restoreRoot) : std::nullopt,
+                hasFlag(args, L"--yes"));
         }
         if (const auto cleanup = option(args, L"--cleanup-service-source")) {
             return runServiceCleanup(
