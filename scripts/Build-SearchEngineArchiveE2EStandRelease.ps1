@@ -386,23 +386,58 @@ try {
         -Name 'Publish-ReleasePackageIfConfigured.ps1' `
         -StartPath $projectRoot `
         -Optional
-    if ($null -ne $cloudHelper) {
-        $cloudArguments = @{
-            PackageDirectory = $OutputDirectory
-            ProductName = $productName
-            ZipName = "$productName-$Year-$CloudReleaseId.zip"
-            ReleaseId = $CloudReleaseId
-            StartPath = $projectRoot
-            SkipCloudPublish = $SkipCloudPublish
-            AllowSensitive = $true
+    $cloudPackageRoot = $null
+    try {
+        if ($null -ne $cloudHelper) {
+            $cloudPackageDirectory = $OutputDirectory
+            if (-not $SkipCloudPublish) {
+                # The deploy tool deliberately requires the portable stand to
+                # retain its <service-name>-<year> directory name. The shared
+                # publisher archives the contents of PackageDirectory, so give
+                # it a temporary parent containing exactly that stand folder.
+                $cloudPackageRoot = Join-Path ([IO.Path]::GetTempPath()) (
+                    'SearchEngineArchiveE2EStand-publish-' +
+                    [Guid]::NewGuid().ToString('N')
+                )
+                New-Item -ItemType Directory -Path $cloudPackageRoot |
+                    Out-Null
+                Copy-Item -LiteralPath $OutputDirectory `
+                    -Destination $cloudPackageRoot -Recurse -Force
+
+                $cloudPackageDirectory = Join-Path $cloudPackageRoot $packageLeaf
+                if (-not (Test-Path -LiteralPath $cloudPackageDirectory `
+                        -PathType Container) -or
+                    -not (Test-Path -LiteralPath (Join-Path (
+                            $cloudPackageDirectory
+                        ) '.searchengine-archive-e2e-stand') -PathType Leaf)) {
+                    throw 'Failed to stage the named portable stand directory for ZIP publishing.'
+                }
+                $cloudPackageDirectory = $cloudPackageRoot
+            }
+
+            $cloudArguments = @{
+                PackageDirectory = $cloudPackageDirectory
+                ProductName = $productName
+                ZipName = "$productName-$Year-$CloudReleaseId.zip"
+                ReleaseId = $CloudReleaseId
+                StartPath = $projectRoot
+                SkipCloudPublish = $SkipCloudPublish
+                AllowSensitive = $true
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+                $cloudArguments.CloudRoot = $CloudRoot
+            }
+            & $cloudHelper @cloudArguments | Out-Null
         }
-        if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
-            $cloudArguments.CloudRoot = $CloudRoot
+        else {
+            Write-Host 'Cloud publish helper not found; local stand release only.'
         }
-        & $cloudHelper @cloudArguments | Out-Null
     }
-    else {
-        Write-Host 'Cloud publish helper not found; local stand release only.'
+    finally {
+        if ($null -ne $cloudPackageRoot -and
+            (Test-Path -LiteralPath $cloudPackageRoot -PathType Container)) {
+            Remove-Item -LiteralPath $cloudPackageRoot -Recurse -Force
+        }
     }
 
     $releaseSize = (Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File |

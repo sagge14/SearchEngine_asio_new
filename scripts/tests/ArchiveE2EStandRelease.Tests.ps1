@@ -112,6 +112,14 @@ Assert-True ($releaseText -match 'ProductName\s*=\s*\$productName') `
 Assert-True ($releaseText -match 'AllowSensitive\s*=\s*\$true') `
     'synthetic SQLite stand is explicitly allowed by its own publisher'
 Assert-True ($releaseText -match (
+    'Copy-Item\s+-LiteralPath\s+\$OutputDirectory[\s\S]*?' +
+    'PackageDirectory\s*=\s*\$cloudPackageDirectory'
+)) 'cloud ZIP is staged with the named portable stand directory at its root'
+Assert-True ($releaseText -match (
+    '\.searchengine-archive-e2e-stand[\s\S]*?' +
+    'Failed to stage the named portable stand directory'
+)) 'cloud ZIP staging validates the copied portable stand marker'
+Assert-True ($releaseText -match (
     'stand-release-checksums\.sha256''[\s\S]*?Text\.UTF8Encoding\(\$true\)'
 )) 'release checksums preserve Cyrillic paths as UTF-8 BOM'
 Assert-True ($releaseText -notmatch (
