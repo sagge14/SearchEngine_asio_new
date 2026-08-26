@@ -135,6 +135,44 @@ bool isDriveRoot(const fs::path& path)
     return !normalized.root_path().empty() && normalized == normalized.root_path();
 }
 
+struct WorkstationDirectoryInspection {
+    bool exists{};
+    std::string problem;
+};
+
+WorkstationDirectoryInspection inspectWorkstationDirectory(
+    const fs::path& path,
+    bool requireEmpty)
+{
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+            return {};
+        return {
+            false,
+            "cannot inspect destination; Win32 error=" +
+                std::to_string(error)};
+    }
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        return {true, "destination is a reparse point"};
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+        return {true, "destination is not a directory"};
+    if (!requireEmpty)
+        return {true, {}};
+
+    std::error_code error;
+    const bool empty = fs::is_empty(path, error);
+    if (error) {
+        return {
+            true,
+            "cannot inspect destination directory: " + error.message()};
+    }
+    if (!empty)
+        return {true, "destination directory is not empty"};
+    return {true, {}};
+}
+
 bool isContained(const fs::path& child, const fs::path& root)
 {
     const fs::path normalizedChild = child.lexically_normal();
@@ -515,9 +553,23 @@ int telegramId(bool prm, int year, int month, int record)
         (year % 100) * 1000000 + month * 1000 + record;
 }
 
-int telegramNumber(const Row& row)
+int autoPadTelNo(int telegramId)
 {
-    return row.id % 100000;
+    return telegramId % 100000;
+}
+
+bool hasUnspacedEquals(const std::string& text)
+{
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        if (text[index] != '=')
+            continue;
+        if (index == 0 || text[index - 1] != ' ' ||
+            index + 1 >= text.size() || text[index + 1] != ' ')
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 fs::path f12DatabaseRelativePath(int year)
@@ -560,8 +612,8 @@ std::vector<Row> makeRows(
         row.mainText =
             "SYNTHETIC-ARCHIVE-E2E " + token +
             " UNIQUEWORD_" + token +
-            " CODE=" + std::to_string(row.id * 7LL + 31LL) +
-            " DIGITAL=3141592653 SEARCH-CONTROL\r\n";
+            " CODE = " + std::to_string(row.id * 7LL + 31LL) +
+            " DIGITAL = 3141592653 SEARCH-CONTROL\r\n";
 
         const int attachmentCount = record % 3;
         for (int attachment = 1; attachment <= attachmentCount; ++attachment) {
@@ -652,7 +704,7 @@ void createDatabase(
                 throw std::runtime_error("SQLite id bind failed");
             bindText(statement, 2, row.date);
             bindText(statement, 3, prm ? "SYNTHETIC-INCOMING" : "SYNTHETIC-OUTGOING");
-            bindText(statement, 4, std::to_string(telegramNumber(row)));
+            bindText(statement, 4, std::to_string(autoPadTelNo(row.id)));
             bindText(statement, 5, "SYN-" + std::to_string(row.id));
             bindText(statement, 6, row.date);
             bindText(statement, 7, prm ? "TEST-OPERATOR" : "TEST-COPIES");
@@ -760,7 +812,7 @@ void createF12Database(
             encoding::wstring_to_utf8(L"ТЕСТОВЫЙ ОПЕРАТОР");
         for (const Row& row : rows) {
             const std::string recipient = issuanceRecipient(row);
-            if (sqlite3_bind_int(insert, 1, telegramNumber(row)) != SQLITE_OK)
+            if (sqlite3_bind_int(insert, 1, row.id) != SQLITE_OK)
                 throw std::runtime_error("cannot bind synthetic F12 number");
             bindText(insert, 2, row.date);
             bindText(insert, 3, issuanceTime(row));
@@ -1538,15 +1590,17 @@ StandSummary verifyInternal(
             ++rowCount;
             ++summary.telegramRowCount;
             const int id = sqlite3_column_int(statement, 0);
-            const int number = sqlite3_column_int(statement, 1);
+            const int telNo = sqlite3_column_int(statement, 1);
             const int declaredCount = std::stoi(sqliteText(statement, 2));
             const auto names = split(sqliteText(statement, 3), ';');
             const auto sizes = split(sqliteText(statement, 4), ';');
-            if (declaredCount != static_cast<int>(names.size()) ||
+            if (telNo != autoPadTelNo(id) ||
+                declaredCount != static_cast<int>(names.size()) ||
                 names.size() != sizes.size())
             {
                 sqlite3_finalize(statement);
-                throw std::runtime_error("attachment names/sizes/count mismatch");
+                throw std::runtime_error(
+                    "synthetic archive row contract mismatch");
             }
             const fs::path logicalDirectory = fromUtf8(sqliteText(statement, 5));
             const fs::path fileName = fromUtf8(sqliteText(statement, 6));
@@ -1570,10 +1624,14 @@ StandSummary verifyInternal(
                 std::istreambuf_iterator<char>(mainInput),
                 std::istreambuf_iterator<char>()};
             if (mainText.find("SYNTHETIC-ARCHIVE-E2E") == std::string::npos ||
-                mainText.find(std::to_string(id)) == std::string::npos)
+                mainText.find(std::to_string(id)) == std::string::npos ||
+                mainText.find(" CODE = ") == std::string::npos ||
+                mainText.find(" DIGITAL = 3141592653 ") == std::string::npos ||
+                hasUnspacedEquals(mainText))
             {
                 sqlite3_finalize(statement);
-                throw std::runtime_error("synthetic telegram marker is missing");
+                throw std::runtime_error(
+                    "synthetic telegram text contract mismatch");
             }
 
             const bool firstReference = uniqueIds.insert(id).second;
@@ -1583,7 +1641,7 @@ StandSummary verifyInternal(
             }
             if (!expectedWayRows.emplace(
                     static_cast<sqlite3_int64>(id),
-                    WayExpectation{number, prm ? 1 : 2}).second)
+                    WayExpectation{id, prm ? 1 : 2}).second)
             {
                 sqlite3_finalize(statement);
                 throw std::runtime_error(
@@ -2194,8 +2252,8 @@ std::vector<fs::path> workstationDestinationRoots(
     std::vector<fs::path> result{
         layout.installRoot,
         layout.dataDirectory,
-        layout.prmBaseDirectory,
-        layout.prdBaseDirectory,
+        layout.prmMonthlyDirectory,
+        layout.prdMonthlyDirectory,
         layout.tlgDirectory,
         layout.opisDirectory,
         layout.f12Directory};
@@ -2210,7 +2268,7 @@ void validateWorkstationDestinationRoots(
     const WorkstationStandLayout& layout)
 {
     const auto destinations = workstationDestinationRoots(layout);
-    std::vector<fs::path> collisions;
+    std::vector<std::pair<fs::path, std::string>> collisions;
     for (std::size_t index = 0; index < destinations.size(); ++index) {
         const fs::path& destination = destinations[index];
         if (isDriveRoot(destination) ||
@@ -2232,16 +2290,136 @@ void validateWorkstationDestinationRoots(
                     utf8(destination));
             }
         }
-        if (fs::exists(destination))
-            collisions.push_back(destination);
+        const WorkstationDirectoryInspection inspection =
+            inspectWorkstationDirectory(destination, true);
+        if (!inspection.problem.empty())
+            collisions.emplace_back(destination, inspection.problem);
+    }
+    for (const fs::path& container : {
+             layout.prmBaseDirectory, layout.prdBaseDirectory})
+    {
+        const WorkstationDirectoryInspection inspection =
+            inspectWorkstationDirectory(container, false);
+        if (!inspection.problem.empty())
+            collisions.emplace_back(container, inspection.problem);
     }
     if (collisions.empty())
         return;
     std::ostringstream message;
-    message << "workstation deployment requires absent destination roots:";
+    message <<
+        "workstation deployment accepts only absent or empty destination "
+        "directories:";
     for (const auto& collision : collisions)
-        message << "\n  " << utf8(collision);
+        message << "\n  " << utf8(collision.first) << " ("
+                << collision.second << ')';
     throw std::runtime_error(message.str());
+}
+
+struct WorkstationDeploymentJournal {
+    std::vector<fs::path> createdFiles;
+    std::vector<fs::path> createdDirectories;
+};
+
+void ensureWorkstationDirectory(
+    const fs::path& path,
+    bool requireEmpty,
+    WorkstationDeploymentJournal& journal)
+{
+    WorkstationDirectoryInspection inspection =
+        inspectWorkstationDirectory(path, requireEmpty);
+    if (!inspection.problem.empty()) {
+        throw std::runtime_error(
+            "unsafe workstation destination: " + utf8(path) + " (" +
+            inspection.problem + ')');
+    }
+    if (inspection.exists)
+        return;
+
+    std::error_code error;
+    if (fs::create_directory(path, error)) {
+        journal.createdDirectories.push_back(path);
+        return;
+    }
+    if (error) {
+        throw std::runtime_error(
+            "cannot create workstation destination: " + utf8(path) +
+            " (" + error.message() + ')');
+    }
+
+    // A directory may appear after preflight. Adopt it only if it still
+    // satisfies the same empty/real-directory contract.
+    inspection = inspectWorkstationDirectory(path, requireEmpty);
+    if (!inspection.exists || !inspection.problem.empty()) {
+        throw std::runtime_error(
+            "workstation destination appeared during deployment: " +
+            utf8(path));
+    }
+}
+
+void copyWorkstationFile(
+    const fs::path& source,
+    const fs::path& destination,
+    WorkstationDeploymentJournal& journal)
+{
+    std::error_code error;
+    if (!fs::copy_file(
+            source, destination, fs::copy_options::none, error))
+    {
+        throw std::runtime_error(
+            "cannot copy workstation file without replacement: " +
+            utf8(destination) +
+            (error ? " (" + error.message() + ')' : std::string()));
+    }
+    journal.createdFiles.push_back(destination);
+}
+
+void copyWorkstationDirectoryTree(
+    const fs::path& source,
+    const fs::path& destination,
+    WorkstationDeploymentJournal& journal)
+{
+    if (!fs::is_directory(source)) {
+        throw std::runtime_error(
+            "workstation source is not a directory: " + utf8(source));
+    }
+    ensureWorkstationDirectory(destination, false, journal);
+    for (fs::recursive_directory_iterator it(source), end; it != end; ++it) {
+        const fs::path relative = it->path().lexically_relative(source);
+        const fs::path target = destination / relative;
+        if (it->is_symlink()) {
+            throw std::runtime_error(
+                "workstation source contains a link: " + utf8(it->path()));
+        }
+        if (it->is_directory()) {
+            ensureWorkstationDirectory(target, false, journal);
+        } else if (it->is_regular_file()) {
+            ensureWorkstationDirectory(target.parent_path(), false, journal);
+            copyWorkstationFile(it->path(), target, journal);
+        } else {
+            throw std::runtime_error(
+                "workstation source contains an unsupported entry: " +
+                utf8(it->path()));
+        }
+    }
+}
+
+void rollbackWorkstationDeployment(
+    const WorkstationDeploymentJournal& journal) noexcept
+{
+    for (auto it = journal.createdFiles.rbegin();
+         it != journal.createdFiles.rend(); ++it)
+    {
+        std::error_code ignored;
+        fs::remove(*it, ignored);
+    }
+    for (auto it = journal.createdDirectories.rbegin();
+         it != journal.createdDirectories.rend(); ++it)
+    {
+        std::error_code ignored;
+        // Remove only directories created by this deployment and only while
+        // they are empty. Pre-existing directories are never recorded here.
+        fs::remove(*it, ignored);
+    }
 }
 
 void verifyMappedSqlitePaths(
@@ -2676,10 +2854,19 @@ WorkstationStandLayout planWorkstationStandDeployment(
         absoluteNormalized(options.programFilesRoot);
     const fs::path programDataRoot =
         absoluteNormalized(options.programDataRoot);
+    const WorkstationDirectoryInspection dataVolumeInspection =
+        inspectWorkstationDirectory(layout.dataVolumeRoot, false);
+    const WorkstationDirectoryInspection programFilesInspection =
+        inspectWorkstationDirectory(programFilesRoot, false);
+    const WorkstationDirectoryInspection programDataInspection =
+        inspectWorkstationDirectory(programDataRoot, false);
     if (!fs::is_directory(layout.standRoot) ||
         !fs::is_directory(layout.dataVolumeRoot) ||
         !fs::is_directory(programFilesRoot) ||
         !fs::is_directory(programDataRoot) ||
+        !dataVolumeInspection.problem.empty() ||
+        !programFilesInspection.problem.empty() ||
+        !programDataInspection.problem.empty() ||
         !fs::is_regular_file(layout.standRoot / kMarkerName) ||
         !fs::is_regular_file(layout.standRoot / kManifestName) ||
         !fs::is_regular_file(layout.standRoot / kArchiveManifestName))
@@ -2801,39 +2988,43 @@ WorkstationStandLayout deployWorkstationStand(
         planWorkstationStandDeployment(options);
     const json stand = readJson(layout.standRoot / kManifestName);
     const auto mappings = workstationContentMappings(layout, stand);
-    std::vector<fs::path> createdRoots;
-    const auto createOwnedRoot = [&](const fs::path& path) {
-        if (fs::exists(path) || !fs::create_directory(path))
-            throw std::runtime_error(
-                "workstation destination appeared during deployment: " +
-                utf8(path));
-        createdRoots.push_back(path);
-    };
+    WorkstationDeploymentJournal journal;
+    journal.createdFiles.reserve(1024);
+    journal.createdDirectories.reserve(256);
 
     try {
-        createOwnedRoot(layout.installRoot);
-        copyDirectoryTree(
+        ensureWorkstationDirectory(layout.installRoot, true, journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"server" / L"program",
-            layout.binDirectory);
-        copyDirectoryTree(
+            layout.binDirectory,
+            journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"installer" / L"tools",
-            layout.toolsDirectory);
+            layout.toolsDirectory,
+            journal);
 
-        createOwnedRoot(layout.dataDirectory);
-        copyDirectoryTree(
+        ensureWorkstationDirectory(layout.dataDirectory, true, journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"server" / L"data",
-            layout.dataDirectory);
-        fs::create_directories(layout.dataDirectory / L"logs");
+            layout.dataDirectory,
+            journal);
+        ensureWorkstationDirectory(
+            layout.dataDirectory / L"logs", false, journal);
 
         for (const auto& mapping : mappings) {
-            createOwnedRoot(mapping.target);
-            copyDirectoryTree(mapping.source, mapping.target);
+            ensureWorkstationDirectory(mapping.target, true, journal);
+            copyWorkstationDirectoryTree(
+                mapping.source, mapping.target, journal);
         }
 
-        createOwnedRoot(layout.prmBaseDirectory);
-        fs::create_directories(layout.prmMonthlyDirectory);
-        createOwnedRoot(layout.prdBaseDirectory);
-        fs::create_directories(layout.prdMonthlyDirectory);
+        ensureWorkstationDirectory(
+            layout.prmBaseDirectory, false, journal);
+        ensureWorkstationDirectory(
+            layout.prmMonthlyDirectory, true, journal);
+        ensureWorkstationDirectory(
+            layout.prdBaseDirectory, false, journal);
+        ensureWorkstationDirectory(
+            layout.prdMonthlyDirectory, true, journal);
         std::vector<fs::path> deployedDatabases;
         for (const auto& item : stand.at("databases")) {
             const fs::path source = layout.standRoot /
@@ -2844,22 +3035,24 @@ WorkstationStandLayout deployWorkstationStand(
                      ? layout.prmMonthlyDirectory
                      : layout.prdMonthlyDirectory) /
                 source.filename();
-            fs::copy_file(
-                source, destination, fs::copy_options::none);
+            copyWorkstationFile(source, destination, journal);
             deployedDatabases.push_back(destination);
         }
 
-        createOwnedRoot(layout.opisDirectory);
-        copyDirectoryTree(
+        ensureWorkstationDirectory(layout.opisDirectory, true, journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"production" / L"OPIS",
-            layout.opisDirectory);
-        copyDirectoryTree(
+            layout.opisDirectory,
+            journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"production" / L"RAZN",
-            layout.raznDirectory);
-        createOwnedRoot(layout.f12Directory);
-        copyDirectoryTree(
+            layout.raznDirectory,
+            journal);
+        ensureWorkstationDirectory(layout.f12Directory, true, journal);
+        copyWorkstationDirectoryTree(
             layout.standRoot / L"production" / L"F12",
-            layout.f12Directory);
+            layout.f12Directory,
+            journal);
         const fs::path deployedF12 = layout.f12Directory /
             (std::to_wstring(layout.year) + L".db");
         const fs::path sourceF12 = layout.standRoot /
@@ -2946,12 +3139,7 @@ WorkstationStandLayout deployWorkstationStand(
             receipt);
         return layout;
     } catch (...) {
-        for (auto it = createdRoots.rbegin();
-             it != createdRoots.rend(); ++it)
-        {
-            std::error_code ignored;
-            fs::remove_all(*it, ignored);
-        }
+        rollbackWorkstationDeployment(journal);
         throw;
     }
 }

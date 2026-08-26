@@ -325,6 +325,24 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
             "SELECT COUNT(*) FROM way WHERE source_tab_ind IS NOT NULL "
             "AND operator_name<>''"),
         240);
+    EXPECT_EQ(
+        sqliteScalarInt(
+            f12Database,
+            "SELECT COUNT(*) FROM way WHERE number=source_tab_ind"),
+        240);
+
+    for (const fs::path& telegram : {
+             options.root / L"content" / L"JANUARY" / L"126001001",
+             options.root / L"content" / L"TLG" / L"226001001.ATL"})
+    {
+        const std::string text = readTextFile(telegram);
+        EXPECT_NE(text.find(" CODE = "), std::string::npos);
+        EXPECT_NE(
+            text.find(" DIGITAL = 3141592653 "),
+            std::string::npos);
+        EXPECT_EQ(text.find("CODE="), std::string::npos);
+        EXPECT_EQ(text.find("DIGITAL="), std::string::npos);
+    }
 
     for (int month = 1; month <= 12; ++month) {
         std::wostringstream fileName;
@@ -369,6 +387,42 @@ TEST(ArchiveE2EStand, DetectsChangedAttachmentSize)
         std::ofstream output(attachment, std::ios::binary | std::ios::trunc);
         output << "changed";
     }
+    EXPECT_THROW(
+        (void)searchengine_archive_e2e::verifyStand(options.root),
+        std::runtime_error);
+}
+
+TEST(ArchiveE2EStand, DetectsUnspacedSyntheticTelegramFields)
+{
+    TemporaryDirectory temporary;
+    const StandOptions options = standOptions(temporary);
+    (void)searchengine_archive_e2e::generateStand(options);
+
+    const fs::path telegram =
+        options.root / L"content" / L"JANUARY" / L"126001001";
+    std::string text = readTextFile(telegram);
+    const std::size_t position = text.find(" CODE = ");
+    ASSERT_NE(position, std::string::npos);
+    text.erase(position + 5, 1);
+    writeFile(telegram, text);
+
+    EXPECT_THROW(
+        (void)searchengine_archive_e2e::verifyStand(options.root),
+        std::runtime_error);
+}
+
+TEST(ArchiveE2EStand, DetectsF12NumberMissingFromAutoPadIndex)
+{
+    TemporaryDirectory temporary;
+    const StandOptions options = standOptions(temporary);
+    (void)searchengine_archive_e2e::generateStand(options);
+
+    const fs::path f12Database =
+        options.root / L"production" / L"F12" / L"2026.db";
+    sqliteExecute(
+        f12Database,
+        "UPDATE way SET number=1001 WHERE source_tab_ind=126001001");
+
     EXPECT_THROW(
         (void)searchengine_archive_e2e::verifyStand(options.root),
         std::runtime_error);
@@ -571,6 +625,57 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
     deployOptions.programFilesRoot = programFiles;
     deployOptions.programDataRoot = programData;
 
+    const fs::path conflictVolume =
+        temporary.path() / L"conflict-volume";
+    const fs::path conflictProgramFiles =
+        temporary.path() / L"conflict-program-files";
+    const fs::path conflictProgramData =
+        temporary.path() / L"conflict-program-data";
+    fs::create_directories(
+        conflictVolume / L"BASES" / L"METH_BASES");
+    fs::create_directories(conflictProgramFiles);
+    fs::create_directories(conflictProgramData);
+    writeFile(
+        conflictVolume / L"BASES" / L"METH_BASES" / L"keep.txt",
+        "keep");
+    WorkstationStandOptions conflictOptions = deployOptions;
+    conflictOptions.dataVolumeRoot = conflictVolume;
+    conflictOptions.programFilesRoot = conflictProgramFiles;
+    conflictOptions.programDataRoot = conflictProgramData;
+    try {
+        (void)searchengine_archive_e2e::deployWorkstationStand(
+            conflictOptions);
+        FAIL() << "non-empty METH_BASES unexpectedly passed preflight";
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("METH_BASES"), std::string::npos) << message;
+        EXPECT_NE(message.find("not empty"), std::string::npos) << message;
+    }
+    EXPECT_FALSE(fs::exists(
+        conflictProgramFiles / options.serviceName));
+    EXPECT_FALSE(fs::exists(
+        conflictProgramData / options.serviceName));
+    EXPECT_FALSE(fs::exists(conflictVolume / L"TLG"));
+
+    const json undeployedStand = readJsonFile(
+        options.stand.root / L"stand-manifest.json");
+    fs::create_directories(programFiles / options.serviceName);
+    fs::create_directories(programData / options.serviceName);
+    writeFile(volume / L"BASES" / L"root-sentinel.txt", "keep");
+    writeFile(volume / L"BASES_PRD" / L"root-sentinel.txt", "keep");
+    fs::create_directories(volume / L"BASES" / L"METH_BASES");
+    fs::create_directories(volume / L"BASES_PRD" / L"METH_BASES");
+    fs::create_directories(volume / L"TLG");
+    fs::create_directories(volume / L"OPIS_ADMIN");
+    fs::create_directories(volume / L"F12");
+    for (const auto& name :
+         undeployedStand.at("content_layout").at("prm_month_directories"))
+    {
+        fs::create_directories(
+            volume /
+            encoding::utf8_to_wstring(name.get<std::string>()));
+    }
+
     const auto layout =
         searchengine_archive_e2e::deployWorkstationStand(deployOptions);
     EXPECT_EQ(layout.dataVolumeRoot, fs::absolute(volume).lexically_normal());
@@ -589,6 +694,12 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
         layout.prmMonthlyDirectory / L"01-2026.db3"));
     EXPECT_TRUE(fs::is_regular_file(
         layout.prdMonthlyDirectory / L"12-2026.db3"));
+    EXPECT_EQ(
+        std::ifstream(volume / L"BASES" / L"root-sentinel.txt").peek(),
+        static_cast<int>('k'));
+    EXPECT_EQ(
+        std::ifstream(volume / L"BASES_PRD" / L"root-sentinel.txt").peek(),
+        static_cast<int>('k'));
     EXPECT_TRUE(fs::is_directory(layout.opisDirectory));
     EXPECT_TRUE(fs::is_directory(layout.raznDirectory));
     EXPECT_TRUE(fs::is_directory(layout.f12Directory));
@@ -601,6 +712,11 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
     EXPECT_EQ(
         sqliteScalarInt(deployedF12, "SELECT COUNT(*) FROM way WHERE type=2"),
         120);
+    EXPECT_EQ(
+        sqliteScalarInt(
+            deployedF12,
+            "SELECT COUNT(*) FROM way WHERE number=source_tab_ind"),
+        240);
     EXPECT_TRUE(fs::is_regular_file(
         options.stand.root / L"workstation-deployment.json"));
 
