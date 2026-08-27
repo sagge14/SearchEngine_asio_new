@@ -1402,6 +1402,16 @@ endif()
 if(TARGET SearchEngineConfig)
     enable_testing()
     add_test(
+            NAME SearchEngineConfigLocalMachine_test
+            COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEMPLATE=${PROJECT_SOURCE_DIR}/deployment/SearchEngineServicePortable/source-data/Settings.json"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-local-machine-test"
+            -P
+            "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigLocalMachine.cmake"
+    )
+    add_test(
             NAME SearchEngineConfigValidateSVC001Fields_test
             COMMAND
             "${CMAKE_COMMAND}"

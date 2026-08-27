@@ -103,6 +103,12 @@ try {
     $templateHashBefore = (Get-FileHash -LiteralPath $templatePath -Algorithm SHA256).Hash
     $template = Read-Json $templatePath
     $basePort = [int]$template.config.asio_port
+    Assert-Equal 'sqlite' ([string]$template.config.document_catalog_storage) (
+        'fresh release template defaults document path storage to SQLite'
+    )
+    Assert-True (-not [bool]$template.config.enable_prm_short_content_autodetect) (
+        'fresh release template disables PRM short-content updates'
+    )
 
     foreach ($case in @(
         @{ Year = 2026; Digit = 6 },

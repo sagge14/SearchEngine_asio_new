@@ -7,6 +7,8 @@ if exist "%PACKAGE_ROOT%ServiceInstance.cmd" call "%PACKAGE_ROOT%ServiceInstance
 set "VALIDATE_ONLY=0"
 set "SKIP_VC_REDIST=0"
 set "INSTANCE_FROM_ARGS=0"
+set "LOCAL_MACHINE_INSTALL=0"
+set "LOCAL_INITIAL_UPDATE_EXIT=0"
 set "UI_LANGUAGE=auto"
 set "BAD_ARG="
 
@@ -19,6 +21,11 @@ if /I "%~1"=="/validate" (
 )
 if /I "%~1"=="/SkipVcRedist" (
     set "SKIP_VC_REDIST=1"
+    shift
+    goto :PARSE_ARGS
+)
+if /I "%~1"=="/LocalMachine" (
+    set "LOCAL_MACHINE_INSTALL=1"
     shift
     goto :PARSE_ARGS
 )
@@ -37,6 +44,7 @@ shift
 goto :PARSE_ARGS
 
 :ARGS_DONE
+if "%LOCAL_MACHINE_INSTALL%"=="1" if "%VALIDATE_ONLY%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
 set "TARGET_ARCH={{ARCHITECTURE}}"
 set "HELPER=%PACKAGE_ROOT%tools\SearchEngineConfig.exe"
 set "SETTINGS_TEMPLATE=%PACKAGE_ROOT%data\Settings.json"
@@ -58,6 +66,7 @@ if "%VALIDATE_ONLY%"=="1" (
     set "UI_LANGUAGE=en"
     goto :INSTANCE_READY
 )
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :LOCAL_MACHINE_INSTANCE
 if "%INSTANCE_FROM_ARGS%"=="1" goto :SELECT_LANGUAGE_ONLY
 "%HELPER%" choose-instance --default "%SERVICE_INSTANCE%" --output "%INSTANCE_TEMP%"
 if errorlevel 1 goto :HELPER_FAILED
@@ -67,6 +76,18 @@ if not defined SELECTED_instance goto :HELPER_FAILED
 if not defined SELECTED_language goto :HELPER_FAILED
 set "SERVICE_INSTANCE=%SELECTED_instance%"
 set "UI_LANGUAGE=%SELECTED_language%"
+goto :INSTANCE_READY
+
+:LOCAL_MACHINE_INSTANCE
+if "%INSTANCE_FROM_ARGS%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
+set "UI_LANGUAGE=ru"
+set "SKIP_VC_REDIST=1"
+"%HELPER%" system-info > "%INSTANCE_TEMP%"
+if errorlevel 1 goto :HELPER_FAILED
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "LOCAL_%%A=%%B"
+del /Q "%INSTANCE_TEMP%" >nul 2>&1
+if not defined LOCAL_current_year goto :HELPER_FAILED
+set "SERVICE_INSTANCE=%LOCAL_current_year%"
 goto :INSTANCE_READY
 
 :SELECT_LANGUAGE_ONLY
@@ -132,6 +153,7 @@ if errorlevel 1 goto :NOT_ADMIN
 
 sc.exe query "%SERVICE_NAME%" >nul 2>&1
 if errorlevel 1 goto :CLEAN_DESTINATION_CHECK
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :LOCAL_MACHINE_ALREADY_INSTALLED
 set "REINSTALL=1"
 "%HELPER%" inspect --settings "%DATA_DIR%\Settings.json" > "%HELPER_OUTPUT%" 2>nul
 if errorlevel 1 goto :OLD_SETTINGS_INSPECTED
@@ -152,6 +174,7 @@ if errorlevel 1 set "LEFTOVER_DIRECTORIES=1"
 call :CHECK_EMPTY_DIRECTORY "%DATA_DIR%"
 if errorlevel 1 set "LEFTOVER_DIRECTORIES=1"
 if "%LEFTOVER_DIRECTORIES%"=="0" goto :CONFIGURE
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :LOCAL_MACHINE_LEFTOVERS
 
 call :UI install.leftovers "%SERVICE_NAME%"
 if exist "%INSTALL_ROOT%\" call :UI install.application_path "%INSTALL_ROOT%"
@@ -165,8 +188,14 @@ call :DELETE_DIRECTORY_RETRY "%DATA_DIR%"
 if errorlevel 1 goto :DATA_LEFTOVER_DELETE_FAILED
 
 :CONFIGURE
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :CONFIGURE_LOCAL_MACHINE
 if "%REINSTALL%"=="1" goto :CONFIGURE_WITH_IMPORT
 "%HELPER%" configure-interactive --template "%SETTINGS_TEMPLATE%" --output "%CONFIG_TEMP%" --language "%UI_LANGUAGE%"
+if errorlevel 1 goto :HELPER_FAILED
+goto :CONFIGURED
+
+:CONFIGURE_LOCAL_MACHINE
+"%HELPER%" configure-local-machine --template "%SETTINGS_TEMPLATE%" --output "%CONFIG_TEMP%"
 if errorlevel 1 goto :HELPER_FAILED
 goto :CONFIGURED
 
@@ -300,8 +329,9 @@ if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
 if errorlevel 1 goto :COPY_FAILED
 
-call :UI install.attachments_menu
 set "GET_ATTACHMENTS_USED=0"
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :AFTER_ATTACHMENTS_CHOICE
+call :UI install.attachments_menu
 call :CHOICE 12
 if errorlevel 2 goto :AFTER_ATTACHMENTS_CHOICE
 if errorlevel 1 set "GET_ATTACHMENTS_USED=1"
@@ -398,6 +428,16 @@ netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 netsh.exe advfirewall firewall add rule name="%FIREWALL_RULE%" dir=in action=allow protocol=TCP localport=%SERVICE_PORT% program="%INSTALLED_BIN%\SearchEngine.exe" enable=yes >nul
 if errorlevel 1 goto :SERVICE_SETUP_FAILED
 
+:LOCAL_MACHINE_POST_SETUP
+if not "%LOCAL_MACHINE_INSTALL%"=="1" goto :START_SERVICE
+call :UI install.local_auth
+call :PROVISION_LOCAL_MACHINE_AUTH
+if errorlevel 1 goto :LOCAL_MACHINE_AUTH_FAILED
+call :UI install.local_initial_update
+call :RUN_LOCAL_INITIAL_UPDATE
+set "LOCAL_INITIAL_UPDATE_EXIT=%ERRORLEVEL%"
+
+:START_SERVICE
 call :UI install.step_start
 sc.exe start "%SERVICE_NAME%" >nul
 if errorlevel 1 goto :SERVICE_START_FAILED
@@ -422,9 +462,15 @@ set "RUNTIME_TX_APPLIED=0"
 del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
-call :UI install.success "%SERVICE_NAME%" "%INSTALLED_BIN%" "%DATA_DIR%"
+call :UI install.success "%SERVICE_NAME%" "%INSTALL_ROOT%" "%DATA_DIR%" "%SERVICE_YEAR%" "%SERVICE_PORT%" "%COMPUTERNAME%"
+if "%LOCAL_MACHINE_INSTALL%"=="1" if "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" call :UI install.local_success "%TOKEN_PATH%"
+if not "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" goto :LOCAL_INITIAL_UPDATE_FAILED_AFTER_INSTALL
 call :PAUSE_UI
 exit /b 0
+
+:LOCAL_INITIAL_UPDATE_FAILED_AFTER_INSTALL
+call :UI install.local_initial_update_failed "%LOCAL_INITIAL_UPDATE_EXIT%" "%DATA_DIR%" "%INSTALLED_BIN%"
+exit /b 20
 
 :VALIDATED
 call :UI install.validated
@@ -499,6 +545,7 @@ if %WAIT_SECONDS% GEQ 120 goto :OFFER_FORCE_STOP
 ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_STOPPED_LOOP
 :OFFER_FORCE_STOP
+if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 1
 call :UI common.stop_timeout
 call :CHOICE 12
 if errorlevel 2 exit /b 1
@@ -526,6 +573,7 @@ ping.exe 127.0.0.1 -n 2 >nul
 goto :WAIT_STOPPED_PROCESS_LOOP
 
 :OFFER_FORCE_STOPPED_PROCESS
+if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 1
 call :UI common.stopped_process "%STOPPED_SERVICE_PID%"
 call :CHOICE 12
 if errorlevel 2 exit /b 1
@@ -562,6 +610,27 @@ dir /b /a "%~1" 2>nul | findstr.exe "." >nul
 if errorlevel 1 exit /b 0
 exit /b 1
 
+:PROVISION_LOCAL_MACHINE_AUTH
+set "TOKEN_PATH=%ProgramData%\SearchEngine\searchclient-auth-token.json"
+set "TOKEN_KEYSTORE=%ProgramData%\SearchClientTokenIssuer\keys"
+set "TOKEN_ISSUER_PASSWORD=12345678"
+"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --device-type computer --name operator --id local-machine --output "%TOKEN_PATH%" --defaults "%INSTALLED_TOOLS%\searchclient-auth-token.defaults.json" --keystore "%TOKEN_KEYSTORE%" --password-env TOKEN_ISSUER_PASSWORD --yes >nul 2>&1
+set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
+if not "%TOKEN_COMMAND_EXIT%"=="0" goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
+"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --keystore "%TOKEN_KEYSTORE%" --export-public "%DATA_DIR%" >nul 2>&1
+set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
+if not "%TOKEN_COMMAND_EXIT%"=="0" goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
+"%INSTALLED_TOOLS%\AuthDbTool.exe" --db "%DATA_DIR%\auth_clients.sqlite" add-from-token --token "%TOKEN_PATH%" >nul 2>&1
+set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
+:PROVISION_LOCAL_MACHINE_AUTH_DONE
+set "TOKEN_ISSUER_PASSWORD="
+if not "%TOKEN_COMMAND_EXIT%"=="0" exit /b 1
+exit /b 0
+
+:RUN_LOCAL_INITIAL_UPDATE
+"%INSTALLED_BIN%\SearchEngine.exe" --initial-update --data-dir "%DATA_DIR%"
+exit /b %ERRORLEVEL%
+
 :DELETE_DIRECTORY_RETRY
 set "DELETE_TARGET=%~1"
 if not exist "%DELETE_TARGET%\" exit /b 0
@@ -576,6 +645,7 @@ ping.exe 127.0.0.1 -n 2 >nul
 goto :DELETE_DIRECTORY_LOOP
 
 :OFFER_DIRECTORY_DELETE_RETRY
+if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 1
 call :UI common.directory_retry "%DELETE_TARGET%"
 call :CHOICE 12
 if errorlevel 2 exit /b 1
@@ -616,6 +686,10 @@ goto :ROLLBACK_OR_FAIL
 call :UI install.health_failed "%DATA_DIR%"
 goto :ROLLBACK_OR_FAIL
 
+:LOCAL_MACHINE_AUTH_FAILED
+call :UI install.local_auth_failed
+goto :ROLLBACK_OR_FAIL
+
 :ROLLBACK_OR_FAIL
 if "%APP_ROLLBACK_READY%"=="1" goto :ROLLBACK_REINSTALL
 if "%RUNTIME_TX_READY%"=="1" goto :ROLLBACK_REINSTALL
@@ -626,7 +700,15 @@ call :STOP_SERVICE
 sc.exe delete "%SERVICE_NAME%" >nul 2>&1
 :CLEAN_FAILURE_FIREWALL
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
+if "%LOCAL_MACHINE_INSTALL%"=="1" goto :CLEAN_LOCAL_MACHINE_FAILURE
 goto :FAILED_WITH_FILES
+
+:CLEAN_LOCAL_MACHINE_FAILURE
+call :DELETE_DIRECTORY_RETRY "%INSTALL_ROOT%"
+call :DELETE_DIRECTORY_RETRY "%DATA_DIR%"
+if exist "%INSTALL_ROOT%\" goto :FAILED_WITH_FILES
+if exist "%DATA_DIR%\" goto :FAILED_WITH_FILES
+goto :FAILED
 
 :RUNTIME_APPLY_FAILED_BEFORE_MUTATION
 rem Exit 2: helper never started managed mutation. Restore the old application
@@ -747,7 +829,19 @@ exit /b 1
 
 :UNKNOWN_ARGUMENT
 echo ERROR: Unknown argument "%BAD_ARG%".
-echo Supported: /validate, /SkipVcRedist, and an optional instance id.
+echo Supported: /validate, /SkipVcRedist, /LocalMachine, and an optional instance id.
+goto :FAILED
+
+:LOCAL_MACHINE_ARGUMENT_CONFLICT
+call :UI install.local_argument_conflict
+goto :FAILED
+
+:LOCAL_MACHINE_ALREADY_INSTALLED
+call :UI install.local_existing "%SERVICE_NAME%"
+goto :FAILED
+
+:LOCAL_MACHINE_LEFTOVERS
+call :UI install.local_leftovers "%INSTALL_ROOT%" "%DATA_DIR%"
 goto :FAILED
 
 :NOT_ADMIN
@@ -793,7 +887,7 @@ if exist "%HELPER%" (
 ) else (
     echo.
     echo Installation failed. Read the error above.
-    pause
+    if not "%LOCAL_MACHINE_INSTALL%"=="1" pause
 )
 exit /b 1
 :CANCELLED
@@ -811,6 +905,7 @@ choice.exe /C %~1 /N /M ""
 exit /b %ERRORLEVEL%
 
 :PAUSE_UI
+if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 0
 call :UI common.press_any_key
 pause >nul
 exit /b 0

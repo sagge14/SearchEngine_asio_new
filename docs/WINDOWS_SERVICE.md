@@ -212,7 +212,8 @@ out\package\SearchEngineService-x86-Windows7\
 - `tools\SearchEngineConfig.exe` той же архитектуры;
 - `data\Settings.json`, `OEM866.INI`, `ignore.txt`, `prefix_map.json`;
 - соответствующий подписанный Microsoft VC++ Redistributable;
-- BAT-скрипты установки, остановки, запуска, перезапуска и полного удаления;
+- BAT-скрипты интерактивной установки, локальной установки без вопросов,
+  остановки, запуска, перезапуска и полного удаления;
 - подробная `INSTALLATION_GUIDE_RU.txt` с назначением каждого файла;
 - manifest с размерами и SHA-256 обязательных файлов.
 
@@ -251,7 +252,9 @@ upgrade автоматически дополнял старые установ�
 компьютер. Запустите `Install-SearchEngineService.bat` от имени администратора.
 На целевой машине PowerShell не нужен ни x86-, ни x64-варианту.
 
-Установщик предлагает и проверяет:
+Fresh-шаблон использует `document_catalog_storage=sqlite`,
+`enable_prm_short_content_autodetect=false` и `scan_on_startup=false`.
+Интерактивный установщик предлагает и проверяет:
 
 - идентификатор экземпляра службы с подсказкой использовать разные имена для
   разных годов или разных наборов индексируемых папок;
@@ -260,8 +263,8 @@ upgrade автоматически дополнял старые установ�
 - число исполнительных потоков (не 1 и не более двух логических CPU, с
   архитектурным пределом 32 для x86 и 64 для x64);
 - таймаут индексации одного файла 10..600 секунд, рекомендация 120;
-- `enable_prm_short_content_autodetect`, по умолчанию включённый.
-- `document_catalog_storage`: `memory` по умолчанию либо `sqlite`; вопрос
+- `enable_prm_short_content_autodetect`, по умолчанию отключённый;
+- `document_catalog_storage`: `sqlite` по умолчанию либо `memory`; вопрос
   показывается и при переустановке, а импортированный режим становится
   предлагаемым значением;
 - `tlg_send_root`, `razn_output_dir`, `opis_base_dir`, `f12_base_dir`:
@@ -275,6 +278,43 @@ upgrade автоматически дополнял старые установ�
 Помощник атомарно формирует UTF-8 `Settings.json`, проверяет синтаксис путей и порт.
 После запуска установщик требует настоящий ответ PONG, а не только состояние
 SCM `RUNNING`.
+
+### Локальная установка без вопросов
+
+`Local-Machine-Install.bat` — отдельный fresh-only entrypoint portable-пакета.
+Он не читает stdin, не вызывает `choice`, `set /p` или `pause` и сам выполняет
+весь сценарий:
+
+1. Берёт текущий системный год и задаёт instance id равным этому году. Поэтому
+   имя службы всегда имеет вид `SearchEngineService-YYYY`.
+2. Выбирает первый свободный TCP-порт, начиная с годового порта шаблона,
+   рассчитывает рекомендуемые потоки и создаёт fresh `Settings.json` с SQLite,
+   отключённым PRM short-content update и `scan_on_startup=false`.
+3. Выпускает привязанный к SMBIOS computer-токен
+   `client_id=local-machine`, `client_name=operator` в
+   `%ProgramData%\SearchEngine\searchclient-auth-token.json`, экспортирует
+   `issuer-public.pem` и регистрирует токен enabled в `auth_clients.sqlite`.
+4. Запускает официальный одноразовый режим
+   `SearchEngine.exe --initial-update --data-dir <data-dir>`. Этот режим не
+   поднимает TCP listener, watcher или scheduler, синхронно вызывает production
+   update pipeline и возвращается только после сохранения индекса.
+5. Запускает службу и проверяет `RUNNING` + PING/PONG.
+
+Пароль machine-wide keystore `%ProgramData%\SearchClientTokenIssuer\keys` в
+этом упрощённом сценарии фиксирован как `12345678` и передаётся issuer через
+environment variable. Это осознанный default локальной установки; значение
+открыто находится в BAT-файле. Stdout/stderr issuer подавлены, поэтому token
+preview и ключи не попадают в консоль или журнал установки. Существующий
+keystore с другим паролем не перезаписывается.
+
+Существующая служба текущего года или непустой целевой Program Files/ProgramData
+останавливает сценарий без удаления данных. Ошибка provisioning токена удаляет
+новую годовую службу и её созданные каталоги, но не удаляет общий issuer keystore
+или стандартный computer-токен: они могут использоваться другими локальными
+компонентами. Ошибка initial update не маскируется автосканированием:
+служба всё равно запускается и проходит health-check, BAT возвращает `20` и
+печатает точную команду повтора. Обычная интерактивная установка и reinstall
+остаются в `Install-SearchEngineService.bat`.
 
 На 64-разрядной Windows x86-комплект устанавливает программу в
 `C:\Program Files (x86)\SearchEngineService`. Windows 7 x86 использует только

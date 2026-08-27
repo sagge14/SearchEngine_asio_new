@@ -294,7 +294,22 @@ bool SearchEngineApplication::start()
                 paths_.prefix_map});
 
         throwIfStopRequested();
-        if (pending->settings.serverMode == search_server::ServerMode::Active) {
+        if (options_.mode == SearchEngineLaunchMode::InitialUpdate) {
+            if (pending->settings.serverMode !=
+                search_server::ServerMode::Active)
+            {
+                throw StartupError(
+                    ERROR_INVALID_DATA,
+                    "--initial-update requires config.server_mode=active"
+                );
+            }
+            LG(
+                "Initial-update mode: watcher, scheduler and network "
+                "listener are disabled"
+            );
+        } else if (
+            pending->settings.serverMode == search_server::ServerMode::Active)
+        {
             pending->dispatcher = std::make_unique<FileEventDispatcher>(
                 pending->settings.indexRoots,
                 file_extension_contract::Selection{
@@ -353,23 +368,25 @@ bool SearchEngineApplication::start()
         }
 
         throwIfStopRequested();
-        try {
-            pending->asio_server =
-                std::make_shared<asio_server::AsioServer>(
-                    pending->contexts->net(),
-                    pending->contexts->cpu_pool(),
-                    static_cast<unsigned short>(pending->settings.port)
+        if (options_.mode != SearchEngineLaunchMode::InitialUpdate) {
+            try {
+                pending->asio_server =
+                    std::make_shared<asio_server::AsioServer>(
+                        pending->contexts->net(),
+                        pending->contexts->cpu_pool(),
+                        static_cast<unsigned short>(pending->settings.port)
+                    );
+            } catch (const boost::system::system_error& exception) {
+                const unsigned long native_error =
+                    static_cast<unsigned long>(exception.code().value());
+                throw StartupError(
+                    native_error == 0 ? ERROR_OPEN_FAILED : native_error,
+                    std::string("cannot bind ASIO listen port: ") +
+                        exception.what()
                 );
-        } catch (const boost::system::system_error& exception) {
-            const unsigned long native_error =
-                static_cast<unsigned long>(exception.code().value());
-            throw StartupError(
-                native_error == 0 ? ERROR_OPEN_FAILED : native_error,
-                std::string("cannot bind ASIO listen port: ") +
-                    exception.what()
-            );
+            }
+            LG("ASIO port bound; server accepts connections");
         }
-        LG("ASIO port bound; server accepts connections");
 
         if (options_.mode == SearchEngineLaunchMode::Console &&
             pending->settings.hideConsoleWindow)
@@ -404,6 +421,22 @@ bool SearchEngineApplication::start()
     }
     shutdownRuntime();
     return false;
+}
+
+void SearchEngineApplication::runInitialUpdate()
+{
+    if (options_.mode != SearchEngineLaunchMode::InitialUpdate) {
+        throw std::runtime_error(
+            "initial update is available only in --initial-update mode"
+        );
+    }
+    if (!isRunning() || !runtime_ || !runtime_->search_server) {
+        throw std::runtime_error(
+            "initial update requires a successfully started application"
+        );
+    }
+
+    runtime_->search_server->updateStep();
 }
 
 void SearchEngineApplication::requestStop()

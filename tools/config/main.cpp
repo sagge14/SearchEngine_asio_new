@@ -1801,6 +1801,10 @@ int configureCommand(const std::vector<std::wstring>& args)
     config["file_indexing_timeout_sec"] = timeout;
     config["enable_prm_short_content_autodetect"] = prmAutodetect;
     config["document_catalog_storage"] = documentCatalogStorage;
+    if (const auto value = option(args, L"--scan-on-startup")) {
+        config["scan_on_startup"] = parseBool(
+            *value, "scan on startup");
+    }
     if (const auto value = option(args, L"--tlg-send-root")) {
         config["tlg_send_root"] = utf8(*value);
     }
@@ -1843,25 +1847,32 @@ int configureCommand(const std::vector<std::wstring>& args)
                   << "f12_base_dir="
                   << config.value("f12_base_dir", std::string()) << '\n'
                   << "prm_short_content_autodetect="
-                  << (prmAutodetect ? 1 : 0) << '\n';
+                  << (prmAutodetect ? 1 : 0) << '\n'
+                  << "scan_on_startup="
+                  << (config.value("scan_on_startup", true) ? 1 : 0)
+                  << '\n';
     }
     return 0;
 }
 
-bool choosePrmAutodetect(UiLanguage language)
+bool choosePrmAutodetect(UiLanguage language, bool current)
 {
+    const std::wstring defaultChoice = current ? L"1" : L"2";
     for (;;) {
         writeInteractive(language == UiLanguage::Russian
             ? L"\nАвтоматически заполнять краткое содержание AutoPad PRM:\n"
-              L"  1 - Включить (по умолчанию)\n"
+              L"  1 - Включить\n"
               L"  2 - Отключить\n"
-              L"Ваш выбор [1]: "
+              L"Ваш выбор [" + defaultChoice + L"]: "
             : L"\nAutomatically fill AutoPad PRM short content:\n"
-              L"  1 - Enable (default)\n"
+              L"  1 - Enable\n"
               L"  2 - Disable\n"
-              L"Select [1]: ");
+              L"Select [" + defaultChoice + L"]: ");
         const std::wstring answer = trim(readInteractiveLine());
-        if (answer.empty() || answer == L"1") {
+        if (answer.empty()) {
+            return current;
+        }
+        if (answer == L"1") {
             return true;
         }
         if (answer == L"2") {
@@ -1882,11 +1893,11 @@ std::string chooseDocumentCatalogStorage(
     for (;;) {
         writeInteractive(language == UiLanguage::Russian
             ? L"\nГде хранить каталог документов (пути и метаданные)?\n"
-              L"  1 - В оперативной памяти — быстрее (по умолчанию)\n"
+              L"  1 - В оперативной памяти — быстрее\n"
               L"  2 - В SQLite — меньше расход RAM, возможна небольшая задержка\n"
               L"Ваш выбор [" + defaultChoice + L"]: "
             : L"\nWhere should the document catalog (paths and metadata) be stored?\n"
-              L"  1 - In memory — faster (default)\n"
+              L"  1 - In memory — faster\n"
               L"  2 - In SQLite — lower RAM use, with possible small latency\n"
               L"Select [" + defaultChoice + L"]: ");
         const std::wstring answer = trim(readInteractiveLine());
@@ -1967,6 +1978,7 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
     }
 
     int defaultPort = 15001;
+    bool defaultPrmAutodetect = true;
     std::string defaultDocumentCatalogStorage = "memory";
     std::string defaultTlgSendRoot = "D:\\";
     std::string defaultRaznOutputDir =
@@ -1990,6 +2002,12 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
                 config["document_catalog_storage"].get<std::string>();
             if (inverted_index::parseDocumentCatalogStorage(candidate))
                 defaultDocumentCatalogStorage = candidate;
+        }
+        if (config.contains("enable_prm_short_content_autodetect") &&
+            config["enable_prm_short_content_autodetect"].is_boolean())
+        {
+            defaultPrmAutodetect =
+                config["enable_prm_short_content_autodetect"].get<bool>();
         }
         defaultTlgSendRoot = configStringOr(
             config, "tlg_send_root", defaultTlgSendRoot);
@@ -2020,7 +2038,8 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         L"One-file indexing timeout (seconds)",
         kRecommendedFileTimeout, kMinFileTimeout, kMaxFileTimeout
     );
-    const bool prmAutodetect = choosePrmAutodetect(language);
+    const bool prmAutodetect = choosePrmAutodetect(
+        language, defaultPrmAutodetect);
     const std::string documentCatalogStorage =
         chooseDocumentCatalogStorage(
             language, defaultDocumentCatalogStorage);
@@ -2299,13 +2318,8 @@ sockaddr_in loopbackEndpoint(int port)
     return endpoint;
 }
 
-int checkPortCommand(const std::vector<std::wstring>& args)
+bool isTcpPortAvailable(int port)
 {
-    const int port = parseInt(requiredOption(args, L"--port"), "port");
-    if (port < 1 || port > 65535) {
-        throw std::runtime_error("port must be inside 1..65535");
-    }
-    Winsock winsock;
     Socket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == INVALID_SOCKET) {
         throw std::runtime_error("cannot create port-check socket");
@@ -2315,12 +2329,97 @@ int checkPortCommand(const std::vector<std::wstring>& args)
         socket.get(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
         reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
     sockaddr_in endpoint = loopbackEndpoint(port);
-    const bool available = bind(
+    return bind(
         socket.get(), reinterpret_cast<sockaddr*>(&endpoint),
         sizeof(endpoint)) == 0;
+}
+
+int checkPortCommand(const std::vector<std::wstring>& args)
+{
+    const int port = parseInt(requiredOption(args, L"--port"), "port");
+    if (port < 1 || port > 65535) {
+        throw std::runtime_error("port must be inside 1..65535");
+    }
+    Winsock winsock;
+    const bool available = isTcpPortAvailable(port);
     std::cout << "port=" << port << '\n'
               << "port_available=" << (available ? 1 : 0) << '\n';
     return available ? 0 : 3;
+}
+
+int configureLocalMachineCommand(const std::vector<std::wstring>& args)
+{
+    const fs::path templatePath = requiredOption(args, L"--template");
+    const fs::path outputPath = requiredOption(args, L"--output");
+    const SystemInfo system = getSystemInfo();
+
+    json defaults = readJson(templatePath);
+    if (!defaults.contains("config") || !defaults["config"].is_object()) {
+        throw std::runtime_error(
+            "local-machine template must contain a config object");
+    }
+    const json& config = defaults["config"];
+    const char* portName = config.contains("asio_port")
+        ? "asio_port"
+        : "port";
+    const auto configuredPort = config.contains(portName)
+        ? jsonInteger(config[portName])
+        : std::optional<long long>{};
+    if (!configuredPort || *configuredPort < 1 || *configuredPort > 65535) {
+        throw std::runtime_error(
+            "local-machine template ASIO port must be inside 1..65535");
+    }
+
+    const long long yearPort = (*configuredPort / 10) * 10 +
+        (system.currentYear % 10);
+    const int firstCandidate =
+        yearPort >= 1 && yearPort <= 65535
+            ? static_cast<int>(yearPort)
+            : static_cast<int>(*configuredPort);
+
+    Winsock winsock;
+    int selectedPort = 0;
+    constexpr int kPortCount = 65535;
+    for (int offset = 0; offset < kPortCount; ++offset) {
+        const int candidate =
+            ((firstCandidate - 1 + offset) % kPortCount) + 1;
+        if (isTcpPortAvailable(candidate)) {
+            selectedPort = candidate;
+            break;
+        }
+    }
+    if (selectedPort == 0) {
+        throw std::runtime_error(
+            "no free ASIO port was found for local-machine setup");
+    }
+
+    std::vector<std::wstring> configureArgs{
+        L"--template", templatePath.wstring(),
+        L"--output", outputPath.wstring(),
+        L"--port", std::to_wstring(selectedPort),
+        L"--year", std::to_wstring(system.currentYear),
+        L"--threads", std::to_wstring(system.recommendedThreads),
+        L"--file-timeout", std::to_wstring(kRecommendedFileTimeout),
+        L"--prm-autodetect", L"0",
+        L"--document-catalog-storage", L"sqlite",
+        L"--scan-on-startup", L"0",
+        L"--quiet"
+    };
+    const int result = configureCommand(configureArgs);
+    if (result != 0) {
+        return result;
+    }
+
+    std::cout << "settings_written=1\n"
+              << "local_machine=1\n"
+              << "port=" << selectedPort << '\n'
+              << "year=" << system.currentYear << '\n'
+              << "threads=" << system.recommendedThreads << '\n'
+              << "file_timeout_sec=" << kRecommendedFileTimeout << '\n'
+              << "document_catalog_storage=sqlite\n"
+              << "prm_short_content_autodetect=0\n"
+              << "scan_on_startup=0\n";
+    return 0;
 }
 
 void connectWithTimeout(SOCKET socket, const sockaddr_in& endpoint, int timeoutMs)
@@ -2445,8 +2544,10 @@ void printUsage()
         << "            [--import-settings FILE] [--parallel-readers N]\n"
         << "            [--sqlite-load-threads N]\n"
         << "            [--document-catalog-storage memory|sqlite]\n"
+        << "            [--scan-on-startup 0|1]\n"
         << "            [--tlg-send-root PATH] [--razn-output-dir PATH]\n"
         << "            [--opis-base-dir PATH] [--f12-base-dir PATH]\n"
+        << "  configure-local-machine --template FILE --output FILE\n"
         << "  configure-interactive --template FILE --output FILE\n"
         << "            [--import-settings FILE] [--language auto|ru|en]\n"
         << "  choose-language --output FILE\n"
@@ -2506,6 +2607,9 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"configure") {
             return configureCommand(args);
+        }
+        if (command == L"configure-local-machine") {
+            return configureLocalMachineCommand(args);
         }
         if (command == L"configure-interactive") {
             return configureInteractiveCommand(args);

@@ -60,6 +60,7 @@ bool parseSearchEngineOptions(
 {
     bool console = false;
     bool service = false;
+    bool initial_update = false;
     bool data_dir_seen = false;
     bool service_name_seen = false;
 
@@ -71,6 +72,12 @@ bool parseSearchEngineOptions(
             console = true;
         } else if (argument == L"--service") {
             service = true;
+        } else if (argument == L"--initial-update") {
+            if (initial_update) {
+                error = "--initial-update may be specified only once";
+                return false;
+            }
+            initial_update = true;
         } else if (argument == L"--service-name") {
             if (service_name_seen) {
                 error = "--service-name may be specified only once";
@@ -103,6 +110,14 @@ bool parseSearchEngineOptions(
         error = "--console and --service are mutually exclusive";
         return false;
     }
+    if (initial_update && (console || service)) {
+        error = "--initial-update is mutually exclusive with --console and --service";
+        return false;
+    }
+    if (initial_update && !data_dir_seen) {
+        error = "--initial-update requires an explicit --data-dir";
+        return false;
+    }
     if (service && options.help) {
         error = "--service and --help are mutually exclusive";
         return false;
@@ -118,9 +133,11 @@ bool parseSearchEngineOptions(
         return false;
     }
 
-    options.mode = service
-        ? SearchEngineLaunchMode::Service
-        : SearchEngineLaunchMode::Console;
+    options.mode = initial_update
+        ? SearchEngineLaunchMode::InitialUpdate
+        : (service
+            ? SearchEngineLaunchMode::Service
+            : SearchEngineLaunchMode::Console);
     return true;
 }
 
@@ -214,10 +231,13 @@ std::string searchEngineUsage()
         << "Usage:\n"
         << "  SearchEngine.exe [--console] [--data-dir <absolute-path>]\n"
         << "  SearchEngine.exe --service [--service-name <name>] "
-           "[--data-dir <absolute-path>]\n\n"
+           "[--data-dir <absolute-path>]\n"
+        << "  SearchEngine.exe --initial-update "
+           "--data-dir <absolute-path>\n\n"
         << "Options:\n"
         << "  --console          Run interactively (default)\n"
         << "  --service          Connect to Windows Service Control Manager\n"
+        << "  --initial-update   Build and save the index once, then exit\n"
         << "  --service-name     SCM service name (default: SearchEngineService)\n"
         << "  --data-dir <path>  Runtime files root (defaults to exe directory)\n"
         << "  --base-dir <path>  Alias for --data-dir\n"

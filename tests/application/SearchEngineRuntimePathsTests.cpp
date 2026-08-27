@@ -46,3 +46,48 @@ TEST(SearchEngineRuntimePaths, DistinctInstanceDataDirsYieldDistinctPrefixMaps)
     EXPECT_NE(defaultPaths.prefix_map, instancePaths.prefix_map);
     EXPECT_NE(defaultPaths.data_dir, instancePaths.data_dir);
 }
+
+TEST(SearchEngineOptions, InitialUpdateIsASeparateNonInteractiveMode)
+{
+    SearchEngineOptions options;
+    std::string error;
+    const std::vector<std::wstring> arguments{
+        L"SearchEngine.exe",
+        L"--initial-update",
+        L"--data-dir",
+        L"C:\\ProgramData\\SearchEngineService-2026"
+    };
+
+    ASSERT_TRUE(parseSearchEngineOptions(arguments, options, error)) << error;
+    EXPECT_EQ(options.mode, SearchEngineLaunchMode::InitialUpdate);
+    EXPECT_EQ(
+        options.data_dir,
+        fs::path(L"C:\\ProgramData\\SearchEngineService-2026"));
+}
+
+TEST(SearchEngineOptions, InitialUpdateRejectsServiceMode)
+{
+    SearchEngineOptions options;
+    std::string error;
+    const std::vector<std::wstring> arguments{
+        L"SearchEngine.exe",
+        L"--service",
+        L"--initial-update"
+    };
+
+    EXPECT_FALSE(parseSearchEngineOptions(arguments, options, error));
+    EXPECT_NE(error.find("mutually exclusive"), std::string::npos);
+}
+
+TEST(SearchEngineOptions, InitialUpdateRequiresExplicitDataDir)
+{
+    SearchEngineOptions options;
+    std::string error;
+    const std::vector<std::wstring> arguments{
+        L"SearchEngine.exe",
+        L"--initial-update"
+    };
+
+    EXPECT_FALSE(parseSearchEngineOptions(arguments, options, error));
+    EXPECT_NE(error.find("requires an explicit --data-dir"), std::string::npos);
+}
