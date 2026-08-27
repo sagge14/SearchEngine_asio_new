@@ -28,10 +28,10 @@
       "shp"
     ],
     "include_extensionless_files": true,
-    "enable_prm_short_content_autodetect": true,
+    "enable_prm_short_content_autodetect": false,
     "file_indexing_timeout_sec": 120,
     "full_index_strategy": "batch",
-    "document_catalog_storage": "memory",
+    "document_catalog_storage": "sqlite",
     "hide_console_window": false,
     "ind_time": 1500,
     "max_parallel_readers": 0,

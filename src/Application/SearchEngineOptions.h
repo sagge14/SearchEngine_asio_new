@@ -6,7 +6,8 @@
 
 enum class SearchEngineLaunchMode {
     Console,
-    Service
+    Service,
+    InitialUpdate
 };
 
 struct SearchEngineOptions {

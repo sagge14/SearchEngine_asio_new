@@ -182,6 +182,38 @@ int runConsole(
     return application.exitCode();
 }
 
+int runInitialUpdate(
+    const SearchEngineOptions& options,
+    const SearchEngineRuntimePaths& paths)
+{
+    SearchEngineApplication application(options, paths);
+    if (!application.start()) {
+        std::cerr << "SearchEngine initial update startup failed: "
+                  << application.lastError() << '\n';
+        return application.exitCode() == 0 ? 1 : application.exitCode();
+    }
+
+    int result = 0;
+    try {
+        application.runInitialUpdate();
+        std::cout << "Initial index update completed successfully.\n";
+    } catch (const std::exception& exception) {
+        std::cerr << "Initial index update failed: "
+                  << exception.what() << '\n';
+        result = 1;
+    } catch (...) {
+        std::cerr << "Initial index update failed: unknown exception\n";
+        result = 1;
+    }
+
+    application.requestStop();
+    application.stop();
+    if (result == 0 && application.exitCode() != 0) {
+        return application.exitCode();
+    }
+    return result;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t* argv[])
@@ -226,5 +258,8 @@ int wmain(int argc, wchar_t* argv[])
     std::set_terminate(terminateHandler);
     SetUnhandledExceptionFilter(unhandledExceptionFilter);
 
+    if (options.mode == SearchEngineLaunchMode::InitialUpdate) {
+        return runInitialUpdate(options, paths);
+    }
     return runConsole(options, paths);
 }

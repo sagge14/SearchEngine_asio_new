@@ -472,7 +472,7 @@ Assert-True (-not $pickerBlock.Contains('chcp 65001')) (
 Assert-True ($configureText.Contains('chcp 65001')) (
     '9a. Configure-SearchEngineService.bat still uses chcp 65001 for UTF-8 helper output elsewhere'
 )
-$inspectBlockPattern = '(?s)chcp 65001\s*>nul\s*\r?\n"%HELPER%" inspect-installed'
+$inspectBlockPattern = 'chcp 65001[^\r\n]*\r?\n"%HELPER%" inspect-installed'
 Assert-True ([regex]::IsMatch($configureText, $inspectBlockPattern)) (
     '9a. Configure inspect-installed path keeps chcp 65001 before redirected helper output'
 )
@@ -565,6 +565,113 @@ $protectedSection = $packagerText.Substring(
 )
 Assert-True ($protectedSection.Contains("'Configure-SearchEngineService.bat'")) (
     '9. Packager protectedFiles list includes Configure-SearchEngineService.bat'
+)
+
+# 9e. Zero-click local-machine installation contract.
+$localInstallBat = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\Local-Machine-Install-Windows7.bat'
+Assert-True (Test-Path -LiteralPath $localInstallBat -PathType Leaf) (
+    '9e. Local-Machine-Install.bat template exists'
+)
+Assert-True (Test-StrictAsciiBytes -Path $localInstallBat) (
+    '9e. Local-Machine-Install.bat template is strict ASCII'
+)
+$localInstallText = [IO.File]::ReadAllText($localInstallBat)
+Assert-True ($localInstallText.Contains('/LocalMachine')) (
+    '9e. Local-machine wrapper selects the explicit noninteractive mode'
+)
+Assert-True ($localInstallText.Contains('pause >nul')) (
+    '9e. Local-machine wrapper keeps the final result visible'
+)
+Assert-True (-not $localInstallText.ToLowerInvariant().Contains('choice')) (
+    '9e. Local-machine wrapper never asks a choice'
+)
+Assert-True (-not $localInstallText.ToLowerInvariant().Contains('set /p')) (
+    '9e. Local-machine wrapper never reads stdin'
+)
+Assert-True ($localInstallText.Contains('set "INSTALL_EXIT=%ERRORLEVEL%"')) (
+    '9e. Local-machine wrapper preserves the installer exit status before waiting'
+)
+Assert-True ($localInstallText.Contains('exit /b %INSTALL_EXIT%')) (
+    '9e. Local-machine wrapper returns the preserved installer exit status'
+)
+Assert-True ($installText.Contains(
+    'call :UI install.success "%SERVICE_NAME%" "%INSTALL_ROOT%" "%DATA_DIR%" "%SERVICE_YEAR%" "%SERVICE_PORT%" "%COMPUTERNAME%"'
+)) '9e. Final install summary receives actual paths, year, port, and host'
+Assert-True ($installText.Contains('set "SERVICE_INSTANCE=%LOCAL_current_year%"')) (
+    '9e. Local-machine service instance is the current year'
+)
+Assert-True ($installText.Contains('set "SERVICE_NAME=SearchEngineService-%SERVICE_INSTANCE%"')) (
+    '9e. Named Windows service keeps the year as its suffix'
+)
+Assert-True ($installText.Contains('configure-local-machine')) (
+    '9e. Installer delegates deterministic Settings and free-port generation'
+)
+Assert-True ($installText.Contains('TOKEN_ISSUER_PASSWORD=12345678')) (
+    '9e. Requested local issuer password is fixed to 12345678'
+)
+Assert-True ($installText.Contains('--device-type computer --name operator --id local-machine')) (
+    '9e. Installer issues the operator local-machine computer token'
+)
+Assert-True ($installText.Contains('--yes >nul 2>&1')) (
+    '9e. Installer suppresses the issuer token preview'
+)
+Assert-True ($installText.Contains('--export-public "%DATA_DIR%"')) (
+    '9e. Installer exports the issuer public key beside the auth database'
+)
+Assert-True ($installText.Contains('add-from-token --token "%TOKEN_PATH%"')) (
+    '9e. Installer enables the local identity through AuthDbTool token registration'
+)
+Assert-True ($installText.Contains('SearchEngine.exe" --initial-update --data-dir')) (
+    '9e. Installer executes the official one-shot initial-update mode'
+)
+Assert-True ($installText.Contains('exit /b 20')) (
+    '9e. Initial-index failure has a distinct post-install exit status'
+)
+Assert-True ($installText.Contains('if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 0')) (
+    '9e. Local-machine PAUSE_UI path is a no-op'
+)
+Assert-True (([regex]::Matches(
+    $installText,
+    [regex]::Escape('if "%LOCAL_MACHINE_INSTALL%"=="1" exit /b 1')
+)).Count -ge 3) (
+    '9e. Local-machine failure paths never prompt for force-stop or delete retry'
+)
+Assert-True ($installText.Contains('goto :LOCAL_MACHINE_ALREADY_INSTALLED')) (
+    '9e. Existing year service fails instead of prompting for replacement'
+)
+Assert-True ($installText.Contains('goto :LOCAL_MACHINE_LEFTOVERS')) (
+    '9e. Leftover year directories fail instead of being deleted'
+)
+Assert-True ($installText.Contains(':CLEAN_LOCAL_MACHINE_FAILURE')) (
+    '9e. Files created by a failed fresh local install have a cleanup path'
+)
+$authPosition = $installText.IndexOf('call :PROVISION_LOCAL_MACHINE_AUTH')
+$updatePosition = $installText.IndexOf('call :RUN_LOCAL_INITIAL_UPDATE')
+$startPosition = $installText.IndexOf('sc.exe start "%SERVICE_NAME%"')
+Assert-True (
+    $authPosition -ge 0 -and $updatePosition -gt $authPosition -and
+    $startPosition -gt $updatePosition
+) '9e. Token registration and completed one-shot indexing precede service start'
+Assert-True ($packagerText.Contains("Source = 'Local-Machine-Install-Windows7.bat'")) (
+    '9e. Packager copies the local-machine wrapper'
+)
+Assert-True ($protectedSection.Contains("'Local-Machine-Install.bat'")) (
+    '9e. Package checksum manifest protects Local-Machine-Install.bat'
+)
+
+$defaultSettingsPath = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\source-data\Settings.json'
+$defaultSettings = Get-Content -LiteralPath $defaultSettingsPath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+Assert-True ($defaultSettings.config.document_catalog_storage -eq 'sqlite') (
+    '9e. Fresh release Settings defaults document paths to SQLite'
+)
+Assert-True (-not $defaultSettings.config.enable_prm_short_content_autodetect) (
+    '9e. Fresh release Settings disables PRM short-content updates'
+)
+Assert-True (-not $defaultSettings.config.scan_on_startup) (
+    '9e. Fresh release Settings keeps repeated startup scans disabled'
 )
 
 # 10. Installer/uninstaller/configurator keep the selected UI language end-to-end.
@@ -748,6 +855,10 @@ function Test-PackageDataLayout {
             "8. $ArchitectureLabel data\$name absent"
         )
     }
+    Assert-True (
+        Test-Path -LiteralPath (Join-Path $PackageDirectory 'Local-Machine-Install.bat') `
+            -PathType Leaf
+    ) "8. $ArchitectureLabel Local-Machine-Install.bat exists"
 }
 
 $packageArchCases = @(

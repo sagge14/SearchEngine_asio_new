@@ -29,6 +29,7 @@ public:
     SearchEngineApplication& operator=(const SearchEngineApplication&) = delete;
 
     bool start();
+    void runInitialUpdate();
     void requestStop();
     void wait();
     void stop();

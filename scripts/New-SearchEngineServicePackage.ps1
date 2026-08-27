@@ -462,6 +462,10 @@ try {
             Destination = 'Install-SearchEngineService.bat'
         },
         @{
+            Source = 'Local-Machine-Install-Windows7.bat'
+            Destination = 'Local-Machine-Install.bat'
+        },
+        @{
             Source = 'Stop-SearchEngineService-Windows7.bat'
             Destination = 'Stop-SearchEngineService.bat'
         },
@@ -552,6 +556,7 @@ try {
     }
     foreach ($name in @(
         'Install-SearchEngineService.bat',
+        'Local-Machine-Install.bat',
         'Stop-SearchEngineService.bat',
         'Start-SearchEngineService.bat',
         'Restart-SearchEngineService.bat',

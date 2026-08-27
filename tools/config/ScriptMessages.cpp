@@ -639,6 +639,27 @@ constexpr Message kMessages[] = {
         L"Instance: {2} ({3})\n\n"
     },
     {
+        L"install.local_argument_conflict",
+        L"ОШИБКА: /LocalMachine нельзя совмещать с /validate или явным "
+        L"идентификатором экземпляра.\n",
+        L"ERROR: /LocalMachine cannot be combined with /validate or an "
+        L"explicit instance id.\n"
+    },
+    {
+        L"install.local_existing",
+        L"ОШИБКА: Годовая служба {1} уже существует. Автоматическая локальная "
+        L"установка не заменяет существующую службу.\n",
+        L"ERROR: Year service {1} already exists. Local-machine setup does "
+        L"not replace an existing service.\n"
+    },
+    {
+        L"install.local_leftovers",
+        L"ОШИБКА: Обнаружены оставшиеся файлы годового экземпляра. "
+        L"Автоматическое удаление запрещено.\n  Программа: {1}\n  Данные: {2}\n",
+        L"ERROR: Leftover year-instance files were found. Automatic deletion "
+        L"is disabled.\n  Application: {1}\n  Data: {2}\n"
+    },
+    {
         L"install.existing",
         L"Найдена установленная служба SearchEngineService.\n"
         L"  1 - Переустановить или обновить (рекомендуется)\n"
@@ -782,6 +803,24 @@ constexpr Message kMessages[] = {
         L"User mapped drives are not available to the Windows service.\n"
     },
     { L"install.step_firewall", L"[7/8] Настройка брандмауэра Windows для TCP-порта {1}...\n", L"[7/8] Configuring Windows Firewall for TCP port {1}...\n" },
+    {
+        L"install.local_auth",
+        L"Создание computer-токена local-machine/operator и регистрация "
+        L"в базе авторизации...\n",
+        L"Creating the local-machine/operator computer token and registering "
+        L"it in the authorization database...\n"
+    },
+    {
+        L"install.local_auth_failed",
+        L"ОШИБКА: Не удалось создать или зарегистрировать локальный "
+        L"computer-токен.\n",
+        L"ERROR: The local computer token could not be created or registered.\n"
+    },
+    {
+        L"install.local_initial_update",
+        L"Одноразовое первоначальное сканирование и построение SQLite-индекса...\n",
+        L"Running the one-time initial scan and SQLite index build...\n"
+    },
     { L"install.step_start", L"[8/8] Запуск службы и проверка PING/PONG...\n", L"[8/8] Starting the service and checking PING/PONG...\n" },
     { L"install.old_app_warning", L"ПРЕДУПРЕЖДЕНИЕ: Не удалось удалить старый каталог программы: {1}\n", L"WARNING: Old application directory could not be removed: {1}\n" },
     { L"install.runtime_tx_warning", L"ПРЕДУПРЕЖДЕНИЕ: Каталог транзакции оставлен для диагностики: {1}\n", L"WARNING: Runtime transaction directory was left for diagnostics: {1}\n" },
@@ -789,22 +828,48 @@ constexpr Message kMessages[] = {
         L"install.success",
         L"\nУстановка успешно завершена.\n"
         L"Служба:     {1} (РАБОТАЕТ, PING/PONG подтверждён)\n"
+        L"Экземпляр:  {4}\n"
+        L"Адрес:      {6}:{5}\n"
+        L"TCP-порт:   {5} (правило брандмауэра: {1} TCP)\n"
         L"Учётная запись службы: LocalSystem\n"
         L"Каталоги среды выполнения должны быть доступны LocalSystem.\n"
         L"Подключённые диски пользователя недоступны службе Windows.\n"
-        L"Программа:  {2}\n"
+        L"Установка:  {2}\n"
+        L"Программа:  {2}\\bin\\SearchEngine.exe\n"
         L"Данные:     {3}\n"
         L"Журналы:   {3}\\logs\n"
         L"Подсказка для клиента: {3}\\client-endpoint.txt\n\n",
         L"\nInstallation completed successfully.\n"
         L"Service:     {1} (RUNNING and PING/PONG OK)\n"
+        L"Instance:    {4}\n"
+        L"Endpoint:    {6}:{5}\n"
+        L"TCP port:    {5} (firewall rule: {1} TCP)\n"
         L"Service account: LocalSystem\n"
         L"Runtime paths must be accessible to LocalSystem.\n"
         L"User mapped drives are not available to the Windows service.\n"
-        L"Application: {2}\n"
+        L"Install root: {2}\n"
+        L"Application: {2}\\bin\\SearchEngine.exe\n"
         L"Data:        {3}\n"
         L"Logs:        {3}\\logs\n"
         L"Client hint: {3}\\client-endpoint.txt\n\n"
+    },
+    {
+        L"install.local_success",
+        L"Локальный computer-токен зарегистрирован и сохранён:\n  {1}\n"
+        L"Первоначальная индексация: ВЫПОЛНЕНА УСПЕШНО (одноразовый запуск).\n"
+        L"Автосканирование при запуске: ОТКЛЮЧЕНО (scan_on_startup=false).\n",
+        L"The local computer token was registered and saved:\n  {1}\n"
+        L"Initial indexing: COMPLETED SUCCESSFULLY (one-time run).\n"
+        L"Startup scan: DISABLED (scan_on_startup=false).\n"
+    },
+    {
+        L"install.local_initial_update_failed",
+        L"ПРЕДУПРЕЖДЕНИЕ: Служба установлена и работает, но первоначальная "
+        L"индексация завершилась с кодом {1}.\n"
+        L"Повтор: \"{3}\\SearchEngine.exe\" --initial-update --data-dir \"{2}\"\n",
+        L"WARNING: The service is installed and running, but initial indexing "
+        L"failed with exit code {1}.\n"
+        L"Retry: \"{3}\\SearchEngine.exe\" --initial-update --data-dir \"{2}\"\n"
     },
     { L"install.validated", L"Проверка пакета успешно завершена.\n", L"Package verification completed successfully.\n" },
     {
