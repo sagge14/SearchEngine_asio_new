@@ -1255,6 +1255,23 @@ void publishRestoreStagingRoot(
 
 } // namespace
 
+std::wstring serviceArchiveDirectoryLeaf(
+    const std::wstring& serviceName,
+    int year)
+{
+    const std::wstring leaf = safeServiceLeaf(serviceName);
+    const std::wstring yearSuffix = L"-" + std::to_wstring(year);
+    if (leaf.size() >= yearSuffix.size() &&
+        leaf.compare(
+            leaf.size() - yearSuffix.size(),
+            yearSuffix.size(),
+            yearSuffix) == 0)
+    {
+        return leaf;
+    }
+    return leaf + yearSuffix;
+}
+
 void mergeRestoreStagingTree(
     const fs::path& staging,
     const fs::path& target)
@@ -1860,8 +1877,7 @@ ServiceArchivePlan planServiceArchive(const ServiceArchiveOptions& options)
         throw std::runtime_error("configured year is outside 1900..9999");
 
     plan.finalDirectory = plan.options.archiveRoot /
-        (safeServiceLeaf(options.serviceName) + L"-" +
-         std::to_wstring(plan.year));
+        serviceArchiveDirectoryLeaf(options.serviceName, plan.year);
     if (fs::exists(plan.finalDirectory))
         throw std::runtime_error(
             "service archive directory already exists: " +
@@ -3098,7 +3114,7 @@ ServiceArchiveResult validateRestoredServiceArchiveDeletion(
             manifest.at("service_name").get<std::string>());
         const int year = manifest.at("year").get<int>();
         const fs::path expectedDirectory = result.archiveDirectory.parent_path() /
-            (safeServiceLeaf(serviceName) + L"-" + std::to_wstring(year));
+            serviceArchiveDirectoryLeaf(serviceName, year);
         if (!samePath(expectedDirectory, result.archiveDirectory))
             throw std::runtime_error(
                 "archive directory name does not match service manifest");

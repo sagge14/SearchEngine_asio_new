@@ -89,6 +89,12 @@ struct ServiceRestorePlan {
     const std::wstring& serviceName,
     const fs::path& dataDirectory);
 
+/// Returns the canonical archive folder name. The configured year is appended
+/// only when the service name does not already end with the same year suffix.
+[[nodiscard]] std::wstring serviceArchiveDirectoryLeaf(
+    const std::wstring& serviceName,
+    int year);
+
 [[nodiscard]] std::vector<InstalledService> enumerateSearchEngineServices();
 
 [[nodiscard]] InstalledService inspectSearchEngineService(

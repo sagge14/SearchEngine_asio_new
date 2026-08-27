@@ -172,6 +172,22 @@ protected:
 } // namespace
 
 #ifdef _WIN32
+TEST(ServiceArchiveNaming, AppendsConfiguredYearOnlyOnce)
+{
+    EXPECT_EQ(
+        searchengine_archive::serviceArchiveDirectoryLeaf(
+            L"SearchEngineService", 2026),
+        L"SearchEngineService-2026");
+    EXPECT_EQ(
+        searchengine_archive::serviceArchiveDirectoryLeaf(
+            L"SearchEngineService-2026", 2026),
+        L"SearchEngineService-2026");
+    EXPECT_EQ(
+        searchengine_archive::serviceArchiveDirectoryLeaf(
+            L"SearchEngineService-2026-prd", 2026),
+        L"SearchEngineService-2026-prd-2026");
+}
+
 TEST(ServiceArchiveInvocation, RoundTripsQuotedServiceImagePath)
 {
     const fs::path executable =
