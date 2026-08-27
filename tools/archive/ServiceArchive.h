@@ -35,6 +35,7 @@ struct ServiceArchivePlan {
     InstalledService service;
     int year{};
     fs::path finalDirectory;
+    fs::path originalInstallDirectory;
     fs::path archivedExecutable;
     fs::path archivedDataDirectory;
     std::wstring archivedImagePath;
@@ -120,6 +121,25 @@ void mergeRestoreStagingTree(
 /// ambiguity. A bare drive designator (for example D:) means D:\.
 [[nodiscard]] fs::path normalizeServiceRestoreRoot(
     const fs::path& restoreRoot);
+
+/// Returns the complete managed installation directory for a service
+/// executable. The packaged layout is <install>\bin\SearchEngine.exe; legacy
+/// layouts with the executable directly in the managed directory remain
+/// supported.
+[[nodiscard]] fs::path serviceInstallDirectory(
+    const fs::path& executable);
+
+/// Performs the no-reparse-point/no-special-file preflight for complete
+/// removal of managed runtime directories. All roots are checked before any
+/// deletion is attempted.
+void validateServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots);
+
+/// Removes complete, already archive-verified runtime directory trees. The
+/// function repeats the full preflight before the first deletion.
+void removeServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots,
+    const ProgressCallback& progress = {});
 
 [[nodiscard]] ServiceRestorePlan planServiceRestore(
     const fs::path& archiveDirectory,

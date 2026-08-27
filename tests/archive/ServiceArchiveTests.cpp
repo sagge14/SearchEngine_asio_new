@@ -185,6 +185,66 @@ TEST(ServiceArchiveInvocation, RoundTripsQuotedServiceImagePath)
     EXPECT_EQ(parsed.dataDirectory, dataDirectory.lexically_normal());
     EXPECT_EQ(parsed.serviceNameArgument, L"SearchEngineService-2026");
 }
+
+TEST(ServiceArchiveCleanup, ResolvesCompletePackagedInstallDirectory)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path installRoot = temporary.path() / L"SearchEngineService-2026";
+    const fs::path executable = installRoot / L"bin" / L"SearchEngine.exe";
+    writeTextFile(executable, "exe");
+
+    EXPECT_EQ(
+        searchengine_archive::serviceInstallDirectory(executable),
+        fs::absolute(installRoot).lexically_normal());
+
+    const fs::path legacyExecutable =
+        temporary.path() / L"legacy" / L"SearchEngine.exe";
+    writeTextFile(legacyExecutable, "exe");
+    EXPECT_EQ(
+        searchengine_archive::serviceInstallDirectory(legacyExecutable),
+        fs::absolute(legacyExecutable.parent_path()).lexically_normal());
+}
+
+TEST(ServiceArchiveCleanup, RemovesProgramDataAndCompleteInstallTree)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path installRoot = temporary.path() / L"ProgramFiles" /
+        L"SearchEngineService-2026";
+    const fs::path dataRoot = temporary.path() / L"ProgramData" /
+        L"SearchEngineService-2026";
+    writeTextFile(installRoot / L"bin" / L"SearchEngine.exe", "exe");
+    writeTextFile(
+        installRoot / L"tools" / L"SearchEngineArchive.exe", "tool");
+    writeTextFile(installRoot / L"README.txt", "readme");
+    writeTextFile(installRoot / L"INSTALLATION_GUIDE_RU.txt", "guide");
+    writeTextFile(installRoot / L"ServiceInstance.cmd", "instance");
+    writeTextFile(dataRoot / L"Settings.json", "{}");
+    writeTextFile(dataRoot / L"inverted_index.sqlite", "index");
+    writeTextFile(dataRoot / L"inverted_index.sqlite-wal", "wal");
+    writeTextFile(dataRoot / L"inverted_index.sqlite-shm", "shm");
+
+    searchengine_archive::removeServiceRuntimeCleanupDirectories(
+        {installRoot, dataRoot});
+
+    EXPECT_FALSE(fs::exists(installRoot));
+    EXPECT_FALSE(fs::exists(dataRoot));
+}
+
+TEST(ServiceArchiveCleanup, PreflightsEveryRootBeforeDeletingAnything)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path validRoot = temporary.path() / L"valid";
+    const fs::path invalidRoot = temporary.path() / L"not-a-directory";
+    writeTextFile(validRoot / L"keep.txt", "keep");
+    writeTextFile(invalidRoot, "file");
+
+    EXPECT_THROW(
+        searchengine_archive::removeServiceRuntimeCleanupDirectories(
+            {validRoot, invalidRoot}),
+        std::runtime_error);
+    EXPECT_TRUE(fs::is_regular_file(validRoot / L"keep.txt"));
+    EXPECT_TRUE(fs::is_regular_file(invalidRoot));
+}
 #endif
 
 TEST(ServiceArchiveCatalog, RewritesOnlyDocumentPathsAndPreservesIdentifiers)

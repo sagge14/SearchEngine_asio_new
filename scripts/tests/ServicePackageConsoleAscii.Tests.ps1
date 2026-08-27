@@ -609,6 +609,18 @@ foreach ($localizedScript in $localizedScripts) {
 Assert-True (-not $uninstallText.Contains('Backup before uninstall:')) (
     '10. Uninstaller has no hard-coded English backup prompt after language selection'
 )
+Assert-True ($uninstallText.Contains(
+    'inspect-installed --instance "%SERVICE_INSTANCE%"'
+)) '10. Uninstaller resolves actual SCM runtime paths'
+Assert-True ($uninstallText.Contains('INSPECTED_install_root')) (
+    '10. Uninstaller uses the inspected complete installation root'
+)
+Assert-True ($uninstallText.Contains('INSPECTED_archive_directory')) (
+    '10. Uninstaller detects and removes an active frozen archive tree'
+)
+Assert-True ($uninstallText.Contains('STANDARD_INSTALL_ROOT')) (
+    '10. Uninstaller also removes standard-path leftovers'
+)
 Assert-True (-not $configureText.Contains('Will update: Settings.json only')) (
     '10. Configurator has no hard-coded English confirmation after language selection'
 )

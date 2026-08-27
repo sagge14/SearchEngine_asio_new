@@ -80,6 +80,19 @@ fs::path absoluteNormalized(const fs::path& value)
     return result.lexically_normal();
 }
 
+bool isRestorableRunningPhase(const std::string& phase)
+{
+    return phase == "archive-running" ||
+        phase == "archive-running-source-cleanup-in-progress" ||
+        phase == "archive-running-source-cleanup-incomplete" ||
+        phase == "archive-running-source-cleaned";
+}
+
+bool sourceCleanupMayHaveStarted(const std::string& phase)
+{
+    return phase != "archive-running" && isRestorableRunningPhase(phase);
+}
+
 std::wstring expandEnvironment(const std::wstring& value)
 {
     const DWORD required = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
@@ -1266,6 +1279,139 @@ fs::path normalizeServiceRestoreRoot(const fs::path& restoreRoot)
     return absoluteNormalized(restoreRoot);
 }
 
+fs::path serviceInstallDirectory(const fs::path& executable)
+{
+    const fs::path normalizedExecutable = absoluteNormalized(executable);
+    const fs::path binaryDirectory = normalizedExecutable.parent_path();
+    if (binaryDirectory.empty() || !binaryDirectory.is_absolute() ||
+        isDriveRoot(binaryDirectory))
+    {
+        throw std::runtime_error(
+            "service executable has no safe managed directory: " +
+            utf8(normalizedExecutable));
+    }
+    if (lower(binaryDirectory.filename().wstring()) != L"bin")
+        return binaryDirectory;
+
+    const fs::path installDirectory = binaryDirectory.parent_path();
+    if (installDirectory.empty() || !installDirectory.is_absolute() ||
+        isDriveRoot(installDirectory))
+    {
+        throw std::runtime_error(
+            "service bin directory has no safe installation parent: " +
+            utf8(binaryDirectory));
+    }
+    return installDirectory;
+}
+
+namespace {
+
+std::vector<fs::path> normalizedRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots)
+{
+    std::vector<fs::path> result;
+    for (const auto& root : roots) {
+        const fs::path normalized = absoluteNormalized(root);
+        if (normalized.empty() || !normalized.is_absolute() ||
+            isDriveRoot(normalized))
+        {
+            throw std::runtime_error(
+                "unsafe runtime cleanup directory: " + utf8(normalized));
+        }
+        if (std::any_of(
+                result.begin(), result.end(),
+                [&](const fs::path& existing) {
+                    return isPathEqualOrBelow(normalized, existing);
+                }))
+        {
+            continue;
+        }
+        result.erase(
+            std::remove_if(
+                result.begin(), result.end(),
+                [&](const fs::path& existing) {
+                    return isPathEqualOrBelow(existing, normalized);
+                }),
+            result.end());
+        result.push_back(normalized);
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const fs::path& left, const fs::path& right) {
+            return lower(left.wstring()) < lower(right.wstring());
+        });
+    return result;
+}
+
+fs::path currentProcessExecutable()
+{
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size())
+        throw std::runtime_error("GetModuleFileNameW failed");
+    return absoluteNormalized(fs::path(std::wstring(buffer.data(), length)));
+}
+
+} // namespace
+
+void validateServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots)
+{
+    const auto normalizedRoots = normalizedRuntimeCleanupDirectories(roots);
+    const fs::path currentExecutable = currentProcessExecutable();
+    for (const auto& root : normalizedRoots) {
+        if (isPathEqualOrBelow(currentExecutable, root)) {
+            throw std::runtime_error(
+                "archive cleanup utility is running from the directory that "
+                "must be deleted; run Archive-SearchEngineService.bat from "
+                "the portable release folder: " + utf8(root));
+        }
+        if (!fs::exists(root))
+            continue;
+        if (!fs::is_directory(root) || isReparsePoint(root)) {
+            throw std::runtime_error(
+                "runtime cleanup root is not a normal directory: " +
+                utf8(root));
+        }
+        for (fs::recursive_directory_iterator it(root), end; it != end; ++it) {
+            if (isReparsePoint(it->path())) {
+                if (it->is_directory())
+                    it.disable_recursion_pending();
+                throw std::runtime_error(
+                    "runtime cleanup tree contains a reparse point: " +
+                    utf8(it->path()));
+            }
+            if (!it->is_directory() && !it->is_regular_file()) {
+                throw std::runtime_error(
+                    "runtime cleanup tree contains an unsupported entry: " +
+                    utf8(it->path()));
+            }
+        }
+    }
+}
+
+void removeServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots,
+    const ProgressCallback& progress)
+{
+    const auto normalizedRoots = normalizedRuntimeCleanupDirectories(roots);
+    validateServiceRuntimeCleanupDirectories(normalizedRoots);
+    for (const auto& root : normalizedRoots) {
+        if (!fs::exists(root))
+            continue;
+        if (progress)
+            progress(L"Полное удаление каталога среды выполнения: " + root.wstring());
+        std::error_code error;
+        fs::remove_all(root, error);
+        if (error || fs::exists(root)) {
+            throw std::runtime_error(
+                "cannot completely delete runtime directory: " + utf8(root) +
+                (error ? "; " + error.message() : std::string()));
+        }
+    }
+}
+
 ServiceRestorePlan planServiceRestore(
     const fs::path& archiveDirectory,
     const fs::path& restoreRoot)
@@ -1284,14 +1430,13 @@ ServiceRestorePlan planServiceRestore(
     const json manifest = readJson(plan.archiveDirectory / kManifestName);
     const std::string phase = manifest.value("phase", "");
     if (manifest.value("operation", "") != "service-archive" ||
-        (phase != "archive-running" &&
-         phase != "archive-running-source-cleaned"))
+        !isRestorableRunningPhase(phase))
     {
         throw std::runtime_error(
             "service archive is not in a restorable running phase");
     }
     ensureArchiveTreeHasNoReparsePoints(plan.archiveDirectory);
-    plan.sourceCleanupCompleted = phase == "archive-running-source-cleaned";
+    plan.sourceCleanupCompleted = sourceCleanupMayHaveStarted(phase);
 
     plan.year = manifest.at("year").get<int>();
     plan.serviceName = encoding::utf8_to_wstring(
@@ -1410,14 +1555,13 @@ ServiceRestorePlan planServiceRestoreOriginalLocations(
     const json manifest = readJson(plan.archiveDirectory / kManifestName);
     const std::string phase = manifest.value("phase", "");
     if (manifest.value("operation", "") != "service-archive" ||
-        (phase != "archive-running" &&
-         phase != "archive-running-source-cleaned"))
+        !isRestorableRunningPhase(phase))
     {
         throw std::runtime_error(
             "service archive is not in a restorable running phase");
     }
     ensureArchiveTreeHasNoReparsePoints(plan.archiveDirectory);
-    plan.sourceCleanupCompleted = phase == "archive-running-source-cleaned";
+    plan.sourceCleanupCompleted = sourceCleanupMayHaveStarted(phase);
 
     plan.year = manifest.at("year").get<int>();
     plan.serviceName = encoding::utf8_to_wstring(
@@ -1723,9 +1867,11 @@ ServiceArchivePlan planServiceArchive(const ServiceArchiveOptions& options)
             "service archive directory already exists: " +
             utf8(plan.finalDirectory));
 
+    plan.originalInstallDirectory = serviceInstallDirectory(
+        plan.service.executable);
     addMapping(
         plan,
-        plan.service.executable.parent_path(),
+        plan.originalInstallDirectory,
         plan.finalDirectory / L"program");
     addMapping(
         plan,
@@ -2048,6 +2194,8 @@ ServiceArchiveResult executeServiceArchive(
         manifest["original_image_path"] = utf8(plan.service.imagePath);
         manifest["archived_image_path"] = utf8(plan.archivedImagePath);
         manifest["original_data_directory"] = utf8(plan.service.dataDirectory);
+        manifest["original_install_directory"] =
+            utf8(plan.originalInstallDirectory);
         manifest["archived_data_directory"] = utf8(plan.archivedDataDirectory);
         manifest["original_executable"] = utf8(plan.service.executable);
         manifest["archived_executable"] = utf8(plan.archivedExecutable);
@@ -2165,15 +2313,18 @@ ServiceArchiveResult cleanupServiceArchiveSources(
     ServiceArchiveResult result;
     result.archiveDirectory = absoluteNormalized(archiveDirectory);
     result.manifestPath = result.archiveDirectory / kManifestName;
+    json manifest;
+    bool sourceCleanupStarted = false;
     try {
         if (!result.archiveDirectory.is_absolute() ||
             isDriveRoot(result.archiveDirectory))
         {
             throw std::runtime_error("unsafe service archive directory");
         }
-        json manifest = readJson(result.manifestPath);
+        manifest = readJson(result.manifestPath);
+        const std::string sourcePhase = manifest.value("phase", "");
         if (manifest.value("operation", "") != "service-archive" ||
-            manifest.value("phase", "") != "archive-running")
+            !isRestorableRunningPhase(sourcePhase))
         {
             throw std::runtime_error(
                 "service archive is not ready for source cleanup");
@@ -2198,7 +2349,38 @@ ServiceArchiveResult cleanupServiceArchiveSources(
                 throw std::runtime_error("unsafe path mapping in service manifest");
             }
         }
-        ensureNoOtherServiceUsesSources(serviceName, mappings);
+
+        const fs::path originalExecutable = absoluteNormalized(fromUtf8(
+            manifest.at("original_executable").get<std::string>()));
+        const fs::path originalInstallDirectory =
+            manifest.contains("original_install_directory")
+            ? absoluteNormalized(fromUtf8(
+                manifest.at("original_install_directory").get<std::string>()))
+            : serviceInstallDirectory(originalExecutable);
+        const fs::path originalDataDirectory = absoluteNormalized(fromUtf8(
+            manifest.at("original_data_directory").get<std::string>()));
+        if (!isPathEqualOrBelow(originalExecutable, originalInstallDirectory) ||
+            originalInstallDirectory.empty() ||
+            originalDataDirectory.empty() ||
+            !originalInstallDirectory.is_absolute() ||
+            !originalDataDirectory.is_absolute() ||
+            isDriveRoot(originalInstallDirectory) ||
+            isDriveRoot(originalDataDirectory) ||
+            pathsOverlap(originalInstallDirectory, result.archiveDirectory) ||
+            pathsOverlap(originalDataDirectory, result.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe original runtime directory in service manifest");
+        }
+        const std::vector<fs::path> runtimeCleanupDirectories{
+            originalInstallDirectory,
+            originalDataDirectory};
+
+        std::vector<PathMapping> protectedSources = mappings;
+        for (const auto& root : runtimeCleanupDirectories) {
+            protectedSources.push_back({root, result.archiveDirectory});
+        }
+        ensureNoOtherServiceUsesSources(serviceName, protectedSources);
 
         const fs::path archivedData = fromUtf8(
             manifest.at("archived_data_directory").get<std::string>());
@@ -2260,7 +2442,14 @@ ServiceArchiveResult cleanupServiceArchiveSources(
                         utf8(target));
                 }
             }
-            removableFiles.push_back(source);
+            const bool belongsToRuntimeDirectory = std::any_of(
+                runtimeCleanupDirectories.begin(),
+                runtimeCleanupDirectories.end(),
+                [&](const fs::path& root) {
+                    return isPathEqualOrBelow(source, root);
+                });
+            if (!belongsToRuntimeDirectory)
+                removableFiles.push_back(source);
         }
 
         std::vector<fs::path> removableMonthlyDatabases;
@@ -2313,8 +2502,15 @@ ServiceArchiveResult cleanupServiceArchiveSources(
             }
         }
 
-        // Every target and every unchanged source is validated before the first
-        // deletion. Missing files from an earlier interrupted cleanup are allowed.
+        // Every archive target, unchanged manifest source, and complete runtime
+        // tree is validated before the first deletion. Missing files from an
+        // earlier interrupted cleanup are allowed.
+        validateServiceRuntimeCleanupDirectories(runtimeCleanupDirectories);
+        manifest["phase"] = "archive-running-source-cleanup-in-progress";
+        manifest.erase("source_cleanup_failure");
+        saveJsonAtomically(result.manifestPath, manifest);
+        sourceCleanupStarted = true;
+
         std::vector<fs::path> deletedFiles;
         for (const auto& source : removableFiles) {
             if (progress)
@@ -2363,16 +2559,39 @@ ServiceArchiveResult cleanupServiceArchiveSources(
             fs::remove(directory, error); // Empty directories only.
         }
 
+        removeServiceRuntimeCleanupDirectories(
+            runtimeCleanupDirectories, progress);
+        for (const auto& root : runtimeCleanupDirectories) {
+            if (fs::exists(root)) {
+                throw std::runtime_error(
+                    "runtime directory still exists after cleanup: " +
+                    utf8(root));
+            }
+        }
+
         manifest["phase"] = "archive-running-source-cleaned";
         manifest["source_cleanup_deleted_files"] = deletedFiles.size();
         manifest["source_cleanup_deleted_monthly_databases"] =
             removableMonthlyDatabases.size();
+        manifest["source_cleanup_runtime_directories"] = json::array();
+        for (const auto& root : runtimeCleanupDirectories) {
+            manifest["source_cleanup_runtime_directories"].push_back(
+                utf8(root));
+        }
         saveJsonAtomically(result.manifestPath, manifest);
         result.ok = true;
         result.message =
-            "manifest-proven service source cleanup completed; PRD December preserved";
+            "complete service runtime cleanup completed; PRD December preserved";
         return result;
     } catch (const std::exception& error) {
+        if (sourceCleanupStarted) {
+            try {
+                manifest["phase"] =
+                    "archive-running-source-cleanup-incomplete";
+                manifest["source_cleanup_failure"] = error.what();
+                saveJsonAtomically(result.manifestPath, manifest);
+            } catch (...) {}
+        }
         result.message = error.what();
         return result;
     }

@@ -64,7 +64,8 @@ if /I "%SERVICE_INSTANCE%"=="default" (
     set "SERVICE_NAME=SearchEngineService-%SERVICE_INSTANCE%"
 )
 set "FIREWALL_RULE=%SERVICE_NAME% TCP"
-set "DATA_DIR=%ProgramData%\%SERVICE_NAME%"
+set "STANDARD_DATA_DIR=%ProgramData%\%SERVICE_NAME%"
+set "DATA_DIR=%STANDARD_DATA_DIR%"
 
 if /I "%TARGET_ARCH%"=="x86" goto :SET_X86_ROOT
 set "PROGRAM_ROOT=%ProgramW6432%"
@@ -74,17 +75,46 @@ goto :ROOT_READY
 set "PROGRAM_ROOT=%ProgramFiles%"
 if not "%ProgramFiles(x86)%"=="" set "PROGRAM_ROOT=%ProgramFiles(x86)%"
 :ROOT_READY
-set "INSTALL_ROOT=%PROGRAM_ROOT%\%SERVICE_NAME%"
+set "STANDARD_INSTALL_ROOT=%PROGRAM_ROOT%\%SERVICE_NAME%"
+set "INSTALL_ROOT=%STANDARD_INSTALL_ROOT%"
+set "ARCHIVE_ROOT="
+set "DELETE_APP_ROOT=%INSTALL_ROOT%"
+set "BACKUP_INSTALL_ROOT=%INSTALL_ROOT%"
+set "BACKUP_DATA_DIR=%DATA_DIR%"
 set "UNINSTALL_STAGE=target selected"
+
+sc.exe query "%SERVICE_NAME%" >nul 2>&1
+if errorlevel 1 goto :ACTUAL_PATHS_READY
+set "SERVICE_EXISTS=1"
+"%HELPER%" inspect-installed --instance "%SERVICE_INSTANCE%" > "%INSTANCE_TEMP%"
+if errorlevel 1 goto :HELPER_FAILED
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "INSPECTED_%%A=%%B"
+del /Q "%INSTANCE_TEMP%" >nul 2>&1
+if not defined INSPECTED_install_root goto :HELPER_FAILED
+if not defined INSPECTED_data_dir goto :HELPER_FAILED
+set "INSTALL_ROOT=%INSPECTED_install_root%"
+set "DATA_DIR=%INSPECTED_data_dir%"
+if defined INSPECTED_archive_directory set "ARCHIVE_ROOT=%INSPECTED_archive_directory%"
+
+:ACTUAL_PATHS_READY
+set "DELETE_APP_ROOT=%INSTALL_ROOT%"
+set "BACKUP_INSTALL_ROOT=%INSTALL_ROOT%"
+set "BACKUP_DATA_DIR=%DATA_DIR%"
+if defined ARCHIVE_ROOT set "DELETE_APP_ROOT=%ARCHIVE_ROOT%"
+if defined ARCHIVE_ROOT set "BACKUP_INSTALL_ROOT=%ARCHIVE_ROOT%"
 >> "%UNINSTALL_LOG%" echo Instance: %SERVICE_INSTANCE%
 >> "%UNINSTALL_LOG%" echo Service: %SERVICE_NAME%
 >> "%UNINSTALL_LOG%" echo Application: %INSTALL_ROOT%
 >> "%UNINSTALL_LOG%" echo Data: %DATA_DIR%
+>> "%UNINSTALL_LOG%" echo Complete application cleanup root: %DELETE_APP_ROOT%
+if defined ARCHIVE_ROOT >> "%UNINSTALL_LOG%" echo Active archive: %ARCHIVE_ROOT%
+>> "%UNINSTALL_LOG%" echo Standard application cleanup root: %STANDARD_INSTALL_ROOT%
+>> "%UNINSTALL_LOG%" echo Standard data cleanup root: %STANDARD_DATA_DIR%
 
-sc.exe query "%SERVICE_NAME%" >nul 2>&1
-if not errorlevel 1 set "SERVICE_EXISTS=1"
-if exist "%INSTALL_ROOT%" set "FILES_EXIST=1"
+if exist "%DELETE_APP_ROOT%" set "FILES_EXIST=1"
 if exist "%DATA_DIR%" set "FILES_EXIST=1"
+if exist "%STANDARD_INSTALL_ROOT%" set "FILES_EXIST=1"
+if exist "%STANDARD_DATA_DIR%" set "FILES_EXIST=1"
 if not defined SERVICE_EXISTS if not defined FILES_EXIST goto :NOT_INSTALLED
 
 call :CHOOSE_BACKUP
@@ -106,7 +136,7 @@ if "%BACKUP_MODE%"=="none" goto :DELETE_SERVICE
 call :UI uninstall.exporting
 set "UNINSTALL_STAGE=creating backup"
 >> "%UNINSTALL_LOG%" echo Stage: creating backup
-"%HELPER%" backup --install-root "%INSTALL_ROOT%" --data-dir "%DATA_DIR%" --destination "%BACKUP_DESTINATION%" --mode %BACKUP_MODE%
+"%HELPER%" backup --install-root "%BACKUP_INSTALL_ROOT%" --data-dir "%BACKUP_DATA_DIR%" --destination "%BACKUP_DESTINATION%" --mode %BACKUP_MODE%
 if errorlevel 1 goto :BACKUP_FAILED
 
 :DELETE_SERVICE
@@ -115,13 +145,25 @@ cd /d "%TEMP%"
 set "UNINSTALL_STAGE=deleting application directory"
 >> "%UNINSTALL_LOG%" echo Stage: deleting application directory
 call :UI uninstall.delete_application
-call :DELETE_DIRECTORY_RETRY "%INSTALL_ROOT%"
+set "FAILED_DELETE_PATH=%DELETE_APP_ROOT%"
+call :DELETE_DIRECTORY_RETRY "%DELETE_APP_ROOT%"
 if errorlevel 1 goto :APP_DIR_DELETE_FAILED
 set "UNINSTALL_STAGE=deleting data directory"
 >> "%UNINSTALL_LOG%" echo Stage: deleting data directory
 call :UI uninstall.delete_data
+set "FAILED_DELETE_PATH=%DATA_DIR%"
 call :DELETE_DIRECTORY_RETRY "%DATA_DIR%"
 if errorlevel 1 goto :DATA_DIR_DELETE_FAILED
+if /I "%STANDARD_INSTALL_ROOT%"=="%DELETE_APP_ROOT%" goto :STANDARD_APP_DELETED
+set "FAILED_DELETE_PATH=%STANDARD_INSTALL_ROOT%"
+call :DELETE_DIRECTORY_RETRY "%STANDARD_INSTALL_ROOT%"
+if errorlevel 1 goto :APP_DIR_DELETE_FAILED
+:STANDARD_APP_DELETED
+if /I "%STANDARD_DATA_DIR%"=="%DATA_DIR%" goto :STANDARD_DATA_DELETED
+set "FAILED_DELETE_PATH=%STANDARD_DATA_DIR%"
+call :DELETE_DIRECTORY_RETRY "%STANDARD_DATA_DIR%"
+if errorlevel 1 goto :DATA_DIR_DELETE_FAILED
+:STANDARD_DATA_DELETED
 set "UNINSTALL_STAGE=deleting rollback directories"
 >> "%UNINSTALL_LOG%" echo Stage: deleting rollback directories
 call :UI uninstall.delete_rollbacks
@@ -129,6 +171,14 @@ call :DELETE_ROLLBACK_DIRECTORIES "%INSTALL_ROOT%.rollback-*"
 if errorlevel 1 goto :APP_ROLLBACK_DELETE_FAILED
 call :DELETE_ROLLBACK_DIRECTORIES "%DATA_DIR%.rollback-*"
 if errorlevel 1 goto :DATA_ROLLBACK_DELETE_FAILED
+if /I "%STANDARD_INSTALL_ROOT%"=="%INSTALL_ROOT%" goto :STANDARD_APP_ROLLBACKS_DELETED
+call :DELETE_ROLLBACK_DIRECTORIES "%STANDARD_INSTALL_ROOT%.rollback-*"
+if errorlevel 1 goto :APP_ROLLBACK_DELETE_FAILED
+:STANDARD_APP_ROLLBACKS_DELETED
+if /I "%STANDARD_DATA_DIR%"=="%DATA_DIR%" goto :STANDARD_DATA_ROLLBACKS_DELETED
+call :DELETE_ROLLBACK_DIRECTORIES "%STANDARD_DATA_DIR%.rollback-*"
+if errorlevel 1 goto :DATA_ROLLBACK_DELETE_FAILED
+:STANDARD_DATA_ROLLBACKS_DELETED
 
 if not defined SERVICE_EXISTS goto :DELETE_FIREWALL
 set "UNINSTALL_STAGE=deleting service registration"
@@ -296,10 +346,10 @@ call :UI uninstall.backup_failed
 if defined SERVICE_EXISTS sc.exe start "%SERVICE_NAME%" >nul 2>&1
 goto :FAILED
 :APP_DIR_DELETE_FAILED
-call :UI uninstall.app_delete_failed "%INSTALL_ROOT%"
+call :UI uninstall.app_delete_failed "%FAILED_DELETE_PATH%"
 goto :FAILED
 :DATA_DIR_DELETE_FAILED
-call :UI uninstall.data_delete_failed "%DATA_DIR%"
+call :UI uninstall.data_delete_failed "%FAILED_DELETE_PATH%"
 goto :FAILED
 :APP_ROLLBACK_DELETE_FAILED
 call :UI uninstall.app_rollback_delete_failed
@@ -339,11 +389,17 @@ sc.exe queryex "%SERVICE_NAME%" >> "%UNINSTALL_LOG%" 2>&1
 >> "%UNINSTALL_LOG%" echo Service registry key:
 reg.exe query "HKLM\SYSTEM\CurrentControlSet\Services\%SERVICE_NAME%" >> "%UNINSTALL_LOG%" 2>&1
 >> "%UNINSTALL_LOG%" echo Application directory:
-if exist "%INSTALL_ROOT%\" dir /A "%INSTALL_ROOT%" >> "%UNINSTALL_LOG%" 2>&1
-if not exist "%INSTALL_ROOT%\" >> "%UNINSTALL_LOG%" echo MISSING
+if exist "%DELETE_APP_ROOT%\" dir /A "%DELETE_APP_ROOT%" >> "%UNINSTALL_LOG%" 2>&1
+if not exist "%DELETE_APP_ROOT%\" >> "%UNINSTALL_LOG%" echo MISSING
 >> "%UNINSTALL_LOG%" echo Data directory:
 if exist "%DATA_DIR%\" dir /A "%DATA_DIR%" >> "%UNINSTALL_LOG%" 2>&1
 if not exist "%DATA_DIR%\" >> "%UNINSTALL_LOG%" echo MISSING
+>> "%UNINSTALL_LOG%" echo Standard application directory:
+if exist "%STANDARD_INSTALL_ROOT%\" dir /A "%STANDARD_INSTALL_ROOT%" >> "%UNINSTALL_LOG%" 2>&1
+if not exist "%STANDARD_INSTALL_ROOT%\" >> "%UNINSTALL_LOG%" echo MISSING
+>> "%UNINSTALL_LOG%" echo Standard data directory:
+if exist "%STANDARD_DATA_DIR%\" dir /A "%STANDARD_DATA_DIR%" >> "%UNINSTALL_LOG%" 2>&1
+if not exist "%STANDARD_DATA_DIR%\" >> "%UNINSTALL_LOG%" echo MISSING
 exit /b 0
 
 :WAIT_BEFORE_CLOSE

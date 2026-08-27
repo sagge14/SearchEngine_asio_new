@@ -466,6 +466,36 @@ static std::optional<std::wstring> parseDataDirFromImagePath(
     return std::nullopt;
 }
 
+static std::wstring normalizedScmPathKey(const fs::path& value)
+{
+    std::wstring result = value.lexically_normal().wstring();
+    std::replace(result.begin(), result.end(), L'/', L'\\');
+    while (result.size() > 3 && result.back() == L'\\')
+        result.pop_back();
+    std::transform(result.begin(), result.end(), result.begin(), towlower);
+    return result;
+}
+
+static bool sameScmWindowsPath(const fs::path& left, const fs::path& right)
+{
+    return normalizedScmPathKey(left) == normalizedScmPathKey(right);
+}
+
+static fs::path managedInstallRoot(const fs::path& executable)
+{
+    const fs::path normalized = fs::absolute(executable).lexically_normal();
+    fs::path result = normalized.parent_path();
+    if (_wcsicmp(result.filename().c_str(), L"bin") == 0)
+        result = result.parent_path();
+    if (result.empty() || !result.is_absolute() ||
+        result == result.root_path())
+    {
+        throw std::runtime_error(
+            "installed program path has no safe managed root");
+    }
+    return result;
+}
+
 int inspectInstalledCommand(const std::vector<std::wstring>& args)
 {
     const std::wstring instanceId = option(args, L"--instance").value_or(L"default");
@@ -530,8 +560,34 @@ int inspectInstalledCommand(const std::vector<std::wstring>& args)
         *dataDir = exeDir + L"\\" + *dataDir;
     }
 
-    const std::wstring settingsPath = *dataDir + L"\\Settings.json";
-    const std::wstring endpointPath = *dataDir + L"\\client-endpoint.txt";
+    const fs::path normalizedDataDirectory =
+        fs::absolute(fs::path(*dataDir)).lexically_normal();
+    if (normalizedDataDirectory.empty() ||
+        !normalizedDataDirectory.is_absolute() ||
+        normalizedDataDirectory == normalizedDataDirectory.root_path())
+    {
+        throw std::runtime_error("service data directory is unsafe");
+    }
+    const fs::path installRoot = managedInstallRoot(fs::path(exePath));
+    const std::wstring settingsPath =
+        (normalizedDataDirectory / L"Settings.json").wstring();
+    const std::wstring endpointPath =
+        (normalizedDataDirectory / L"client-endpoint.txt").wstring();
+
+    std::optional<fs::path> archiveDirectory;
+    const fs::path archiveCandidate = installRoot.parent_path();
+    if (_wcsicmp(installRoot.filename().c_str(), L"program") == 0 &&
+        sameScmWindowsPath(
+            normalizedDataDirectory, archiveCandidate / L"data") &&
+        fs::is_regular_file(archiveCandidate / L"archive-operation.json"))
+    {
+        if (archiveCandidate.empty() ||
+            archiveCandidate == archiveCandidate.root_path())
+        {
+            throw std::runtime_error("service archive directory is unsafe");
+        }
+        archiveDirectory = archiveCandidate;
+    }
 
     const auto printLine = [](const std::wstring& line) {
         std::cout << utf8(line) << '\n';
@@ -539,10 +595,14 @@ int inspectInstalledCommand(const std::vector<std::wstring>& args)
 
     printLine(L"instance=" + instanceId);
     printLine(L"service_name=" + serviceName);
-    printLine(L"data_dir=" + *dataDir);
+    printLine(L"data_dir=" + normalizedDataDirectory.wstring());
     printLine(L"settings_path=" + settingsPath);
     printLine(L"endpoint_path=" + endpointPath);
-    printLine(L"installed_program_path=" + exePath);
+    printLine(L"installed_program_path=" +
+        fs::absolute(fs::path(exePath)).lexically_normal().wstring());
+    printLine(L"install_root=" + installRoot.wstring());
+    if (archiveDirectory)
+        printLine(L"archive_directory=" + archiveDirectory->wstring());
     return 0;
 }
 
