@@ -14,7 +14,7 @@ namespace
     command_execution::CommandResult mapTelegaWayError(const SQLiteOpenError& error)
     {
         return command_execution::CommandResult::failure(
-            command_execution::ErrorCode::DataSourceUnavailable,
+            command_execution::ErrorCode::DatabaseOpenFailed,
             error.what());
     }
 

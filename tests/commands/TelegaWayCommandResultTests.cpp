@@ -154,7 +154,7 @@ namespace
     };
 }
 
-TEST_F(TelegaWayCommandResultTest, MissingYearDatabaseReturnsDataSourceUnavailableWithoutCreatingFile)
+TEST_F(TelegaWayCommandResultTest, MissingYearDatabaseReturnsDatabaseOpenFailedWithoutCreatingFile)
 {
     ASSERT_FALSE(fs::exists(yearDb_));
     ASSERT_FALSE(fs::exists(baseDb_));
@@ -165,11 +165,13 @@ TEST_F(TelegaWayCommandResultTest, MissingYearDatabaseReturnsDataSourceUnavailab
     const auto ish = ishCommand.executeResult(bytesOf("200"));
 
     ASSERT_TRUE(vh.failed());
-    EXPECT_EQ(vh.error, ErrorCode::DataSourceUnavailable);
+    EXPECT_EQ(vh.error, ErrorCode::DatabaseOpenFailed);
+    EXPECT_NE(vh.error, ErrorCode::DataSourceUnavailable);
     EXPECT_NE(vh.error, ErrorCode::CommandExecutionFailed);
     EXPECT_NE(vh.diagnostic.find(yearDb_.string()), std::string::npos);
     ASSERT_TRUE(ish.failed());
-    EXPECT_EQ(ish.error, ErrorCode::DataSourceUnavailable);
+    EXPECT_EQ(ish.error, ErrorCode::DatabaseOpenFailed);
+    EXPECT_NE(ish.error, ErrorCode::DataSourceUnavailable);
     EXPECT_FALSE(fs::exists(yearDb_));
     EXPECT_FALSE(fs::exists(baseDb_));
 }

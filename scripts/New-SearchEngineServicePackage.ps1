@@ -18,6 +18,7 @@ $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
 . (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
 . (Join-Path $PSScriptRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
+. (Join-Path $PSScriptRoot 'SearchEngineServiceSourceFingerprint.ps1')
 $templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
 $sourceDataRoot = Join-Path $templateRoot 'source-data'
 $packageMarkerName = '.searchengine-portable-package'
@@ -594,8 +595,10 @@ try {
         $checksumLines,
         [Text.Encoding]::ASCII
     )
+    $sourceFingerprint = Get-SearchEngineServiceSourceFingerprint `
+        -ProjectRoot $projectRoot
     $manifest = [ordered]@{
-        formatVersion = 1
+        formatVersion = 2
         product = 'SearchEngineService'
         architecture = $Architecture
         applicationVersion = $versionInfo.Version
@@ -605,6 +608,9 @@ try {
         toolset = $expectedToolset
         vcRuntimeFile = $vcRedistName
         createdUtc = (Get-Date).ToUniversalTime().ToString('o')
+        sourceFingerprintAlgorithm = $sourceFingerprint.Algorithm
+        sourceFingerprint = $sourceFingerprint.Value
+        sourceFingerprintFileCount = $sourceFingerprint.FileCount
         files = $manifestEntries
     }
     $manifestJson = $manifest | ConvertTo-Json -Depth 5

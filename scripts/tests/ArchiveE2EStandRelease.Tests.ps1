@@ -9,6 +9,8 @@ $scriptsRoot = Split-Path -Parent $PSScriptRoot
 $projectRoot = Split-Path -Parent $scriptsRoot
 $releaseScript = Join-Path $scriptsRoot `
     'Build-SearchEngineArchiveE2EStandRelease.ps1'
+$fingerprintScript = Join-Path $scriptsRoot `
+    'SearchEngineServiceSourceFingerprint.ps1'
 $script:failures = New-Object System.Collections.Generic.List[string]
 $script:passed = 0
 
@@ -39,6 +41,35 @@ $parseErrors = $null
     [ref]$parseErrors
 ) | Out-Null
 Assert-Equal 0 @($parseErrors).Count 'stand release PowerShell parses without errors'
+
+foreach ($scriptPath in @(
+    $fingerprintScript,
+    (Join-Path $scriptsRoot 'New-SearchEngineServicePackage.ps1')
+)) {
+    $tokens = $null
+    $parseErrors = $null
+    [Management.Automation.Language.Parser]::ParseFile(
+        $scriptPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    Assert-Equal 0 @($parseErrors).Count `
+        "PowerShell parses without errors: $([IO.Path]::GetFileName($scriptPath))"
+}
+
+. $fingerprintScript
+$fingerprintA = Get-SearchEngineServiceSourceFingerprint `
+    -ProjectRoot $projectRoot
+$fingerprintB = Get-SearchEngineServiceSourceFingerprint `
+    -ProjectRoot $projectRoot
+Assert-Equal 'searchengine-service-source-v1' $fingerprintA.Algorithm `
+    'service source fingerprint has a versioned algorithm'
+Assert-True ($fingerprintA.Value -match '^[0-9a-f]{64}$') `
+    'service source fingerprint is SHA-256 text'
+Assert-Equal $fingerprintA.Value $fingerprintB.Value `
+    'service source fingerprint is deterministic'
+Assert-True ($fingerprintA.FileCount -gt 0) `
+    'service source fingerprint covers tracked inputs'
 
 $cmakeText = Get-Content -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt') `
     -Raw
@@ -93,6 +124,14 @@ Assert-True ($serviceBuildText -notmatch 'SearchEngineArchiveE2EStand') `
     'ordinary SearchEngine build does not build the stand generator'
 Assert-True ($servicePackageText -notmatch 'SearchEngineArchiveE2EStand') `
     'ordinary SearchEngine package does not include the stand generator'
+Assert-True ($servicePackageText -match 'formatVersion\s*=\s*2') `
+    'service package uses freshness-aware manifest format 2'
+Assert-True ($servicePackageText -match (
+    'sourceFingerprintAlgorithm\s*=\s*\$sourceFingerprint\.Algorithm'
+)) 'service package records the source fingerprint algorithm'
+Assert-True ($servicePackageText -match (
+    'sourceFingerprint\s*=\s*\$sourceFingerprint\.Value'
+)) 'service package records the source fingerprint value'
 
 $versionManifest = Get-Content -LiteralPath (
     Join-Path $projectRoot 'app-version.SearchEngineArchiveE2EStand.json'
@@ -126,6 +165,14 @@ Assert-True ($releaseText -match (
     '\$selectedServicePackageVersion\s+-lt\s+' +
     '\$latestServicePackage\.Version[\s\S]*?is older than the latest built package'
 )) 'release rejects an explicitly selected stale installer package'
+Assert-True ($releaseText -match (
+    'Get-SearchEngineServiceSourceFingerprint[\s\S]*?' +
+    'sourceFingerprint\s+-ne[\s\S]*?package is stale'
+)) 'release rejects an installer built from different server sources'
+Assert-True ($releaseText -match (
+    'formatVersion\s+-ne\s+2[\s\S]*?' +
+    'sourceFingerprintAlgorithm'
+)) 'release requires the freshness-aware service package manifest'
 Assert-True ($releaseText -match (
     'architecture\s*=\s*\[string\]\$servicePackageManifest\.architecture'
 )) 'stand release metadata records the bundled installer architecture'

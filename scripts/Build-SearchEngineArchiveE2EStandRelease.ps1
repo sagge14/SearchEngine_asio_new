@@ -41,6 +41,7 @@ Set-StrictMode -Version Latest
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
+. (Join-Path $PSScriptRoot 'SearchEngineServiceSourceFingerprint.ps1')
 
 $productName = 'SearchEngineArchiveE2EStand'
 $configurePreset = 'windows7-x86-archive-e2e-stand'
@@ -84,9 +85,14 @@ function Assert-ServicePackage([string]$PackageRoot) {
 
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 |
         ConvertFrom-Json
-    if ([int]$manifest.formatVersion -ne 1 -or
+    if ([int]$manifest.formatVersion -ne 2 -or
         [string]$manifest.product -ne 'SearchEngineService') {
         throw "Not a SearchEngineService portable package: $PackageRoot"
+    }
+    if ([string]$manifest.sourceFingerprintAlgorithm -ne
+            'searchengine-service-source-v1' -or
+        [string]::IsNullOrWhiteSpace([string]$manifest.sourceFingerprint)) {
+        throw "SearchEngineService package has no supported source fingerprint: $PackageRoot"
     }
     $packageArchitecture = [string]$manifest.architecture
     $minimumWindowsVersion = [string]$manifest.minimumWindowsVersion
@@ -287,6 +293,18 @@ if (-not (Test-Path -LiteralPath $ServicePackageDirectory -PathType Container)) 
 }
 $ServicePackageDirectory = (Resolve-Path -LiteralPath $ServicePackageDirectory).Path
 $servicePackageManifest = Assert-ServicePackage $ServicePackageDirectory
+$currentServiceFingerprint = Get-SearchEngineServiceSourceFingerprint `
+    -ProjectRoot $projectRoot
+if ([string]$servicePackageManifest.sourceFingerprintAlgorithm -ne
+        $currentServiceFingerprint.Algorithm -or
+    [string]$servicePackageManifest.sourceFingerprint -ne
+        $currentServiceFingerprint.Value) {
+    throw (
+        'The selected SearchEngineService package is stale for the current ' +
+        'server sources. Rebuild the x86 server package before releasing ' +
+        "the stand: $ServicePackageDirectory"
+    )
+}
 $selectedServicePackageVersion = [Version](
     [string]$servicePackageManifest.applicationVersion
 )
@@ -453,6 +471,10 @@ try {
         architecture = [string]$servicePackageManifest.architecture
         minimumWindowsVersion = [string]$servicePackageManifest.minimumWindowsVersion
         servicePackageVersion = [string]$servicePackageManifest.applicationVersion
+        servicePackageSourceFingerprintAlgorithm =
+            [string]$servicePackageManifest.sourceFingerprintAlgorithm
+        servicePackageSourceFingerprint =
+            [string]$servicePackageManifest.sourceFingerprint
         serviceName = $ServiceName
         year = $Year
         recordsPerMonth = $RecordsPerMonth
