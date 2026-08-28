@@ -103,12 +103,40 @@ Assert-Equal 'SearchEngineArchiveE2EStand' ([string]$versionManifest.productName
     'stand version manifest has independent product name'
 
 $releaseText = Get-Content -LiteralPath $releaseScript -Raw
-Assert-True ($releaseText -match "architecture\s+-ne\s+'x86'") `
-    'release rejects a non-Windows-7-x86 service package'
-Assert-True ($releaseText -match "minimumWindowsVersion\s+-ne\s+'6\.1'") `
-    'release requires Windows 7 package compatibility'
+Assert-True ($releaseText -notmatch (
+    '\[Parameter\(Mandatory\)\]\s*\r?\n\s*' +
+    '\[string\]\$ServicePackageDirectory'
+)) 'service package path is optional in the canonical stand release'
+Assert-True ($releaseText -match (
+    "architecture\s+-notin\s+@\('x86',\s*'x86-modern'\)"
+)) 'release accepts only x86 service package families'
+Assert-True ($releaseText -match (
+    'Get-ServicePackageSearchRoots[\s\S]*?' +
+    'rev-parse\s+--git-common-dir[\s\S]*?out\\package'
+)) 'latest-package search includes the primary worktree package output'
+Assert-True ($releaseText -match (
+    'Find-LatestServicePackage[\s\S]*?' +
+    'Sort-Object[\s\S]*?Version[\s\S]*?Descending\s*=\s*\$true'
+)) 'release discovers the highest built service package version'
+Assert-True ($releaseText -match (
+    'IsNullOrWhiteSpace\(\$ServicePackageDirectory\)[\s\S]*?' +
+    '\$ServicePackageDirectory\s*=\s*\$latestServicePackage\.Directory'
+)) 'release selects the latest installer when no package path is supplied'
+Assert-True ($releaseText -match (
+    '\$selectedServicePackageVersion\s+-lt\s+' +
+    '\$latestServicePackage\.Version[\s\S]*?is older than the latest built package'
+)) 'release rejects an explicitly selected stale installer package'
+Assert-True ($releaseText -match (
+    'architecture\s*=\s*\[string\]\$servicePackageManifest\.architecture'
+)) 'stand release metadata records the bundled installer architecture'
+Assert-True ($releaseText -match (
+    'minimumWindowsVersion\s*=\s*' +
+    '\[string\]\$servicePackageManifest\.minimumWindowsVersion'
+)) 'stand release metadata records the bundled installer OS requirement'
 Assert-True ($releaseText -match 'ProductName\s*=\s*\$productName') `
     'stand uses a dedicated cloud product channel'
+Assert-True ($releaseText -notmatch 'SearchEngineService\\Stand') `
+    'stand release never publishes into the SearchEngineService channel'
 Assert-True ($releaseText -match 'AllowSensitive\s*=\s*\$true') `
     'synthetic SQLite stand is explicitly allowed by its own publisher'
 Assert-True ($releaseText -match (

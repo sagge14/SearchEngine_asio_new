@@ -5,14 +5,13 @@
 
 .DESCRIPTION
   This is deliberately separate from Build-SearchEngineServicePackage.ps1.
-  It builds only the Windows 7 x86 stand generator, consumes an already built
-  Windows 7 x86 SearchEngineService portable package, generates a v3 stand,
+  It builds only the Windows 7 x86 stand generator, selects the newest already
+  built x86 SearchEngineService portable package, generates a v3 stand,
   verifies it, writes release metadata/checksums, and optionally publishes a
   ZIP to the dedicated SearchEngineArchiveE2EStand release channel.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
     [string]$ServicePackageDirectory,
 
     [ValidateRange(2000, 2099)]
@@ -89,12 +88,14 @@ function Assert-ServicePackage([string]$PackageRoot) {
         [string]$manifest.product -ne 'SearchEngineService') {
         throw "Not a SearchEngineService portable package: $PackageRoot"
     }
-    if ([string]$manifest.architecture -ne 'x86' -or
-        [string]$manifest.minimumWindowsVersion -ne '6.1') {
+    $packageArchitecture = [string]$manifest.architecture
+    $minimumWindowsVersion = [string]$manifest.minimumWindowsVersion
+    if ($packageArchitecture -notin @('x86', 'x86-modern') -or
+        [string]::IsNullOrWhiteSpace($minimumWindowsVersion)) {
         throw (
-            'The stand release requires the Windows 7 SP1 x86 ' +
-            "SearchEngineService package; got architecture='$($manifest.architecture)', " +
-            "minimumWindowsVersion='$($manifest.minimumWindowsVersion)'."
+            'The stand release requires an x86 SearchEngineService package; ' +
+            "got architecture='$packageArchitecture', " +
+            "minimumWindowsVersion='$minimumWindowsVersion'."
         )
     }
 
@@ -184,6 +185,101 @@ function Get-PlannedVersion([string]$CurrentVersion, [bool]$BumpPatch) {
     return '{0}.{1}.{2}' -f [int]$parts[0], [int]$parts[1], ([int]$parts[2] + 1)
 }
 
+function Get-ServicePackageSearchRoots([string]$ProjectRoot) {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $candidates.Add((Join-Path $ProjectRoot 'out\package'))
+
+    $commonDirectory = & git -c "safe.directory=$ProjectRoot" `
+        -C $ProjectRoot rev-parse --git-common-dir
+    if ($LASTEXITCODE -eq 0 -and
+        -not [string]::IsNullOrWhiteSpace([string]$commonDirectory)) {
+        $commonDirectory = ([string]$commonDirectory).Trim()
+        if (-not [IO.Path]::IsPathRooted($commonDirectory)) {
+            $commonDirectory = Join-Path $ProjectRoot $commonDirectory
+        }
+        $commonDirectory = [IO.Path]::GetFullPath($commonDirectory)
+        $primaryWorktree = Split-Path -Parent $commonDirectory
+        $candidates.Add((Join-Path $primaryWorktree 'out\package'))
+    }
+
+    $seen = @{}
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) {
+            continue
+        }
+        $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        $key = $resolved.ToLowerInvariant()
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $resolved
+        }
+    }
+}
+
+function Find-LatestServicePackage([string[]]$SearchRoots) {
+    $packages = New-Object System.Collections.Generic.List[object]
+    $seenDirectories = @{}
+    foreach ($root in @($SearchRoots)) {
+        foreach ($manifestFile in @(Get-ChildItem -LiteralPath $root `
+                -Filter 'package-manifest.json' -File -Recurse)) {
+            $packageDirectory = $manifestFile.Directory.FullName
+            $directoryKey = $packageDirectory.ToLowerInvariant()
+            if ($seenDirectories.ContainsKey($directoryKey) -or
+                -not (Test-Path -LiteralPath (Join-Path $packageDirectory (
+                        '.searchengine-portable-package')) -PathType Leaf)) {
+                continue
+            }
+            $seenDirectories[$directoryKey] = $true
+            try {
+                $manifest = Get-Content -LiteralPath $manifestFile.FullName `
+                    -Raw -Encoding UTF8 | ConvertFrom-Json
+                $architecture = [string]$manifest.architecture
+                if ([string]$manifest.product -ne 'SearchEngineService' -or
+                    $architecture -notin @('x86', 'x86-modern')) {
+                    continue
+                }
+                $version = [Version]([string]$manifest.applicationVersion)
+                $packages.Add([pscustomobject]@{
+                    Directory = $packageDirectory
+                    Version = $version
+                    ArchitectureRank = if ($architecture -eq 'x86-modern') {
+                        1
+                    } else {
+                        0
+                    }
+                    CreatedUtc = [string]$manifest.createdUtc
+                })
+            }
+            catch {
+                continue
+            }
+        }
+    }
+    if ($packages.Count -eq 0) {
+        return $null
+    }
+    return @($packages | Sort-Object `
+        @{ Expression = { $_.Version }; Descending = $true }, `
+        @{ Expression = { $_.ArchitectureRank }; Descending = $true }, `
+        @{ Expression = { $_.CreatedUtc }; Descending = $true })[0]
+}
+
+$servicePackageSearchRoots = @(Get-ServicePackageSearchRoots $projectRoot)
+$latestServicePackage = $null
+if ($servicePackageSearchRoots.Count -gt 0) {
+    $latestServicePackage = Find-LatestServicePackage `
+        $servicePackageSearchRoots
+}
+if ([string]::IsNullOrWhiteSpace($ServicePackageDirectory)) {
+    if ($null -eq $latestServicePackage) {
+        throw 'The latest built x86 SearchEngineService package was not found.'
+    }
+    $ServicePackageDirectory = $latestServicePackage.Directory
+    Write-Host (
+        'Selected latest SearchEngineService package automatically: ' +
+        "$ServicePackageDirectory ($($latestServicePackage.Version))"
+    )
+}
 $ServicePackageDirectory = Resolve-AbsolutePath `
     $ServicePackageDirectory $projectRoot
 if (-not (Test-Path -LiteralPath $ServicePackageDirectory -PathType Container)) {
@@ -191,6 +287,17 @@ if (-not (Test-Path -LiteralPath $ServicePackageDirectory -PathType Container)) 
 }
 $ServicePackageDirectory = (Resolve-Path -LiteralPath $ServicePackageDirectory).Path
 $servicePackageManifest = Assert-ServicePackage $ServicePackageDirectory
+$selectedServicePackageVersion = [Version](
+    [string]$servicePackageManifest.applicationVersion
+)
+if ($null -ne $latestServicePackage -and
+    $selectedServicePackageVersion -lt $latestServicePackage.Version) {
+    throw (
+        "Selected SearchEngineService package '$selectedServicePackageVersion' " +
+        "is older than the latest built package '$($latestServicePackage.Version)': " +
+        $latestServicePackage.Directory
+    )
+}
 Assert-FreshYearSettings $ServicePackageDirectory $Year
 
 $currentVersion = Get-SearchEngineAppVersionNames `
@@ -343,8 +450,8 @@ try {
         applicationVersion = $versionInfo.Version
         fileVersion = $versionInfo.FileVersion
         releaseId = $CloudReleaseId
-        architecture = 'x86'
-        minimumWindowsVersion = '6.1'
+        architecture = [string]$servicePackageManifest.architecture
+        minimumWindowsVersion = [string]$servicePackageManifest.minimumWindowsVersion
         servicePackageVersion = [string]$servicePackageManifest.applicationVersion
         serviceName = $ServiceName
         year = $Year
