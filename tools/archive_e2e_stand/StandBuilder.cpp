@@ -2601,7 +2601,7 @@ StandSummary generateServiceArchiveStand(
              L"vc_redist.x86.exe")))
     {
         throw std::invalid_argument(
-            "installer template is not a complete Windows 7 x86 package");
+            "installer template is not a complete x86 package");
     }
 
     const fs::path physicalRoot = absoluteNormalized(options.stand.root);

@@ -69,16 +69,19 @@ cmake --build --preset windows-x86-debug `
 
 Каноническая версия генератора хранится независимо в
 `app-version.SearchEngineArchiveE2EStand.json`. Полный стенд выпускается только
-явным скриптом и использует уже готовый переносимый пакет
-`SearchEngineService-x86-Windows7` как источник бинарников, настроек и
-установочных файлов:
+явным скриптом и использует последний готовый x86-пакет
+`SearchEngineService` как источник бинарников, настроек и установочных файлов.
+По умолчанию скрипт сам находит максимальную версию под `out\package`, включая
+основной worktree при запуске из отдельного release-worktree:
 
 ```powershell
 .\scripts\Build-SearchEngineArchiveE2EStandRelease.ps1 `
-  -ServicePackageDirectory `
-    .\out\package\0.1.69\SearchEngineService-x86-Windows7 `
   -Year 2026
 ```
+
+`-ServicePackageDirectory` остаётся только явным переопределением. Если по
+этому пути указана версия ниже последней найденной, релиз прекращается: старый
+`installer` в новый стенд попасть не может.
 
 Исходный серверный пакет должен быть свежим, неотредактированным и собранным
 для того же `-Year`. Перед выпуском скрипт проверяет защищённые файлы по
@@ -97,7 +100,8 @@ cmake --build --preset windows-x86-debug `
 smoke-теста и явно отмечается в `stand-release.json`.
 
 Если настроен `WORKSPACE_RELEASE_CLOUD_ROOT`, дополнительно публикуются ZIP и
-SHA-256 в отдельный продукт `SearchEngineArchiveE2EStand`; ключ
+SHA-256 только в отдельный продукт `SearchEngineArchiveE2EStand\<версия>`;
+канал `SearchEngineService\Stand` релизный скрипт не использует. Ключ
 `-SkipCloudPublish` оставляет только локальный результат. Обычные релизы
 `SearchEngineService`, `BackupService`, `BackupRestore` и `ZagEditor` этот
 стенд не собирают и не публикуют.

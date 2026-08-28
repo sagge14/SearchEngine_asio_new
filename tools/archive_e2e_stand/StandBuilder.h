@@ -28,8 +28,9 @@ struct ServiceArchiveStandOptions {
     /// Windows 7 x86 build of this helper. It is copied into the stand and
     /// performs the first-run path preparation before service registration.
     fs::path preparerTemplate;
-    /// Optional complete portable package. When supplied, it is bundled under
-    /// installer/ and the stand gets an additional clean-VM deployment mode.
+    /// Optional complete x86 portable package. When supplied, it is bundled
+    /// under installer/ and the stand gets an additional clean-VM deployment
+    /// mode.
     /// The existing portable archive activation mode remains unchanged.
     fs::path installerTemplate;
     /// Original active location used by the legacy restore workflow.
