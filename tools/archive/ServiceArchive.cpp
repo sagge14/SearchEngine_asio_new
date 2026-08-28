@@ -1253,7 +1253,124 @@ void publishRestoreStagingRoot(
         throw std::runtime_error("cannot remove empty restore staging root");
 }
 
+fs::path sqliteReplacementStagingPath(const fs::path& destination)
+{
+    const auto stamp = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    return destination.parent_path() /
+        (L"." + destination.filename().wstring() + L".replace-" +
+         std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(stamp));
+}
+
+void removeSQLiteReplacementSidecars(const fs::path& database)
+{
+    for (const wchar_t* suffix : {L"-wal", L"-shm", L"-journal"}) {
+        std::error_code error;
+        fs::remove(database.wstring() + suffix, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot remove SQLite sidecar before replacement: " +
+                utf8(database.wstring() + suffix) + ": " + error.message());
+        }
+    }
+}
+
+void publishSQLiteReplacement(
+    const fs::path& staging,
+    const fs::path& destination)
+{
+    if (!fs::is_regular_file(staging) || isReparsePoint(staging)) {
+        throw std::runtime_error(
+            "SQLite replacement staging is invalid: " + utf8(staging));
+    }
+    if (fs::exists(destination) &&
+        (!fs::is_regular_file(destination) || isReparsePoint(destination)))
+    {
+        throw std::runtime_error(
+            "SQLite replacement destination is invalid: " +
+            utf8(destination));
+    }
+
+    fs::create_directories(destination.parent_path());
+    removeSQLiteReplacementSidecars(destination);
+    if (!MoveFileExW(
+            staging.c_str(), destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        throw std::runtime_error(
+            "cannot replace retained SQLite database; Win32 error=" +
+            std::to_string(GetLastError()));
+    }
+}
+
+bool autoPadDatabasesUseSameDirectToRoots(
+    const fs::path& leftDatabase,
+    const fs::path& rightDatabase)
+{
+    const auto leftRoots = inspectAutoPadDirectToRoots(leftDatabase);
+    const auto rightRoots = inspectAutoPadDirectToRoots(rightDatabase);
+    return leftRoots.size() == rightRoots.size() && std::all_of(
+        leftRoots.begin(), leftRoots.end(),
+        [&](const fs::path& left) {
+            return std::any_of(
+                rightRoots.begin(), rightRoots.end(),
+                [&](const fs::path& right) {
+                    return samePath(left, right);
+                });
+        });
+}
+
 } // namespace
+
+void replaceRetainedAutoPadDatabase(
+    const fs::path& snapshotDatabase,
+    const fs::path& destinationDatabase,
+    const std::vector<PathMapping>& mappings)
+{
+    if (!fs::is_regular_file(snapshotDatabase) ||
+        isReparsePoint(snapshotDatabase))
+    {
+        throw std::runtime_error(
+            "retained database snapshot is invalid: " +
+            utf8(snapshotDatabase));
+    }
+    if (samePath(snapshotDatabase, destinationDatabase)) {
+        throw std::runtime_error(
+            "retained database snapshot and destination must differ");
+    }
+
+    const fs::path staging =
+        sqliteReplacementStagingPath(destinationDatabase);
+    if (fs::exists(staging)) {
+        throw std::runtime_error(
+            "retained database replacement staging already exists: " +
+            utf8(staging));
+    }
+
+    try {
+        const SQLiteBackupResult backup = backupSQLiteDatabase(
+            snapshotDatabase, staging);
+        if (!backup.ok) {
+            throw std::runtime_error(
+                "retained database SQLite backup failed: " + backup.message);
+        }
+        if (!mappings.empty())
+            rewriteAutoPadDirectTo(staging, mappings);
+
+        std::string verifyError;
+        if (!verifySQLiteDatabase(staging, verifyError)) {
+            throw std::runtime_error(
+                "retained database SQLite verification failed: " +
+                verifyError);
+        }
+        publishSQLiteReplacement(staging, destinationDatabase);
+    } catch (...) {
+        std::error_code ignored;
+        fs::remove(staging, ignored);
+        throw;
+    }
+}
 
 std::wstring serviceArchiveDirectoryLeaf(
     const std::wstring& serviceName,
@@ -2323,7 +2440,7 @@ ServiceArchiveResult executeServiceArchive(
 
 ServiceArchiveResult cleanupServiceArchiveSources(
     const fs::path& archiveDirectory,
-    bool deleteMonthlyDatabases,
+    bool preservePrdDecember,
     const ProgressCallback& progress)
 {
     ServiceArchiveResult result;
@@ -2468,39 +2585,50 @@ ServiceArchiveResult cleanupServiceArchiveSources(
                 removableFiles.push_back(source);
         }
 
+        struct RetainedMonthlyDatabase {
+            fs::path snapshot;
+            fs::path destination;
+            bool replacementRequired{false};
+            bool prdDecember{false};
+        };
         std::vector<fs::path> removableMonthlyDatabases;
-        if (deleteMonthlyDatabases) {
-            for (const auto& item : manifest.at("monthly_databases")) {
-                const std::string kind = item.at("kind").get<std::string>();
-                const int month = item.at("month").get<int>();
-                if (kind == "PRD" && month == 12)
-                    continue;
-                const fs::path source = fromUtf8(
-                    item.at("source").get<std::string>());
-                const fs::path target = fromUtf8(
-                    item.at("target").get<std::string>());
-                if (!source.is_absolute() || isDriveRoot(source) ||
-                    !isPathEqualOrBelow(target, result.archiveDirectory) ||
-                    !fs::is_regular_file(target))
-                {
-                    throw std::runtime_error(
-                        "unsafe or missing monthly database in manifest");
-                }
-                if (!verifySQLiteDatabase(target, verifyError)) {
-                    throw std::runtime_error(
-                        "archived monthly database failed integrity check: " +
-                        verifyError);
-                }
-                const FileHashResult targetHash = sha256File(target);
-                if (!targetHash.ok ||
-                    targetHash.size != item.at("target_size").get<std::uint64_t>() ||
-                    targetHash.sha256 != item.at("target_sha256").get<std::string>())
-                {
-                    throw std::runtime_error(
-                        "archived monthly database changed: " + utf8(target));
-                }
-                if (!fs::exists(source))
-                    continue;
+        std::vector<RetainedMonthlyDatabase> retainedMonthlyDatabases;
+        for (const auto& item : manifest.at("monthly_databases")) {
+            const std::string kind = item.at("kind").get<std::string>();
+            const int month = item.at("month").get<int>();
+            const bool isPrdDecember = kind == "PRD" && month == 12;
+            const bool retainDatabase =
+                isPrdDecember && preservePrdDecember;
+            const fs::path source = fromUtf8(
+                item.at("source").get<std::string>());
+            const fs::path target = fromUtf8(
+                item.at("target").get<std::string>());
+            if (!source.is_absolute() || isDriveRoot(source) ||
+                !isPathEqualOrBelow(target, result.archiveDirectory) ||
+                !fs::is_regular_file(target))
+            {
+                throw std::runtime_error(
+                    "unsafe or missing monthly database in manifest");
+            }
+            if (!verifySQLiteDatabase(target, verifyError)) {
+                throw std::runtime_error(
+                    "archived monthly database failed integrity check: " +
+                    verifyError);
+            }
+            const FileHashResult targetHash = sha256File(target);
+            if (!targetHash.ok ||
+                targetHash.size != item.at("target_size").get<std::uint64_t>() ||
+                targetHash.sha256 != item.at("target_sha256").get<std::string>())
+            {
+                throw std::runtime_error(
+                    "archived monthly database changed: " + utf8(target));
+            }
+
+            const bool sourceExists = fs::exists(source);
+            const bool alreadyRebased = retainDatabase && sourceExists &&
+                fs::is_regular_file(source) &&
+                autoPadDatabasesUseSameDirectToRoots(source, target);
+            if (sourceExists && !alreadyRebased) {
                 const FileHashResult sourceHash = sha256File(source);
                 const SQLiteSourceFingerprint fingerprint =
                     inspectSQLiteSource(source);
@@ -2514,6 +2642,12 @@ ServiceArchiveResult cleanupServiceArchiveSources(
                         "source monthly database changed; cleanup refused: " +
                         utf8(source));
                 }
+            }
+
+            if (retainDatabase) {
+                retainedMonthlyDatabases.push_back({
+                    target, source, !alreadyRebased, isPrdDecember});
+            } else if (sourceExists) {
                 removableMonthlyDatabases.push_back(source);
             }
         }
@@ -2526,6 +2660,21 @@ ServiceArchiveResult cleanupServiceArchiveSources(
         manifest.erase("source_cleanup_failure");
         saveJsonAtomically(result.manifestPath, manifest);
         sourceCleanupStarted = true;
+
+        for (const auto& database : retainedMonthlyDatabases) {
+            if (!database.replacementRequired)
+                continue;
+            if (progress) {
+                progress(
+                    database.prdDecember
+                    ? L"Обновление декабрьской BASES_PRD для TverdakManager: " +
+                        database.destination.wstring()
+                    : L"Обновление сохранённой месячной базы: " +
+                        database.destination.wstring());
+            }
+            replaceRetainedAutoPadDatabase(
+                database.snapshot, database.destination);
+        }
 
         std::vector<fs::path> deletedFiles;
         for (const auto& source : removableFiles) {
@@ -2589,6 +2738,18 @@ ServiceArchiveResult cleanupServiceArchiveSources(
         manifest["source_cleanup_deleted_files"] = deletedFiles.size();
         manifest["source_cleanup_deleted_monthly_databases"] =
             removableMonthlyDatabases.size();
+        manifest["source_cleanup_retained_monthly_databases"] = json::array();
+        for (const auto& database : retainedMonthlyDatabases) {
+            manifest["source_cleanup_retained_monthly_databases"].push_back(
+                utf8(database.destination));
+        }
+        manifest["source_cleanup_preserved_prd_december"] =
+            std::any_of(
+                retainedMonthlyDatabases.begin(),
+                retainedMonthlyDatabases.end(),
+                [](const RetainedMonthlyDatabase& database) {
+                    return database.prdDecember;
+                });
         manifest["source_cleanup_runtime_directories"] = json::array();
         for (const auto& root : runtimeCleanupDirectories) {
             manifest["source_cleanup_runtime_directories"].push_back(
@@ -2596,8 +2757,13 @@ ServiceArchiveResult cleanupServiceArchiveSources(
         }
         saveJsonAtomically(result.manifestPath, manifest);
         result.ok = true;
-        result.message =
-            "complete service runtime cleanup completed; PRD December preserved";
+        result.retainedMonthlyDatabases = retainedMonthlyDatabases.size();
+        result.preservedPrdDecember =
+            manifest.at("source_cleanup_preserved_prd_december").get<bool>();
+        result.message = result.preservedPrdDecember
+            ? "complete service runtime cleanup completed; PRD December "
+              "preserved for TverdakManager with archive paths"
+            : "complete service runtime cleanup completed";
         return result;
     } catch (const std::exception& error) {
         if (sourceCleanupStarted) {
@@ -2849,6 +3015,7 @@ ServiceArchiveResult restoreServiceArchiveOriginalLocations(
         struct MonthlyRestore {
             fs::path target;
             fs::path staging;
+            bool replaceExisting{false};
         };
         std::vector<RestoreTree> restoreTrees;
         std::vector<MonthlyRestore> monthlyRestores;
@@ -2937,9 +3104,10 @@ ServiceArchiveResult restoreServiceArchiveOriginalLocations(
 
                 std::size_t monthlyOrdinal = 0;
                 for (const auto& database : plan.monthlyDatabases) {
-                    if (fs::exists(database.target)) {
-                        if (isPreservedPrdDecember(plan, database.target))
-                            continue;
+                    const bool replaceExisting =
+                        fs::exists(database.target) &&
+                        isPreservedPrdDecember(plan, database.target);
+                    if (fs::exists(database.target) && !replaceExisting) {
                         throw std::runtime_error(
                             "monthly restore destination already exists: " +
                             utf8(database.target));
@@ -2966,7 +3134,8 @@ ServiceArchiveResult restoreServiceArchiveOriginalLocations(
                             "restored monthly database failed integrity check: " +
                             verifyError);
                     }
-                    monthlyRestores.push_back({database.target, staging});
+                    monthlyRestores.push_back({
+                        database.target, staging, replaceExisting});
                 }
 
                 // Recheck destinations after staging and before publication.
@@ -2990,6 +3159,12 @@ ServiceArchiveResult restoreServiceArchiveOriginalLocations(
                     tree.staging.clear();
                 }
                 for (auto& database : monthlyRestores) {
+                    if (database.replaceExisting) {
+                        publishSQLiteReplacement(
+                            database.staging, database.target);
+                        database.staging.clear();
+                        continue;
+                    }
                     if (fs::exists(database.target)) {
                         throw std::runtime_error(
                             "monthly restore destination appeared during publish: " +

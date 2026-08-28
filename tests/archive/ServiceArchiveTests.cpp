@@ -94,6 +94,68 @@ std::string readTextFile(const fs::path& path)
         std::istreambuf_iterator<char>());
 }
 
+void createAutoPadDatabase(
+    const fs::path& path,
+    const std::string& directTo,
+    const std::string& fileName)
+{
+    fs::create_directories(path.parent_path());
+    sqlite3* database = nullptr;
+    ASSERT_EQ(sqlite3_open(utf8(path).c_str(), &database), SQLITE_OK);
+    ASSERT_NE(database, nullptr);
+    executeSql(
+        database,
+        "PRAGMA journal_mode=DELETE;"
+        "CREATE TABLE archive ("
+        "`index` INTEGER PRIMARY KEY, DirectTo TEXT, FileName TEXT);");
+    sqlite3_stmt* statement = nullptr;
+    ASSERT_EQ(
+        sqlite3_prepare_v2(
+            database,
+            "INSERT INTO archive (`index`, DirectTo, FileName) "
+            "VALUES (17, ?, ?)",
+            -1, &statement, nullptr),
+        SQLITE_OK);
+    ASSERT_EQ(
+        sqlite3_bind_text(
+            statement, 1, directTo.c_str(), -1, SQLITE_TRANSIENT),
+        SQLITE_OK);
+    ASSERT_EQ(
+        sqlite3_bind_text(
+            statement, 2, fileName.c_str(), -1, SQLITE_TRANSIENT),
+        SQLITE_OK);
+    ASSERT_EQ(sqlite3_step(statement), SQLITE_DONE);
+    sqlite3_finalize(statement);
+    ASSERT_EQ(sqlite3_close(database), SQLITE_OK);
+}
+
+std::pair<std::string, std::string> readAutoPadPath(
+    const fs::path& path)
+{
+    sqlite3* database = nullptr;
+    EXPECT_EQ(
+        sqlite3_open_v2(
+            utf8(path).c_str(), &database,
+            SQLITE_OPEN_READONLY, nullptr),
+        SQLITE_OK);
+    sqlite3_stmt* statement = nullptr;
+    EXPECT_EQ(
+        sqlite3_prepare_v2(
+            database,
+            "SELECT DirectTo, FileName FROM archive WHERE `index`=17",
+            -1, &statement, nullptr),
+        SQLITE_OK);
+    EXPECT_EQ(sqlite3_step(statement), SQLITE_ROW);
+    const auto* directTo = sqlite3_column_text(statement, 0);
+    const auto* fileName = sqlite3_column_text(statement, 1);
+    const std::pair<std::string, std::string> result{
+        directTo ? reinterpret_cast<const char*>(directTo) : "",
+        fileName ? reinterpret_cast<const char*>(fileName) : ""};
+    sqlite3_finalize(statement);
+    EXPECT_EQ(sqlite3_close(database), SQLITE_OK);
+    return result;
+}
+
 class RestoredArchiveDeletionTest : public ::testing::Test
 {
 protected:
@@ -262,6 +324,92 @@ TEST(ServiceArchiveCleanup, PreflightsEveryRootBeforeDeletingAnything)
     EXPECT_TRUE(fs::is_regular_file(invalidRoot));
 }
 #endif
+
+TEST(ServiceArchiveCleanup, PreservesDecemberWithArchivedTelegramPaths)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path archived =
+        temporary.path() / L"server" / L"autopad" / L"12-2026.db3";
+    const fs::path tverdakManager =
+        temporary.path() / L"BASES_PRD" / L"METH_BASES" / L"12-2026.db3";
+    createAutoPadDatabase(
+        archived,
+        "E:\\archive\\SearchEngineService-2026\\content\\TLG\\",
+        "2026\\226120017.ATL");
+    createAutoPadDatabase(
+        tverdakManager,
+        "D:\\TLG\\",
+        "2026\\226120017.ATL");
+
+    ASSERT_NO_THROW(searchengine_archive::replaceRetainedAutoPadDatabase(
+        archived, tverdakManager));
+
+    EXPECT_EQ(
+        readAutoPadPath(tverdakManager),
+        (std::pair<std::string, std::string>{
+            "E:\\archive\\SearchEngineService-2026\\content\\TLG\\",
+            "2026\\226120017.ATL"}));
+    EXPECT_EQ(
+        readAutoPadPath(archived),
+        readAutoPadPath(tverdakManager));
+}
+
+TEST(ServiceArchiveRestore, SilentlyReplacesPreservedDecemberWithActivePaths)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path archived =
+        temporary.path() / L"server" / L"autopad" / L"12-2026.db3";
+    const fs::path tverdakManager =
+        temporary.path() / L"BASES_PRD" / L"METH_BASES" / L"12-2026.db3";
+    const std::string archiveRoot =
+        "E:\\archive\\SearchEngineService-2026\\content\\TLG\\";
+    createAutoPadDatabase(
+        archived, archiveRoot, "2026\\226120017.ATL");
+    createAutoPadDatabase(
+        tverdakManager, archiveRoot, "2026\\old.ATL");
+    const std::vector<searchengine_archive::PathMapping> restoreMappings{
+        {L"E:\\archive\\SearchEngineService-2026\\content\\TLG",
+         L"D:\\TLG"}};
+
+    ASSERT_NO_THROW(searchengine_archive::replaceRetainedAutoPadDatabase(
+        archived, tverdakManager, restoreMappings));
+
+    EXPECT_EQ(
+        readAutoPadPath(tverdakManager),
+        (std::pair<std::string, std::string>{
+            "D:\\TLG\\", "2026\\226120017.ATL"}));
+    EXPECT_EQ(
+        readAutoPadPath(archived),
+        (std::pair<std::string, std::string>{
+            archiveRoot, "2026\\226120017.ATL"}));
+}
+
+TEST(ServiceArchiveRestore, KeepsDecemberUntouchedWhenPathRewriteFails)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path archived =
+        temporary.path() / L"server" / L"autopad" / L"12-2026.db3";
+    const fs::path tverdakManager =
+        temporary.path() / L"BASES_PRD" / L"METH_BASES" / L"12-2026.db3";
+    createAutoPadDatabase(
+        archived,
+        "E:\\archive\\SearchEngineService-2026\\content\\TLG\\",
+        "2026\\226120017.ATL");
+    createAutoPadDatabase(
+        tverdakManager, "D:\\TLG\\", "2026\\original.ATL");
+    const std::vector<searchengine_archive::PathMapping> wrongMappings{
+        {L"F:\\another-archive\\TLG", L"D:\\TLG"}};
+
+    EXPECT_THROW(
+        searchengine_archive::replaceRetainedAutoPadDatabase(
+            archived, tverdakManager, wrongMappings),
+        std::runtime_error);
+
+    EXPECT_EQ(
+        readAutoPadPath(tverdakManager),
+        (std::pair<std::string, std::string>{
+            "D:\\TLG\\", "2026\\original.ATL"}));
+}
 
 TEST(ServiceArchiveCatalog, RewritesOnlyDocumentPathsAndPreservesIdentifiers)
 {

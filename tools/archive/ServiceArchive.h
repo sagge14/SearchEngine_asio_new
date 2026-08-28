@@ -2,6 +2,7 @@
 
 #include "ArchiveCore.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -50,6 +51,8 @@ struct ServiceArchiveResult {
     bool ok{false};
     fs::path archiveDirectory;
     fs::path manifestPath;
+    std::size_t retainedMonthlyDatabases{};
+    bool preservedPrdDecember{false};
     std::string message;
 };
 
@@ -182,7 +185,15 @@ void removeServiceRuntimeCleanupDirectories(
 
 [[nodiscard]] ServiceArchiveResult cleanupServiceArchiveSources(
     const fs::path& archiveDirectory,
-    bool deleteMonthlyDatabases,
+    bool preservePrdDecember,
     const ProgressCallback& progress = {});
+
+/// Replaces a compatibility AutoPad database with a verified SQLite snapshot.
+/// Optional mappings rewrite DirectTo in the staged snapshot before the
+/// destination is atomically replaced.
+void replaceRetainedAutoPadDatabase(
+    const fs::path& snapshotDatabase,
+    const fs::path& destinationDatabase,
+    const std::vector<PathMapping>& mappings = {});
 
 } // namespace searchengine_archive

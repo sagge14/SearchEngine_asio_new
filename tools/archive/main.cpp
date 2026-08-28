@@ -355,8 +355,8 @@ int runCleanup(const fs::path& finalDirectory, bool deleteDatabases, bool assume
 
 int runServiceCleanup(
     const fs::path& archiveDirectory,
-    bool deleteMonthlyDatabases,
-    bool assumeYes);
+    bool assumeYes,
+    bool preservePrdDecember);
 
 int runServiceArchive(
     const searchengine_archive::ServiceArchiveOptions& options,
@@ -398,8 +398,8 @@ int runServiceArchive(
         {
             return runServiceCleanup(
                 result.archiveDirectory,
-                true,
-                false);
+                false,
+                true);
         }
         output(
             L"Старое место сохранено. Очистку можно выполнить позже через "
@@ -522,8 +522,8 @@ int runServiceRestore(
 
 int runServiceCleanup(
     const fs::path& archiveDirectory,
-    bool deleteMonthlyDatabases,
-    bool assumeYes)
+    bool assumeYes,
+    bool preservePrdDecember)
 {
     if (!assumeYes && !confirm(
             L"Вы уже проверили поиск и работу службы из архивного каталога?"))
@@ -537,14 +537,15 @@ int runServiceCleanup(
         output(L"Очистка отменена.\n");
         return 2;
     }
-    if (deleteMonthlyDatabases && !assumeYes && !confirm(
-            L"Удалить также базы выбранного года, кроме декабрьской BASES_PRD?"))
-    {
-        deleteMonthlyDatabases = false;
+    if (!assumeYes) {
+        preservePrdDecember = confirm(
+            L"Оставить исходную декабрьскую BASES_PRD для совместимости "
+            L"с TverdakManager? Её пути к телеграммам будут переключены "
+            L"на архивный сервер");
     }
     const auto result = searchengine_archive::cleanupServiceArchiveSources(
         archiveDirectory,
-        deleteMonthlyDatabases,
+        preservePrdDecember,
         [](const std::wstring& message) { output(message, L'\n'); });
     if (!result.ok) {
         outputError(
@@ -552,9 +553,15 @@ int runServiceCleanup(
         return 1;
     }
     output(
-        L"Исходные каталоги программы и data-dir полностью удалены после проверки.\n",
-        L"Декабрьская база BASES_PRD сохранена. Возврат через "
-        L"--restore-service остаётся доступен.\n");
+        L"Исходные каталоги программы и data-dir полностью удалены после проверки.\n");
+    if (result.preservedPrdDecember) {
+        output(
+            L"Декабрьская BASES_PRD сохранена для TverdakManager; "
+            L"пути к телеграммам переключены на архивный сервер.\n");
+    } else {
+        output(L"Исходные месячные базы выбранного года удалены.\n");
+    }
+    output(L"Возврат через --restore-service остаётся доступен.\n");
     return 0;
 }
 
@@ -579,7 +586,7 @@ int interactiveServiceOperation()
     }
     if (choice == L"3") {
         return runServiceCleanup(
-            promptDirectory(L"Каталог архивированной службы"), true, false);
+            promptDirectory(L"Каталог архивированной службы"), false, true);
     }
     if (choice != L"1")
         throw std::runtime_error("unknown service menu choice");
@@ -612,7 +619,7 @@ void usage()
         L"      [--prm-monthly-dir DIR] [--prd-monthly-dir DIR] [--yes]\n",
         L"  --cleanup-year DIR [--delete-monthly-databases] [--yes]\n",
         L"  --archive-service --service-name NAME --archive-root DIR [--yes]\n",
-        L"  --cleanup-service-source DIR [--keep-monthly-databases] [--yes]\n",
+        L"  --cleanup-service-source DIR [--delete-prd-december] [--yes]\n",
         L"  --restore-service DIR --restore-original [--yes]\n",
         L"  --restore-service DIR --restore-root DIR [--yes]\n");
 }
@@ -694,8 +701,8 @@ int wmain(int argc, wchar_t* argv[])
         if (const auto cleanup = option(args, L"--cleanup-service-source")) {
             return runServiceCleanup(
                 *cleanup,
-                !hasFlag(args, L"--keep-monthly-databases"),
-                hasFlag(args, L"--yes"));
+                hasFlag(args, L"--yes"),
+                !hasFlag(args, L"--delete-prd-december"));
         }
         usage();
         return 2;
