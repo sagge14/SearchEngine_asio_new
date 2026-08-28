@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -27,6 +28,20 @@ namespace
     std::string payloadText(const command_execution::CommandResult& result)
     {
         return {result.payload.begin(), result.payload.end()};
+    }
+
+    std::string currentLocalYear()
+    {
+        const std::time_t now = std::time(nullptr);
+        std::tm localTime{};
+        localtime_s(&localTime, &now);
+        return std::to_string(1900 + localTime.tm_year);
+    }
+
+    std::string nonCurrentLocalYear()
+    {
+        const int current = std::stoi(currentLocalYear());
+        return std::to_string(current == 2099 ? 2098 : 2099);
     }
 
     void executeSql(sqlite3* database, const char* sql)
@@ -114,7 +129,7 @@ namespace
 
             TelegaWay::base_way_dir = yearDb_.string();
             TelegaWay::base_f12_dir = baseDb_.string();
-            TelegaWay::work_year = "2099";
+            TelegaWay::work_year = currentLocalYear();
         }
 
         void TearDown() override
@@ -159,7 +174,7 @@ TEST_F(TelegaWayCommandResultTest, MissingYearDatabaseReturnsDataSourceUnavailab
     EXPECT_FALSE(fs::exists(baseDb_));
 }
 
-TEST_F(TelegaWayCommandResultTest, MissingBaseDatabaseReturnsDataSourceUnavailableWithoutCreatingFile)
+TEST_F(TelegaWayCommandResultTest, MissingBaseDatabaseIsOptionalForCurrentYear)
 {
     createYearDatabase(yearDb_, true, true);
     ASSERT_TRUE(fs::exists(yearDb_));
@@ -168,11 +183,30 @@ TEST_F(TelegaWayCommandResultTest, MissingBaseDatabaseReturnsDataSourceUnavailab
     GetTelegaWayVhCmd command;
     const auto result = command.executeResult(bytesOf("100"));
 
-    ASSERT_TRUE(result.failed());
-    EXPECT_EQ(result.error, ErrorCode::DataSourceUnavailable);
-    EXPECT_NE(result.error, ErrorCode::CommandExecutionFailed);
-    EXPECT_NE(result.diagnostic.find(baseDb_.string()), std::string::npos);
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto json = nh::json::parse(payloadText(result));
+    ASSERT_TRUE(json.is_array());
+    ASSERT_EQ(json.size(), 1u);
+    EXPECT_EQ(json.at(0).at("number"), "100");
+    EXPECT_EQ(json.at(0).at("kuda"), "A");
     EXPECT_FALSE(fs::exists(baseDb_));
+}
+
+TEST_F(TelegaWayCommandResultTest, NonCurrentServerYearDoesNotInspectBaseDatabase)
+{
+    createYearDatabase(yearDb_, true, true);
+    createBaseDatabase(baseDb_, false, false);
+    TelegaWay::work_year = nonCurrentLocalYear();
+
+    GetTelegaWayVhCmd command;
+    const auto result = command.executeResult(bytesOf("100"));
+
+    ASSERT_TRUE(result.succeeded()) << result.diagnostic;
+    const auto json = nh::json::parse(payloadText(result));
+    ASSERT_TRUE(json.is_array());
+    ASSERT_EQ(json.size(), 1u);
+    EXPECT_EQ(json.at(0).at("number"), "100");
+    EXPECT_EQ(json.at(0).at("kuda"), "A");
 }
 
 TEST_F(TelegaWayCommandResultTest, SuccessfulVhAndIshQueriesPreserveWayRowsAndCurrentLocation)

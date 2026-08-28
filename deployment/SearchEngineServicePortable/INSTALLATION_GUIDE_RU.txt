@@ -309,7 +309,8 @@ Production-корни задаются в Settings.json:
 - opis_base_dir — GET_OPIS_BASE (<каталог>\<год>.db) и RecordProcessor
   (<каталог>\<год>.DB)
 - f12_base_dir — GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY
-  (<каталог>\<год>.db и <каталог>\base.db)
+  (<каталог>\<год>.db; необязательная <каталог>\base.db читается только когда
+  настроенный год сервера совпадает с текущим календарным годом)
 
 Отсутствие feature-specific источника не обязано ломать startup SearchEngine.
 Ошибка проявляется при вызове соответствующей функции.

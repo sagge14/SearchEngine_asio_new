@@ -6,6 +6,7 @@
 #include "SQLite/SQLiteConnectionManager.h"
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 
 // Вспомогательная функция, чтобы получить текущий год в виде строки
 static std::string getCurrentYear() {
@@ -62,7 +63,17 @@ static std::string escapeSqlLiteral(const std::string& value) {
     if (!db_way->empty())
         std::copy(db_way->begin(), db_way->end(), std::back_inserter(result_way));
 
-    const std::string currentYear = getCurrentYear();
+    // base.db contains only the live F12 queue.  Historical/future server
+    // years must return the yearly way journal without consulting it.
+    if (work_year != getCurrentYear())
+        return;
+
+    // The live queue is an optional enrichment source.  Do not let a missing
+    // base.db make the yearly way history unavailable, and never create it.
+    std::error_code existsError;
+    const auto basePath = std::filesystem::u8path(base_f12_dir);
+    if (!std::filesystem::exists(basePath, existsError) && !existsError)
+        return;
 
 
     condition =

@@ -122,7 +122,8 @@ namespace search_server {
         /// RecordProcessor uses <opis_base_dir>\<year>.DB.
         std::string opis_base_dir = "D:\\OPIS_ADMIN";
         /// GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY:
-        /// <f12_base_dir>\<year>.db and <f12_base_dir>\base.db.
+        /// always reads <f12_base_dir>\<year>.db; an existing
+        /// <f12_base_dir>\base.db enriches only the current calendar year.
         std::string f12_base_dir = "D:\\F12";
         QueryWordMatch queryWordMatch = QueryWordMatch::Any;
         bool hideConsoleWindow{};
