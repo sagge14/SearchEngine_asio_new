@@ -558,6 +558,11 @@ int autoPadTelNo(int telegramId)
     return telegramId % 100000;
 }
 
+int syntheticLists(int telegramId)
+{
+    return static_cast<int>((telegramId * 48271LL + 17LL) % 9LL) + 1;
+}
+
 bool hasUnspacedEquals(const std::string& text)
 {
     for (std::size_t index = 0; index < text.size(); ++index) {
@@ -682,10 +687,12 @@ void createDatabase(
     const std::string sql = prm
         ? "INSERT INTO ARCHIVE (\"Index\",DData,FFrom,TelNo,PodpNo,DataPodp,"
           "Familia,PrilName1,PrilName,KolPril,DirectTo,FileName,Copyes2,Edit,"
-          "GdeSHT,SizeAll,Keys,Primechanie) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+          "GdeSHT,SizeAll,Keys,Primechanie,Lists,Ekzempl) "
+          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         : "INSERT INTO ARCHIVE (\"Index\",DData,FFrom1,TelNo,PodpNo,DataPodp,"
           "Copyes,FFrom5,PrilName,KolPril,DirectTo,FileName,Blank,Edit,GdeSHT,"
-          "SizeAll,SetevNo,FFrom2,FFrom3,AllPDTV1) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+          "SizeAll,SetevNo,FFrom2,FFrom3,AllPDTV1,Lists,Ekzempl) "
+          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
     sqlite3_stmt* statement = nullptr;
     if (sqlite3_prepare_v2(database.get(), sql.c_str(), -1, &statement, nullptr) !=
         SQLITE_OK)
@@ -723,6 +730,9 @@ void createDatabase(
                 bindText(statement, 19, "ISTOK-TEST");
                 bindText(statement, 20, "");
             }
+            const int listsIndex = prm ? 19 : 21;
+            bindText(statement, listsIndex, std::to_string(syntheticLists(row.id)));
+            bindText(statement, listsIndex + 1, "1");
             if (sqlite3_step(statement) != SQLITE_DONE)
                 throw std::runtime_error("cannot insert synthetic archive row");
             sqlite3_reset(statement);
@@ -1578,7 +1588,8 @@ StandSummary verifyInternal(
         verifyColumns(database.get(), prm);
         sqlite3_stmt* statement = nullptr;
         const char sql[] =
-            "SELECT \"Index\",TelNo,KolPril,PrilName,SizeAll,DirectTo,FileName "
+            "SELECT \"Index\",TelNo,KolPril,PrilName,SizeAll,DirectTo,FileName,"
+            "Lists,Ekzempl "
             "FROM ARCHIVE ORDER BY \"Index\"";
         if (sqlite3_prepare_v2(database.get(), sql, -1, &statement, nullptr) !=
             SQLITE_OK)
@@ -1594,9 +1605,12 @@ StandSummary verifyInternal(
             const int declaredCount = std::stoi(sqliteText(statement, 2));
             const auto names = split(sqliteText(statement, 3), ';');
             const auto sizes = split(sqliteText(statement, 4), ';');
+            const int lists = sqlite3_column_int(statement, 7);
+            const int ekzempl = sqlite3_column_int(statement, 8);
             if (telNo != autoPadTelNo(id) ||
                 declaredCount != static_cast<int>(names.size()) ||
-                names.size() != sizes.size())
+                names.size() != sizes.size() ||
+                lists != syntheticLists(id) || ekzempl != 1)
             {
                 sqlite3_finalize(statement);
                 throw std::runtime_error(

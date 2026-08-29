@@ -348,12 +348,31 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
         std::wostringstream fileName;
         fileName << std::setfill(L'0') << std::setw(2) << month
                  << L"-2026.db3";
-        EXPECT_TRUE(fs::is_regular_file(
-            options.root / L"autopad" / L"PRM" / L"METH_BASES" /
-            fileName.str()));
-        EXPECT_TRUE(fs::is_regular_file(
-            options.root / L"autopad" / L"PRD" / L"METH_BASES" /
-            fileName.str()));
+        for (const fs::path& database : {
+                 options.root / L"autopad" / L"PRM" / L"METH_BASES" /
+                     fileName.str(),
+                 options.root / L"autopad" / L"PRD" / L"METH_BASES" /
+                     fileName.str()})
+        {
+            ASSERT_TRUE(fs::is_regular_file(database));
+            EXPECT_EQ(
+                sqliteScalarInt(
+                    database,
+                    "SELECT COUNT(*) FROM ARCHIVE WHERE Ekzempl IS NULL "
+                    "OR CAST(Ekzempl AS INTEGER)<>1"),
+                0);
+            EXPECT_EQ(
+                sqliteScalarInt(
+                    database,
+                    "SELECT COUNT(*) FROM ARCHIVE WHERE Lists IS NULL "
+                    "OR CAST(Lists AS INTEGER) NOT BETWEEN 1 AND 9"),
+                0);
+            EXPECT_EQ(
+                sqliteScalarInt(
+                    database,
+                    "SELECT COUNT(DISTINCT CAST(Lists AS INTEGER)) FROM ARCHIVE"),
+                9);
+        }
     }
     EXPECT_FALSE(fs::exists(options.root / L"autopad" / L"PRM" / L"ARCHIVE.db3"));
     EXPECT_FALSE(fs::exists(options.root / L"autopad" / L"PRD" / L"ARCHIVE.db3"));
