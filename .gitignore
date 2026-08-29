@@ -1,14 +1,23 @@
 # игнорируем каталоги сборки (CLion, CMake)
+build/
+build_zag_editor*/
 cmake-build-*/
-lib/
+out/
+lib/*
+!lib/backup_sqlite/
+!lib/backup_sqlite/**
 minizip/
 other/
+test/
 
 # utf8proc
 utf8proc/
 utf8proc-*/
 utf8proc-*.zip
 
+
+# каталог логов (унифицированный вывод)
+logs/
 
 # бинарные файлы и библиотеки
 *.exe
@@ -29,3 +38,9 @@ utf8proc-*.zip
 
 # если не хочешь игнорировать src/
 !src/
+
+# IDE agent plans
+.cursor/
+
+# Generated Win32 version resources (rebuilt from app-version*.json)
+cmake/generated/

@@ -5,17 +5,31 @@
 #include "JSON/ConverterJSON.h"
 #include "Index/InvertedIndex.h"
 #include "AsioServer/AsioServer.h"
+#include "SearchServer/QueryWordMatch.h"
 #include <set>
+#include <string_view>
 #include <condition_variable>
 #include "FileWatcher/MultiWatcher.h"
-#include <codecvt>
 
 
 namespace search_server {
 
+    enum class ServerMode
+    {
+        Active,
+        Archive
+    };
+
+    [[nodiscard]] inline constexpr std::string_view toString(ServerMode mode) noexcept
+    {
+        return mode == ServerMode::Archive ? "archive" : "active";
+    }
+
     using namespace std;
     typedef set <size_t> setFileInd;
-    typedef list <pair<string, float>> listAnswer;
+    // listAnswer/listAnswers — те же типы, что в ConverterJSON.h
+    // (элемент списка — ::AnswerItem с полями path/relevance/deleted).
+    typedef list <AnswerItem> listAnswer;
     typedef list <pair<listAnswer, string>> listAnswers;
 
     struct PendingEvt {
@@ -63,8 +77,8 @@ namespace search_server {
             Оператор "<" перегружен для сортировки по убыванию.*/
 
         inline static size_t max{0};
+        uint32_t fileId{};
         size_t sum{0};
-        string filePath;
 
         [[nodiscard]] float getRelativeIndex() const { return (float) sum / (float) max; }
 
@@ -73,54 +87,97 @@ namespace search_server {
         bool operator<(const RelativeIndex &r) const { return sum > r.sum;}
 
         RelativeIndex(size_t fileInd, const set <string> &_request, const inverted_index::InvertedIndex *_index,
-                      bool _exactSearch = false);
+                      QueryWordMatch queryWordMatch = QueryWordMatch::Any);
 
         ~RelativeIndex() = default;
     };
 
     class Settings
     {
-        /** @param name имя сервера.
-          * @param version версия сервера,
-          * @param dir для поиска по всем файлам в дирректории включая подпапки
-          * если параметр пустой, то поиск осуществляется только по файлам указанным в @param files.*
-          * @param exactSearch для установки серевера в режим работы "точного поиска".*
+        /** @param queryWordMatch задаёт совпадение всех или любого слова запроса.*
           * @param threadCount устанавливает количество потоков осуществляющих индексирование файлов,
           * если установить значение 0 - то количество потоков будет выбрано автоматически, по количеству ядер процессора.*
           * @param indTime устанавливает период переиндексации файлов в секундах.*
           * @param maxResponse устанавливает максимальное количество ответов на запрос.*
-          * @param requestText для отображения в файле ответов вместо идентификаторов запросов текста запросов */
+          * @param hideConsoleWindow скрыть консольное окно при ручном запуске (Windows service mode не затронут). */
 
         inline static Settings* settings = nullptr;
 
     public:
 
-        std::string name;
-        std::string version;
-        std::string dir;
         std::string year;
+        ServerMode serverMode = ServerMode::Active;
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
-        bool exactSearch;
-        bool hideMode{};
-        int threadCount{};
-        int port{};
+        /// Explicit monthly AutoPad database roots. Empty keeps the legacy
+        /// <*_base_dir>\METH_BASES location.
+        std::string prm_monthly_bases_dir = {};
+        std::string prd_monthly_bases_dir = {};
+        /// LOAD_TLG_TO_SEND destination root: <tlg_send_root>\<MONTH>\<DATE>\...
+        std::string tlg_send_root = "D:\\";
+        /// LOAD_RAZN destination directory.
+        std::string razn_output_dir =
+            "D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ";
+        /// GET_OPIS_BASE uses <opis_base_dir>\<year>.db;
+        /// RecordProcessor uses <opis_base_dir>\<year>.DB.
+        std::string opis_base_dir = "D:\\OPIS_ADMIN";
+        /// GET_VH_TELEGA_WAY / GET_ISH_TELEGA_WAY:
+        /// always reads <f12_base_dir>\<year>.db; an existing
+        /// <f12_base_dir>\base.db enriches only the current calendar year.
+        std::string f12_base_dir = "D:\\F12";
+        QueryWordMatch queryWordMatch = QueryWordMatch::Any;
+        bool hideConsoleWindow{};
+        int threadCount = 6;
+        int port = 15001;
         size_t indTime{};
-        int maxResponse{};
-        bool requestText{};
-        std::vector<std::string> dirs;
-        std::vector<std::string> extensions;
-        std::vector<std::string> files;
-        std::vector<std::string> excludeDirs;
+        int maxResponse = 30;
+        std::vector<std::string> indexRoots;
+        std::vector<std::string> indexedExtensions;
+        bool includeExtensionlessFiles{false};
+        std::vector<std::string> excludedSubtrees;
+        double compactThresholdPercent = 5.0;  // Порог для compact (%)
+        /// Запускать полный scan/updateStep сразу после старта (после загрузки словаря).
+        /// false = только по таймеру ind_time.
+        bool scanOnStartup = true;
+        /// Максимум одновременно читающих файлы воркеров (HDD: 1, SATA SSD: 2-4, NVMe: 4-8).
+        /// 0 = без ограничения (текущее поведение, обратная совместимость).
+        int maxParallelReaders = 0;
+        /// Таймаут ожидания индексации одного файла в updateDocumentBase, секунды.
+        int fileIndexingTimeoutSec = 60;
+        /// Автоматически определять краткое содержание новых файлов и обновлять
+        /// соответствующее поле в базе AutoPad PRM.
+        bool enablePrmShortContentAutodetect = true;
+        /// Интервал сброса очереди SQLite-зеркала на диск, секунды.
+        double sqliteMirrorFlushIntervalSec = 2.0;
+        /// Порог очереди live-зеркала: при превышении — немедленный flush (0 = только по таймеру).
+        int sqliteMirrorMaxPendingOps = 500;
+        /// Число read-only соединений при восстановлении SQLite (1 = последовательный baseline).
+        int sqliteLoadThreads = 4;
+        /// Делать COUNT(*) по словам и reserve перед загрузкой постингов.
+        bool sqlitePrecountPostings = false;
+        /// Алгоритм первичной полной сборки: legacy или batch.
+        inverted_index::FullIndexStrategy fullIndexStrategy =
+            inverted_index::FullIndexStrategy::Batch;
+        /// Хранилище путей и метаданных документов: memory или sqlite.
+        inverted_index::DocumentCatalogStorage documentCatalogStorage =
+            inverted_index::DocumentCatalogStorage::Memory;
+        /// Независимые потоки чтения batch-конвейера (для HDD обычно 1).
+        int batchReaderThreads = 1;
+        /// Потоки локальной индексации batch-конвейера (0 = все logical CPU).
+        int batchIndexerThreads = 0;
+        /// Лимит очереди прочитанных данных batch-конвейера, MiB.
+        int batchQueueMemoryMb = 256;
 
         static Settings* getSettings();
-        static auto getExtensions() {return getSettings()->extensions;};
+        static auto getIndexedExtensions() {
+            return getSettings()->indexedExtensions;
+        };
         void show() const;
 
         Settings& operator=(const Settings& s) = default;
         Settings(const Settings& s) = default;
 
-        Settings();
+        Settings() = default;
     };
 
     class SearchServer {
@@ -141,7 +198,6 @@ namespace search_server {
         mutable atomic<bool> work{};
         hash<string> hashRequest;
         inverted_index::InvertedIndex *index{};
-        std::vector<wstring> docPaths{};
         Settings settings{};
         size_t time{};
 
@@ -159,6 +215,26 @@ namespace search_server {
         atomic<bool>must_start_update = false;
 
         mutable std::condition_variable_any cv_search_server;
+        std::atomic<bool> stopping_{false};
+        std::atomic<bool> stopped_{false};
+        mutable std::mutex operationsMutex_;
+        mutable std::condition_variable operationsCondition_;
+        mutable std::size_t activeOperations_{0};
+
+        class OperationGuard {
+        public:
+            explicit OperationGuard(SearchServer& server);
+            explicit OperationGuard(const SearchServer& server);
+            ~OperationGuard();
+            explicit operator bool() const noexcept { return active_; }
+
+        private:
+            SearchServer* server_;
+            bool active_;
+        };
+
+        bool beginOperation() const;
+        void finishOperation() const noexcept;
 
         /** @param trustSettings функция проверки корректности настроек сервера.*
             @param checkHash функция для сравнения хэша последнего и очередного запроса.*
@@ -224,6 +300,10 @@ namespace search_server {
 
         void flushUpdateAndSaveDictionary();
 
+        void requestStop() noexcept;
+        void wait();
+        void stop();
+
         void updateStep();
         ~SearchServer();
 
@@ -231,9 +311,11 @@ namespace search_server {
         Упращенная версия конструктора @param SearchServer для тестирования некоторых функций.*/
 
         #ifdef TEST_MODE
-        explicit SearchServer(const vector<string>& _docPaths, bool exactSearch = false)
+        explicit SearchServer(
+            const vector<string>& _docPaths,
+            QueryWordMatch queryWordMatch = QueryWordMatch::Any)
         {
-        settings.exactSearch = exactSearch;
+        settings.queryWordMatch = queryWordMatch;
         index = new inverted_index::InvertedIndex();
         index->updateDocumentBase(_docPaths);
         }

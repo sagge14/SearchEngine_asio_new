@@ -1,6 +1,5 @@
 #include "ContextRuntime.h"
-#include "MyUtils/StartLog.h"
-#define LG(...) StartLog::instance().write(__VA_ARGS__)
+#include "MyUtils/LogFile.h"
 
 ContextRuntime::Context::Context()
         : guard(boost::asio::make_work_guard(io)) {}
@@ -10,7 +9,14 @@ void ContextRuntime::Context::stop() {
     io.stop();
 }
 
-ContextRuntime::ContextRuntime(size_t totalThreads) {
+ContextRuntime::ContextRuntime(size_t totalThreads)
+    : cpu_pool_(totalThreads > 0
+                ? std::max(size_t(1), static_cast<size_t>(totalThreads))
+                : std::max(
+                        size_t(1),
+                        static_cast<size_t>(std::thread::hardware_concurrency())
+                  ))
+{
     calcThreads(totalThreads);
 }
 
@@ -18,15 +24,20 @@ ContextRuntime::~ContextRuntime() {
     stop();
 }
 
-void ContextRuntime::calcThreads(size_t total) {
-
+void ContextRuntime::calcThreads([[maybe_unused]] size_t totalThreads) {
+    // Распределение потоков I/O: фиксировано. totalThreads из ctor используется только для размера cpu_pool.
+    // net — приём + все сессии (read/write), 2 потока обычно хватает на много соединений.
+    // scheduler — таймеры, отложенные задачи; commit — коммит индекса. По 1 достаточно.
     t_net_       = 2;
     t_scheduler_ = 1;
     t_commit_    = 1;
-
 }
 
 void ContextRuntime::start() {
+    bool expected = false;
+    if (!started_.compare_exchange_strong(expected, true))
+        return;
+
     auto run = [this](Context& ctx, size_t count) {
         for (size_t i = 0; i < count; ++i) {
 
@@ -48,6 +59,13 @@ void ContextRuntime::start() {
 }
 
 void ContextRuntime::stop() {
+    if (stopped_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    // All producers are stopped by SearchEngineApplication before this call.
+    // join() drains queued CPU work; stop() would discard it.
+    cpu_pool_.join();
+
     net_.stop();
     scheduler_.stop();
     commit_.stop();

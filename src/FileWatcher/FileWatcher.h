@@ -6,9 +6,11 @@
 #include <vector>
 #include <atomic>
 #include <filesystem>
+#include <condition_variable>
+#include <mutex>
 #include <Windows.h>
 
-enum class FileEvent { Added, Removed, Modified, RenamedOld, RenamedNew };
+#include "FileWatcher/FileEvent.h"
 
 class FileWatcher
 {
@@ -32,6 +34,7 @@ private:
     void  startRead();                 // инициировать ReadDirectoryChangesW
     void  parseEvents(std::size_t);    // разобрать буфер
     void  fireAddEventsRecursive();    // массовые Added
+    void  finishPendingRead() noexcept;
 
     boost::asio::io_context& io_;
     std::wstring             dir_;
@@ -44,4 +47,7 @@ private:
     bool   initialDirPresent_{false};
     bool   everOpened_{false};
     std::atomic<bool> running_{false};
+    std::mutex pendingMutex_;
+    std::condition_variable pendingCondition_;
+    std::size_t pendingReads_{0};
 };

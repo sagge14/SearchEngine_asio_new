@@ -5,100 +5,609 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <atomic>
+#include <stdexcept>
+
+#ifdef _WIN32
+// Windows networking (REQUIRED before windows.h)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
 
 #include "ConverterJSON.h"
 #include "SearchServer/SearchServer.h"
-#include "scheduler/BackupTask.h"
 #include "Commands/GetAttachments/PrefixMap.h"
 #include "Commands/GetJsonTelega/Telega.h"
 
-#include <codecvt>
-namespace cc2  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
-    }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
-}
+#include "MyUtils/Encoding.h"
+#include "MyUtils/FileExtensionContract.h"
+#include "MyUtils/LogFile.h"
 
 
 #define TO_JSON(J, S) J[#S] = val.S;
 #define FROM_JSON(J, S) J.at(#S).get_to(val.S);
 
-void ConverterJSON::setSettings(const search_server::Settings &val) {
+namespace {
+std::atomic<bool> g_interactiveErrors{true};
+}
+
+void ConverterJSON::setInteractiveErrors(bool enabled) noexcept
+{
+    g_interactiveErrors.store(enabled, std::memory_order_release);
+}
+
+void ConverterJSON::setSettings(const search_server::Settings &val, const std::string& jsonPath) {
     /**
     Функция записи настроек сервера в json файл. */
 
     nh::json jsonSettings;
 
-    jsonSettings["config"]["Name"] = val.name;
-    jsonSettings["config"]["Version"] = val.version;
     jsonSettings["config"]["max_response"] = val.maxResponse;
     jsonSettings["config"]["thread_count"] = val.threadCount;
-    jsonSettings["config"]["dir"] = val.dir;
     jsonSettings["config"]["asio_port"] = val.port;
     jsonSettings["config"]["ind_time"] = val.indTime;
-    jsonSettings["config"]["text_request"] = val.requestText;
-    jsonSettings["config"]["exact_search"] = val.exactSearch;
-    jsonSettings["config"]["dirs"] = val.dirs;
-    jsonSettings["config"]["extensions"] = val.extensions;
-    jsonSettings["Files"] = val.files;
-    jsonSettings["config"]["exclude_dirs"] = val.excludeDirs;
+    jsonSettings["config"]["query_word_match"] =
+        std::string(search_server::toString(val.queryWordMatch));
+    jsonSettings["config"]["index_roots"] = val.indexRoots;
+    jsonSettings["config"]["indexed_extensions"] = val.indexedExtensions;
+    jsonSettings["config"]["include_extensionless_files"] =
+        val.includeExtensionlessFiles;
+    jsonSettings["config"]["year"] = val.year;
+    jsonSettings["config"]["server_mode"] =
+        std::string(search_server::toString(val.serverMode));
+    jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
+    jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
     jsonSettings["config"]["prd_base_dir"] = val.prd_base_dir;
+    jsonSettings["config"]["prm_monthly_bases_dir"] =
+        val.prm_monthly_bases_dir;
+    jsonSettings["config"]["prd_monthly_bases_dir"] =
+        val.prd_monthly_bases_dir;
+    jsonSettings["config"]["tlg_send_root"] = val.tlg_send_root;
+    jsonSettings["config"]["razn_output_dir"] = val.razn_output_dir;
+    jsonSettings["config"]["opis_base_dir"] = val.opis_base_dir;
+    jsonSettings["config"]["f12_base_dir"] = val.f12_base_dir;
+    jsonSettings["config"]["compact_threshold_percent"] = val.compactThresholdPercent;
+    jsonSettings["config"]["scan_on_startup"] = val.scanOnStartup;
+    jsonSettings["config"]["max_parallel_readers"] = val.maxParallelReaders;
+    jsonSettings["config"]["file_indexing_timeout_sec"] = val.fileIndexingTimeoutSec;
+    jsonSettings["config"]["enable_prm_short_content_autodetect"] =
+        val.enablePrmShortContentAutodetect;
+    jsonSettings["config"]["sqlite_mirror_flush_interval_sec"] = val.sqliteMirrorFlushIntervalSec;
+    jsonSettings["config"]["sqlite_mirror_max_pending_ops"] = val.sqliteMirrorMaxPendingOps;
+    jsonSettings["config"]["sqlite_load_threads"] = val.sqliteLoadThreads;
+    jsonSettings["config"]["sqlite_precount_postings"] = val.sqlitePrecountPostings;
+    jsonSettings["config"]["full_index_strategy"] =
+        std::string(inverted_index::toString(val.fullIndexStrategy));
+    jsonSettings["config"]["document_catalog_storage"] =
+        std::string(inverted_index::toString(val.documentCatalogStorage));
+    jsonSettings["config"]["batch_reader_threads"] = val.batchReaderThreads;
+    jsonSettings["config"]["batch_indexer_threads"] = val.batchIndexerThreads;
+    jsonSettings["config"]["batch_queue_memory_mb"] = val.batchQueueMemoryMb;
 
-    std::ofstream jsonFileSettings("Settings.json");
-    jsonFileSettings << jsonSettings;
+    std::ofstream jsonFileSettings(jsonPath);
+    jsonFileSettings << std::setw(2) << jsonSettings;
     jsonFileSettings.close();
 
 }
 
 search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) {
     /**
-    Функция получения настроек сервера из json файла. */
+    Функция получения настроек сервера из json файла с автодополнением недостающих полей. */
 
-    search_server::Settings s;
+    search_server::Settings s;  // Инициализация с дефолтными значениями
     nh::json jsonSettings;
     std::ifstream jsonFileSettings(jsonPath);
+    
+    std::vector<std::string> addedFields;
+    std::vector<std::string> criticalErrors;
+    bool needsResave = false;
+
+    // Проверяем существование файла
+    if (!jsonFileSettings.is_open()) {
+        LogFile::getStartup().write("WARNING: Settings file not found: " + jsonPath);
+        LogFile::getStartup().write("Using default settings. File will be created with defaults.");
+        // Все поля будут добавлены как недостающие
+        needsResave = true;
+        // Создаем пустой JSON для дальнейшей обработки
+        jsonSettings = nh::json::object();
+        jsonSettings["config"] = nh::json::object();
+    } else {
+        try
+        {
+            jsonSettings = nh::json::parse(jsonFileSettings);
+            jsonFileSettings.close();
+        }
+        catch (nh::json::parse_error& ex)
+        {
+            jsonFileSettings.close();
+            std::string errorMsg = "JSON parse error at byte " + std::to_string(ex.byte);
+            LogFile::getStartup().write("ERROR: " + errorMsg);
+            if (g_interactiveErrors.load(std::memory_order_acquire))
+                std::cerr << errorMsg << std::endl;
+            throw myExp(jsonPath);
+        }
+    }
 
     try
     {
-        jsonSettings = nh::json::parse(jsonFileSettings);
-        jsonFileSettings.close();
 
-        jsonSettings.at("config").at("Name").get_to(s.name);
-        jsonSettings.at("config").at("Version").get_to(s.version);
-        jsonSettings.at("config").at("max_response").get_to(s.maxResponse);
-        jsonSettings.at("config").at("thread_count").get_to(s.threadCount);
-        jsonSettings.at("config").at("port").get_to(s.port);
-        jsonSettings.at("config").at("dir").get_to(s.dir);
-        jsonSettings.at("config").at("exact_search").get_to(s.exactSearch);
-        jsonSettings.at("config").at("hide_mode").get_to(s.hideMode);
-        jsonSettings.at("config").at("ind_time").get_to(s.indTime);
-        jsonSettings.at("config").at("dirs").get_to(s.dirs);
-        jsonSettings.at("config").at("extensions").get_to(s.extensions);
-        jsonSettings.at("config").at("year").get_to(s.year);
-        jsonSettings.at("config").at("text_request").get_to(s.requestText);
-        jsonSettings.at("config").at("exclude_dirs").get_to(s.excludeDirs);
-        jsonSettings.at("config").at("prm_base_dir").get_to(s.prm_base_dir);
-        jsonSettings.at("config").at("prd_base_dir").get_to(s.prd_base_dir);
+        // Проверяем наличие секции config (создаем если отсутствует)
+        if (!jsonSettings.contains("config")) {
+            jsonSettings["config"] = nh::json::object();
+            needsResave = true;
+        }
+        
+        auto& config = jsonSettings["config"];
 
-        jsonSettings.at("Files").get_to(s.files);
+        // === hide_console_window (legacy hide_mode alias) — load early for error UI ===
+        const bool hasHideConsoleWindow = config.contains("hide_console_window");
+        const bool hasLegacyHideMode = config.contains("hide_mode");
+        if (hasHideConsoleWindow) {
+            config.at("hide_console_window").get_to(s.hideConsoleWindow);
+        } else if (hasLegacyHideMode) {
+            config.at("hide_mode").get_to(s.hideConsoleWindow);
+        }
+
+        // === КРИТИЧЕСКИЕ ПОЛЯ (обязательные) ===
+        // index_roots (legacy dirs alias) — корни рекурсивной индексации.
+        // Canonical key presence always wins: never fall back to dirs when
+        // index_roots exists, even if the canonical value is empty or invalid.
+        // Direct runtime read of a legacy alias does not trigger a rewrite.
+        const bool hasIndexRootsKey = config.contains("index_roots");
+        const bool hasLegacyDirsKey = config.contains("dirs");
+        auto loadIndexRootsArray = [&](nh::json& field, const char* errorName) {
+            if (!field.is_array()) {
+                throw std::invalid_argument(
+                    std::string(errorName) + " must be a non-empty array");
+            }
+            field.get_to(s.indexRoots);
+            if (s.indexRoots.empty()) {
+                criticalErrors.push_back(
+                    "config.index_roots (must be non-empty array)");
+            }
+        };
+        if (hasIndexRootsKey) {
+            loadIndexRootsArray(config["index_roots"], "config.index_roots");
+        } else if (hasLegacyDirsKey) {
+            loadIndexRootsArray(config["dirs"], "config.dirs");
+        } else {
+            criticalErrors.push_back("config.index_roots (must be non-empty array)");
+        }
+
+        // indexed_extensions + include_extensionless_files.
+        // Legacy extensions is a read-only alias and does not cause resave.
+        // Canonical key presence wins even when its value is invalid.
+        const bool hasIndexedExtensions = config.contains("indexed_extensions");
+        const bool hasLegacyExtensions = config.contains("extensions");
+        const bool hasIncludeExtensionless =
+            config.contains("include_extensionless_files");
+        bool explicitIncludeExtensionless = false;
+        if (hasIncludeExtensionless) {
+            if (!config["include_extensionless_files"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.include_extensionless_files must be boolean");
+            }
+            config.at("include_extensionless_files").get_to(
+                explicitIncludeExtensionless);
+        }
+
+        if (hasIndexedExtensions) {
+            if (!config["indexed_extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.indexed_extensions must be an array");
+            }
+            config.at("indexed_extensions").get_to(s.indexedExtensions);
+            s.includeExtensionlessFiles = hasIncludeExtensionless
+                ? explicitIncludeExtensionless
+                : false;
+            const file_extension_contract::Selection selection{
+                s.indexedExtensions, s.includeExtensionlessFiles};
+            if (const auto errors =
+                    file_extension_contract::validateCanonicalSelection(selection);
+                !errors.empty())
+            {
+                throw std::invalid_argument(
+                    "config.indexed_extensions " + errors.front());
+            }
+        } else if (hasLegacyExtensions) {
+            if (!config["extensions"].is_array()) {
+                throw std::invalid_argument(
+                    "config.extensions must be an array");
+            }
+            std::vector<std::string> legacyExtensions;
+            config.at("extensions").get_to(legacyExtensions);
+            const auto selection =
+                file_extension_contract::canonicalizeLegacySelection(
+                    legacyExtensions,
+                    hasIncludeExtensionless
+                        ? &explicitIncludeExtensionless
+                        : nullptr);
+            s.indexedExtensions = selection.indexedExtensions;
+            s.includeExtensionlessFiles =
+                selection.includeExtensionlessFiles;
+        } else {
+            criticalErrors.push_back(
+                "config.indexed_extensions (required array)");
+        }
+
+        // year - год работы (используется в путях к БД)
+        if (config.contains("year") && !config["year"].get<std::string>().empty()) {
+            config.at("year").get_to(s.year);
+        } else {
+            criticalErrors.push_back("config.year (required for database paths)");
+        }
+
+        // prm_base_dir / prd_base_dir — строки; пустая строка = источник отключён
+        if (config.contains("prm_base_dir") && config["prm_base_dir"].is_string()) {
+            config.at("prm_base_dir").get_to(s.prm_base_dir);
+        } else {
+            criticalErrors.push_back("config.prm_base_dir (must be a string; empty disables PRM)");
+        }
+
+        if (config.contains("prd_base_dir") && config["prd_base_dir"].is_string()) {
+            config.at("prd_base_dir").get_to(s.prd_base_dir);
+        } else {
+            criticalErrors.push_back("config.prd_base_dir (must be a string; empty disables PRD)");
+        }
+
+        const auto legacyMonthlyDirectory = [](const std::string& base) {
+            return base.empty() ? std::string() : base + "\\METH_BASES";
+        };
+        const auto loadMonthlyDirectory = [&](const char* name,
+                                              std::string& destination,
+                                              const std::string& base) {
+            if (!config.contains(name)) {
+                destination = legacyMonthlyDirectory(base);
+                // Backward-compatible derived default. Merely reading a
+                // complete legacy Settings.json must not canonicalize the
+                // whole document and discard aliases/unknown fields.
+                return;
+            }
+            if (!config[name].is_string()) {
+                throw std::invalid_argument(
+                    std::string("config.") + name + " must be a string");
+            }
+            config.at(name).get_to(destination);
+        };
+        loadMonthlyDirectory(
+            "prm_monthly_bases_dir",
+            s.prm_monthly_bases_dir,
+            s.prm_base_dir);
+        loadMonthlyDirectory(
+            "prd_monthly_bases_dir",
+            s.prd_monthly_bases_dir,
+            s.prd_base_dir);
+
+        if (config.contains("server_mode")) {
+            if (!config["server_mode"].is_string()) {
+                throw std::invalid_argument(
+                    "config.server_mode must be active or archive");
+            }
+            const std::string mode = config["server_mode"].get<std::string>();
+            if (mode == "active") {
+                s.serverMode = search_server::ServerMode::Active;
+            } else if (mode == "archive") {
+                s.serverMode = search_server::ServerMode::Archive;
+            } else {
+                throw std::invalid_argument(
+                    "config.server_mode must be active or archive");
+            }
+        } else {
+            s.serverMode = search_server::ServerMode::Active;
+            // Missing mode is the historical active behavior. Do not force a
+            // destructive full-file rewrite solely to persist this default.
+        }
+
+        const auto loadOptionalRoot = [&](const char* name, std::string& dest) {
+            if (!config.contains(name)) {
+                addedFields.push_back(std::string("config.") + name);
+                needsResave = true;
+                return;
+            }
+            if (!config[name].is_string()) {
+                throw std::invalid_argument(
+                    std::string("config.") + name + " must be a string");
+            }
+            config.at(name).get_to(dest);
+        };
+        loadOptionalRoot("tlg_send_root", s.tlg_send_root);
+        loadOptionalRoot("razn_output_dir", s.razn_output_dir);
+        loadOptionalRoot("opis_base_dir", s.opis_base_dir);
+        loadOptionalRoot("f12_base_dir", s.f12_base_dir);
+
+        // === ОПЦИОНАЛЬНЫЕ ПОЛЯ (с автодополнением) ===
+
+        // max_response
+        if (config.contains("max_response")) {
+            config.at("max_response").get_to(s.maxResponse);
+        } else {
+            addedFields.push_back("config.max_response");
+            needsResave = true;
+        }
+
+        // thread_count
+        if (config.contains("thread_count")) {
+            config.at("thread_count").get_to(s.threadCount);
+        } else {
+            addedFields.push_back("config.thread_count");
+            needsResave = true;
+        }
+
+        // port / asio_port
+        if (config.contains("port")) {
+            config.at("port").get_to(s.port);
+        } else if (config.contains("asio_port")) {
+            config.at("asio_port").get_to(s.port);
+        } else {
+            addedFields.push_back("config.port");
+            needsResave = true;
+        }
+
+        // query_word_match (legacy exact_search alias). Canonical presence
+        // wins even when invalid. Alias or absence does not trigger resave.
+        if (config.contains("query_word_match")) {
+            if (!config["query_word_match"].is_string()) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            const auto mode = search_server::parseQueryWordMatch(
+                config.at("query_word_match").get<std::string>());
+            if (!mode) {
+                throw std::invalid_argument(
+                    "config.query_word_match must be all or any");
+            }
+            s.queryWordMatch = *mode;
+        } else if (config.contains("exact_search")) {
+            if (!config["exact_search"].is_boolean()) {
+                throw std::invalid_argument(
+                    "config.exact_search must be boolean");
+            }
+            s.queryWordMatch = config.at("exact_search").get<bool>()
+                ? search_server::QueryWordMatch::All
+                : search_server::QueryWordMatch::Any;
+        } else {
+            s.queryWordMatch = search_server::QueryWordMatch::Any;
+        }
+
+        // hide_console_window — canonical; legacy hide_mode already applied above.
+        // Using hide_mode is read compatibility only: do not rewrite Settings.
+        if (!hasHideConsoleWindow && !hasLegacyHideMode) {
+            addedFields.push_back("config.hide_console_window");
+            needsResave = true;
+        }
+
+        // ind_time
+        if (config.contains("ind_time")) {
+            config.at("ind_time").get_to(s.indTime);
+        } else {
+            addedFields.push_back("config.ind_time");
+            needsResave = true;
+        }
+
+        // excluded_subtrees (legacy exclude_dirs alias).
+        // Direct runtime read of exclude_dirs does not trigger a rewrite.
+        const bool hasExcludedSubtrees = config.contains("excluded_subtrees");
+        const bool hasLegacyExcludeDirs = config.contains("exclude_dirs");
+        if (hasExcludedSubtrees) {
+            config.at("excluded_subtrees").get_to(s.excludedSubtrees);
+        } else if (hasLegacyExcludeDirs) {
+            config.at("exclude_dirs").get_to(s.excludedSubtrees);
+        } else {
+            addedFields.push_back("config.excluded_subtrees");
+            needsResave = true;
+        }
+
+        // compact_threshold_percent (новое поле)
+        if (config.contains("compact_threshold_percent")) {
+            config.at("compact_threshold_percent").get_to(s.compactThresholdPercent);
+        } else {
+            addedFields.push_back("config.compact_threshold_percent");
+            needsResave = true;
+        }
+
+        // scan_on_startup — полный scan/updateStep сразу после загрузки словаря
+        if (config.contains("scan_on_startup")) {
+            config.at("scan_on_startup").get_to(s.scanOnStartup);
+        } else {
+            addedFields.push_back("config.scan_on_startup");
+            needsResave = true;
+        }
+
+        // max_parallel_readers — лимит одновременных читателей файлов (0 = без лимита)
+        if (config.contains("max_parallel_readers")) {
+            config.at("max_parallel_readers").get_to(s.maxParallelReaders);
+        } else {
+            addedFields.push_back("config.max_parallel_readers");
+            needsResave = true;
+        }
+
+        // file_indexing_timeout_sec — таймаут ожидания одного файла в updateDocumentBase
+        if (config.contains("file_indexing_timeout_sec")) {
+            config.at("file_indexing_timeout_sec").get_to(s.fileIndexingTimeoutSec);
+        } else {
+            addedFields.push_back("config.file_indexing_timeout_sec");
+            needsResave = true;
+        }
+
+        // enable_prm_short_content_autodetect — изменение поля краткого
+        // содержания в AutoPad PRM для появившихся файлов.
+        if (config.contains("enable_prm_short_content_autodetect")) {
+            config.at("enable_prm_short_content_autodetect").get_to(
+                s.enablePrmShortContentAutodetect
+            );
+        } else {
+            addedFields.push_back(
+                "config.enable_prm_short_content_autodetect"
+            );
+            needsResave = true;
+        }
+
+        // sqlite_mirror_flush_interval_sec — интервал сброса очереди SQLite-зеркала
+        if (config.contains("sqlite_mirror_flush_interval_sec")) {
+            config.at("sqlite_mirror_flush_interval_sec").get_to(s.sqliteMirrorFlushIntervalSec);
+        } else {
+            addedFields.push_back("config.sqlite_mirror_flush_interval_sec");
+            needsResave = true;
+        }
+
+        // sqlite_mirror_max_pending_ops — порог очереди live-зеркала
+        if (config.contains("sqlite_mirror_max_pending_ops")) {
+            config.at("sqlite_mirror_max_pending_ops").get_to(s.sqliteMirrorMaxPendingOps);
+        } else {
+            addedFields.push_back("config.sqlite_mirror_max_pending_ops");
+            needsResave = true;
+        }
+
+        // sqlite_load_threads — число параллельных диапазонов при восстановлении
+        if (config.contains("sqlite_load_threads")) {
+            config.at("sqlite_load_threads").get_to(s.sqliteLoadThreads);
+        } else {
+            addedFields.push_back("config.sqlite_load_threads");
+            needsResave = true;
+        }
+
+        // sqlite_precount_postings — предварительный COUNT(*) + reserve
+        if (config.contains("sqlite_precount_postings")) {
+            config.at("sqlite_precount_postings").get_to(s.sqlitePrecountPostings);
+        } else {
+            addedFields.push_back("config.sqlite_precount_postings");
+            needsResave = true;
+        }
+
+        // full_index_strategy — выбор первичной полной сборки.
+        if (config.contains("full_index_strategy")) {
+            const std::string value =
+                config.at("full_index_strategy").get<std::string>();
+            const auto strategy = inverted_index::parseFullIndexStrategy(value);
+            if (!strategy) {
+                throw std::invalid_argument(
+                    "config.full_index_strategy must be legacy or batch");
+            }
+            s.fullIndexStrategy = *strategy;
+        } else {
+            addedFields.push_back("config.full_index_strategy");
+            needsResave = true;
+        }
+
+        // document_catalog_storage — хранение путей в RAM или в SQLite.
+        if (config.contains("document_catalog_storage")) {
+            if (!config.at("document_catalog_storage").is_string()) {
+                throw std::invalid_argument(
+                    "config.document_catalog_storage must be memory or sqlite");
+            }
+            const auto storage = inverted_index::parseDocumentCatalogStorage(
+                config.at("document_catalog_storage").get<std::string>());
+            if (!storage) {
+                throw std::invalid_argument(
+                    "config.document_catalog_storage must be memory or sqlite");
+            }
+            s.documentCatalogStorage = *storage;
+        } else {
+            s.documentCatalogStorage =
+                inverted_index::DocumentCatalogStorage::Memory;
+            addedFields.push_back("config.document_catalog_storage");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_reader_threads")) {
+            config.at("batch_reader_threads").get_to(s.batchReaderThreads);
+        } else {
+            addedFields.push_back("config.batch_reader_threads");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_indexer_threads")) {
+            config.at("batch_indexer_threads").get_to(s.batchIndexerThreads);
+        } else {
+            addedFields.push_back("config.batch_indexer_threads");
+            needsResave = true;
+        }
+
+        if (config.contains("batch_queue_memory_mb")) {
+            config.at("batch_queue_memory_mb").get_to(s.batchQueueMemoryMb);
+        } else {
+            addedFields.push_back("config.batch_queue_memory_mb");
+            needsResave = true;
+        }
+
+        // Если были добавлены поля - пересохраняем настройки
+        if (needsResave) {
+            setSettings(s, jsonPath);  // Сохраняем в тот же файл, откуда читали
+            LogFile::getStartup().write("Settings auto-updated: added " + std::to_string(addedFields.size()) + 
+                                       " missing fields with default values");
+            LogFile::getStartup().write("Settings saved to: " + jsonPath);
+            for (const auto& field : addedFields) {
+                LogFile::getStartup().write("  - Added field: " + field);
+            }
+        }
+
+        // Если есть критические ошибки - логируем и выводим в консоль
+        if (!criticalErrors.empty()) {
+            // Получаем абсолютный путь к папке logs
+            std::filesystem::path logsPath = LogFile::logsDirectory();
+            std::string logsPathStr = logsPath.string();
+            
+            // Формируем сообщение для консоли
+            if (g_interactiveErrors.load(std::memory_order_acquire)) {
+                std::cout << "\n";
+                std::cout << "========================================\n";
+                std::cout << "  CRITICAL SETTINGS ERRORS DETECTED!\n";
+                std::cout << "========================================\n";
+                std::cout << "\nThe following required settings are missing or empty:\n\n";
+                for (const auto& err : criticalErrors) {
+                    std::cout << "  - " << err << "\n";
+                }
+                std::cout << "\nPlease fix Settings.json and restart the server.\n";
+                std::cout << "\nDetailed error log: " << logsPathStr << "\n";
+                std::cout << "========================================\n\n";
+                std::cout.flush();
+            }
+            
+            // Формируем сообщение для MessageBox
+            std::string errorMsg = "CRITICAL SETTINGS ERRORS:\n\n";
+            for (const auto& err : criticalErrors) {
+                errorMsg += "  - Missing or empty: " + err + "\n";
+            }
+            errorMsg += "\nCheck logs/startup.log for details.";
+            
+            // Логируем в файл
+            LogFile::getStartup().write("=== CRITICAL SETTINGS ERRORS ===");
+            for (const auto& err : criticalErrors) {
+                LogFile::getStartup().write("CRITICAL: Missing or empty field: " + err);
+            }
+            LogFile::getStartup().write("Server will continue running but may not function correctly.");
+            LogFile::getStartup().write("Please fix Settings.json and restart the server.");
+            LogFile::getStartup().write("Logs directory: " + logsPathStr);
+            
+            // Если hideConsoleWindow - показываем окно с ошибкой
+            if (s.hideConsoleWindow &&
+                g_interactiveErrors.load(std::memory_order_acquire)) {
+                ShowWindow(GetConsoleWindow(), SW_SHOW);  // Показываем консоль
+                MessageBoxA(nullptr, errorMsg.c_str(), "Search Engine - Critical Settings Error", 
+                            MB_OK | MB_ICONERROR | MB_TOPMOST);
+            }
+            
+            // Не выбрасываем исключение - продолжаем работу с ошибками в логе
+        }
 
     }
-    catch (nh::json::parse_error& ex)
+    catch (const myExp&)
     {
-        std::cerr << "JSON parse error at byte " << ex.byte << std::endl;
-        throw myExp(jsonPath);
+        throw;  // Пробрасываем дальше
+    }
+    catch (const std::invalid_argument&)
+    {
+        throw;
     }
     catch (...)
     {
+        LogFile::getStartup().write("ERROR: Unknown exception while loading settings");
         throw myExp(jsonPath);
     }
 
@@ -144,13 +653,29 @@ std::string ConverterJSON::putAnswers(const listAnswers& answers, const std::str
 
     for(const auto& answer: answers)
     {
+        const auto& key = answer.second;
         if(!answer.first.empty())
         {
-            jsonAnswers["Answers"][answer.second]["result"] = true;
-            jsonAnswers["Answers"][answer.second]["relevance"] = answer.first;
+            jsonAnswers["Answers"][key]["result"] = true;
+
+            // relevance — прежняя схема: массив пар [path, rel] (additive, не ломаем).
+            // results    — новый массив объектов с меткой deleted.
+            auto& relevanceArr = jsonAnswers["Answers"][key]["relevance"];
+            auto& resultsArr   = jsonAnswers["Answers"][key]["results"];
+            relevanceArr = nh::json::array();
+            resultsArr   = nh::json::array();
+            for(const auto& it : answer.first)
+            {
+                relevanceArr.push_back(nh::json::array({ it.path, it.relevance }));
+                resultsArr.push_back({
+                    {"path", it.path},
+                    {"rel", it.relevance},
+                    {"deleted", it.deleted}
+                });
+            }
         }
         else
-            jsonAnswers["Answers"][answer.second]["result"] = false;
+            jsonAnswers["Answers"][key]["result"] = false;
     }
 
     std::ofstream jsonFileSettings(jsonPath);
@@ -160,45 +685,6 @@ std::string ConverterJSON::putAnswers(const listAnswers& answers, const std::str
     jsonFileSettings.close();
     return move(ss);
 }
-
-std::vector<BackupGroup> ConverterJSON::parseBackupJobs(const std::string& path) {
-
-    std::ifstream file(path);
-    std::vector<BackupGroup> groups;
-    nh::json jsonData;
-    try {
-        jsonData = nh::json::parse(file);
-    } catch (...) {
-        return groups;
-    }
-
-    if (!jsonData.contains("BackupJobs") || !jsonData["BackupJobs"].is_array())
-        return groups;
-
-    for (const auto& groupJson : jsonData["BackupJobs"]) {
-        try {
-            BackupGroup group;
-            group.backup_dir = groupJson.at("backup_dir").get<std::string>();
-            group.period_sec = groupJson.value("period_sec", 3600);
-            if (!groupJson.contains("targets") || !groupJson["targets"].is_array())
-                continue;
-
-            for (const auto& entry : groupJson["targets"]) {
-                BackupTarget t;
-                t.src = entry.at("src").get<std::string>();
-                t.max_versions = entry.value("max_versions", 5);
-                t.is_directory = entry.value("is_directory", false);
-                group.targets.push_back(std::move(t));
-            }
-            if (!group.targets.empty())
-                groups.push_back(std::move(group));
-        } catch (...) {
-            continue;
-        }
-    }
-    return groups;
-}
-
 
 std::vector<std::string> ConverterJSON::getRequestsFromString(const std::string &jsonString) {
 
@@ -257,11 +743,11 @@ PrefixMap ConverterJSON::loadAttachPrefixLogin(const std::filesystem::path &path
     jsonFile.at("prefix").get_to(str_prefix);
     jsonFile.at("map").get_to(str_map);
 
-    pm.prefix = cc2::utf8ToWstring(str_prefix);
+    pm.prefix = encoding::utf8_to_wstring(str_prefix);
 
     for(const auto& [key,value]:str_map)
     {
-        pm.map_.insert({cc2::utf8ToWstring(key),cc2::utf8ToWstring(value)});
+        pm.map_.insert({encoding::utf8_to_wstring(key),encoding::utf8_to_wstring(value)});
     }
 
     return pm;
@@ -271,13 +757,13 @@ void ConverterJSON::saveAttachPrefixLogin(const PrefixMap& pm, const std::filesy
 
 
     // Преобразуем поле prefix обратно в строку
-    std::string str_prefix = cc2::wstringToUtf8(pm.prefix);
+    std::string str_prefix = encoding::wstring_to_utf8(pm.prefix);
     jsonFile["prefix"] = str_prefix;
 
     // Преобразуем карту map_ обратно в строковый формат
     std::map<std::string, std::string> str_map;
     for (const auto& [key, value] : pm.map_) {
-        str_map[cc2::wstringToUtf8(key)] = cc2::wstringToUtf8(value);
+        str_map[encoding::wstring_to_utf8(key)] = encoding::wstring_to_utf8(value);
     }
     jsonFile["map"] = str_map;
 
@@ -306,6 +792,7 @@ void to_json(nh::json& jsonTelega, const Telega &val)
     TO_JSON(jsonTelega, blank)
     TO_JSON(jsonTelega, gde_sht)
     TO_JSON(jsonTelega, last_mesto)
+    TO_JSON(jsonTelega, deleted)
 }
 void from_json(const nh::json& jsonTelega, Telega &val)
 {

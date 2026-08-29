@@ -1,4 +1,6 @@
 #include "SqlLogger.h"
+#include "Encoding.h"
+#include "LogFile.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -6,59 +8,19 @@
 #include <algorithm>
 #include <cctype>
 
-#include <windows.h>
-
-
-
-std::string oem866ToUtf8(const std::string& oemStr) {
-    // OEM866 → wide
-    int wlen = MultiByteToWideChar(866, 0, oemStr.c_str(), -1, nullptr, 0);
-    std::wstring wideStr(wlen, L'\0');
-    MultiByteToWideChar(866, 0, oemStr.c_str(), -1, &wideStr[0], wlen);
-
-    // wide → UTF-8
-    int utf8len = WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8Str(utf8len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, &utf8Str[0], utf8len, nullptr, nullptr);
-
-    // Удаляем завершающий нулевой символ
-    utf8Str.pop_back();
-
-    return utf8Str;
-}
+SqlLogger* SqlLogger::instance_ = nullptr;
+std::mutex SqlLogger::instanceMutex_;
 
 inline bool isLikelyFilePath(const std::string& str) {
-    // Простая проверка: путь вида "D:\..." или содержит слэш + расширение
     if (str.size() < 3) return false;
 
-    // D:\ или D:/ в начале
     if (std::isalpha(str[0]) && str[1] == ':' && (str[2] == '\\' || str[2] == '/'))
         return true;
 
-    // Проверка на наличие расширений файлов
     std::regex ext(R"(\.(txt|docx|log|shp|json|xml|ini|pdf|db))", std::regex::icase);
     if (std::regex_search(str, ext)) return true;
 
     return false;
-}
-
-
-inline std::string win1251ToUtf8(const std::string& str) {
-    if (str.empty()) return {};
-
-    int wlen = MultiByteToWideChar(1251, 0, str.c_str(), -1, nullptr, 0);
-    std::wstring wstr(wlen, L'\0');
-    MultiByteToWideChar(1251, 0, str.c_str(), -1, &wstr[0], wlen);
-
-    int utf8len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string utf8str(utf8len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8str[0], utf8len, nullptr, nullptr);
-
-    // убрать завершающий \0
-    if (!utf8str.empty() && utf8str.back() == '\0')
-        utf8str.pop_back();
-
-    return utf8str;
 }
 
 
@@ -126,9 +88,13 @@ std::string summarizeSql(const std::string& sql) {
 
 // Асинхронное добавление логов
 void SqlLogger::logRequest(const PersonalRequest& request) {
+    if (stopWorker.load(std::memory_order_acquire))
+        return;
     // Добавляем лог в очередь и уведомляем поток
     {
         std::lock_guard<std::mutex> lock(queueMutex);
+        if (stopWorker.load(std::memory_order_acquire))
+            return;
         logQueue.push(request);
     }
     queueCondVar.notify_one();
@@ -171,9 +137,9 @@ void SqlLogger::processQueue() {
             };
 
             if (isLikelyFilePath(request.request)) {
-                request.request = win1251ToUtf8(request.request);
+                request.request = encoding::win1251_to_utf8(request.request);
             } else if (request.request_type == "GET_SQL_JSON_ANSWER") {
-                request.request = oem866ToUtf8(request.request);
+                request.request = encoding::oem866_to_utf8(request.request);
             }
 
             request.request = summarizeSql(request.request);
@@ -190,7 +156,10 @@ void SqlLogger::processQueue() {
             try {
                 db.execSql(insertSQL);
             } catch (const std::exception& e) {
-                std::cerr << "Log DB error: " << e.what() << "\nQuery: " << insertSQL << std::endl;
+                const std::string message =
+                    std::string("SqlLogger insert failed: ") + e.what();
+                std::cerr << message << std::endl;
+                LogFile::getErrors().write(message);
             }
 
             lock.lock();  // Блокируем снова для доступа к очереди
@@ -201,10 +170,7 @@ void SqlLogger::processQueue() {
 
 // Singleton-геттер
 SqlLogger& SqlLogger::instance(const std::string& dbPath) {
-    static SqlLogger* instance_ = nullptr;
-    static std::mutex init_mutex;
-
-    std::lock_guard<std::mutex> lock(init_mutex);
+    std::lock_guard<std::mutex> lock(instanceMutex_);
     if (!instance_) {
         if (dbPath.empty()) {
             throw std::runtime_error("SqlLogger must be initialized with database path before first use.");
@@ -212,6 +178,17 @@ SqlLogger& SqlLogger::instance(const std::string& dbPath) {
         instance_ = new SqlLogger(dbPath);
     }
     return *instance_;
+}
+
+void SqlLogger::shutdown() noexcept
+{
+    SqlLogger* instance = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(instanceMutex_);
+        instance = instance_;
+        instance_ = nullptr;
+    }
+    delete instance;
 }
 
 void SqlLogger::logJson(const nh::json& json_log) {

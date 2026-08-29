@@ -47,3 +47,15 @@ void WordIdManager::rebuild(std::unordered_map<std::string, uint32_t>&& new_word
     word2id_ = std::move(new_word2id);
     id2word_ = std::move(new_id2word);
 }
+
+void WordIdManager::shrinkToFit()
+{
+    id2word_.shrink_to_fit();
+    for (auto& s : id2word_)
+        s.shrink_to_fit();
+
+    // У std::unordered_map нет shrink_to_fit; rehash(0) пересчитывает
+    // количество корзин под текущий size() и max_load_factor(),
+    // освобождая лишние корзины.
+    word2id_.rehash(0);
+}

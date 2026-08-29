@@ -1,0 +1,258 @@
+# Сборка SearchEngine на Windows
+
+Проект поддерживает две целевые архитектуры через CMake Presets:
+
+- `windows-x64` — Visual Studio 2022, x64;
+- `windows-x86` — Visual Studio 2022, Win32.
+
+Для каждой архитектуры есть отдельные Debug и Release build presets.
+Старые тесты по умолчанию отключены (`BUILD_TESTS=OFF`).
+
+## Полная пакетная индексация
+
+Параметр `config.full_index_strategy` принимает `legacy` или `batch`.
+Без нового поля используется значение `batch`. Этот режим
+применяется только к первичной полной сборке действительно пустого индекса;
+последующие точечные изменения выполняются существующей legacy-логикой. Для
+сравнения двух алгоритмов используйте отдельные чистые тестовые index DB.
+
+- `batch_reader_threads`: для HDD обычно `1`; для SSD/NVMe значение следует
+  подбирать измерением на тестовом корпусе;
+- `batch_indexer_threads`: `0` означает `hardware_concurrency`;
+- `batch_queue_memory_mb`: общий лимит payload в I/O-очередях. Он не включает
+  64-КиБ read-buffer каждого reader, текущий блок indexer, локальные словари и
+  RAM merge. Допустимый диапазон — 16..2048 MiB, в том числе на Win32.
+
+## Каталог документов
+
+Параметр `config.document_catalog_storage` не зависит от
+`full_index_strategy` и принимает:
+
+- `memory` — значение по умолчанию и поведение старых `Settings.json`; пути и
+  метаданные загружаются в `DocPaths`, а SQLite `docs` продолжает обновляться;
+- `sqlite` — постоянный полный каталог путей не загружается в RAM. Поиск
+  получает `path` и `deleted` пакетно только для итогового top-N.
+
+Смена режима применяется после перезапуска и не меняет `docId`. Исправная
+таблица `docs` позволяет переключаться без повторной индексации. Дубликаты
+`docs.path`, отсутствующие строки `docs` для postings и ошибки SQLite являются
+ошибкой запуска; автоматическое удаление или fallback на пустой каталог не
+выполняются.
+
+## Заморозка и перенос годового сервера
+
+Цель `SearchEngineArchive` собирает отдельную консольную утилиту
+`SearchEngineArchive.exe`. Первый пункт её меню всегда работает без службы:
+переносит файлы выбранного года и месячные AutoPad-базы в новый архив,
+исправляя `DirectTo` только в копиях баз.
+
+Второй сценарий сканирует службы `SearchEngineService[-instance]`. Для
+переноса службы требуется `document_catalog_storage=sqlite`. Утилита
+останавливает выбранный экземпляр, копирует программу, data-dir, индексируемые
+корни и базы во staging, проверяет SHA-256/SQLite, исправляет `docs.path` и
+`DirectTo`, атомарно публикует архив, устанавливает `server_mode=archive`,
+переключает SCM `ImagePath` и запускает архивную копию. Исходники удаляются
+только отдельной операцией после ручной проверки. Откат поддерживается и после
+этой очистки.
+
+В `archive`-режиме не запускаются watcher, стартовое сканирование и плановое
+обновление. `START_UPDATE_BASE` оставлен только точному имени `admin`, причём
+любой сеанс с этим именем принимается только с TCP peer `127.0.0.1`.
+
+Каталоги месячных баз задаются явно полями
+`config.prm_monthly_bases_dir` и `config.prd_monthly_bases_dir`. При отсутствии
+полей старые конфигурации получают `<prm_base_dir>\METH_BASES` и
+`<prd_base_dir>\METH_BASES`. Для PRD обязателен `12-<year>.db3`; эту
+декабрьскую базу утилита никогда автоматически не удаляет. Январь обрабатывается
+как обычная месячная база.
+
+## Быстрый старт
+
+```powershell
+cmake --preset windows-x64
+cmake --build --preset windows-x64-debug
+```
+
+Для 32-битной сборки замените `x64` на `x86`. Release собирается заменой
+`debug` на `release`.
+
+Не используйте один build-каталог для разных архитектур или генераторов.
+Presets размещают их раздельно в `out/build/`.
+
+## App-версия и release-пакеты
+
+Канон версии продукта — `app-version.json` (SearchEngineService) и
+`app-version.<Product>.json` для BackupService / ZagEditor / BackupRestore /
+SearchEngineArchiveE2EStand.
+
+- Формат: `major.minor.patch`
+- PE: `ProductVersion=A.B.C`, `FileVersion=A.B.C.0`
+- Generated resources: `cmake/generated/<Product>/*_version.rc`
+- Имена EXE **не** меняются (`SearchEngine.exe`, не `SearchEngine_v001.exe` в
+  portable/ZIP; legacy `copy_with_version.ps1` к release naming не относится)
+
+Продукты с отдельным version manifest:
+
+| Продукт | JSON | EXE |
+|---|---|---|
+| SearchEngineService | `app-version.json` | `SearchEngine.exe`, `SearchEngineConfig.exe`, `SearchEngineArchive.exe` (общая версия) |
+| BackupService | `app-version.BackupService.json` | `BackupService.exe` |
+| ZagEditor | `app-version.ZagEditor.json` | `ZagEditor.exe` |
+| BackupRestore | `app-version.BackupRestore.json` | `BackupRestore.exe` |
+| SearchEngineArchiveE2EStand | `app-version.SearchEngineArchiveE2EStand.json` | `SearchEngineArchiveE2EStand.exe` |
+
+`SearchEngineArchiveE2EStand` — отдельный тестовый продукт. Его CMake-опция
+по умолчанию выключена, штатные пакеты SearchEngineService его не содержат.
+Сборка и публикация полного синтетического стенда выполняются только через
+`scripts\Build-SearchEngineArchiveE2EStandRelease.ps1`; подробности — в
+`docs\ARCHIVE_E2E_STAND.md`.
+
+### Кто повышает patch
+
+| Сценарий | Bump patch | PE / пакет |
+|---|---|---|
+| IDE / CMake **Release** Build/Rebuild цели в packagable preset (`windows-x64`, `windows-x86`, `windows7-x86`) при `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=ON` | Да, **один раз до компиляции** (`Ensure-ReleaseVersionBump.ps1` → sync `.rc`/`.h`) | POST_BUILD упаковывает **ту же** новую версию |
+| `Build-*Package.ps1` | Да, один раз в начале скрипта (до configure/build); `Architecture=All` — одна версия на все архитектуры | Затем build + `New-*Package`; CMake bump отключён (`PACKAGE_ON=OFF` и/или `SEARCHENGINE_VERSION_BUMP_MODE=skip`) |
+| `Build-*Package.ps1 -SkipVersionBump` | Нет | Текущая версия в PE и пакете |
+| `New-*Package.ps1` (повторная упаковка) | Нет | Текущая версия из JSON / PE |
+| `Build-SearchEngineArchiveE2EStandRelease.ps1` | Да, только версия stand-продукта | Отдельный stand-каталог и отдельный ZIP-канал; обычный серверный пакет не меняется |
+| Debug / RelWithDebInfo / MinSizeRel | Нет | Пакет не публикуется |
+| `SEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF` | Нет (IDE/CMake path) | POST_BUILD упаковки нет |
+
+Важно: bump **нельзя** делать только в POST_BUILD — EXE уже собран со старым
+VERSIONINFO. При ошибке компиляции после bump пакет и cloud ZIP не создаются
+(POST_BUILD не запускается).
+
+Release через скрипт (bump → build → package → cloud при настроенном
+`WORKSPACE_RELEASE_CLOUD_ROOT`):
+
+```powershell
+.\scripts\Build-SearchEngineServicePackage.ps1 -Architecture x64
+```
+
+Без увеличения patch: `-SkipVersionBump`. Без облака: `-SkipCloudPublish`.
+
+### Годовые fresh-настройки SearchEngineService
+
+Стабильный исходный шаблон новой установки находится в
+`deployment\SearchEngineServicePortable\source-data\Settings.json`. Во время
+`New-SearchEngineServicePackage.ps1` скрипт
+`scripts\Prepare-YearBasedReleaseSettings.ps1` создаёт производный
+`data\Settings.json` внутри уникального package staging-каталога
+`.SearchEngineService-*.staging-<guid>`. Сразу после генерации именно этот файл
+проверяется `SearchEngineConfig validate` и только затем входит в пакет.
+
+По умолчанию один календарный год выбирается на canonical package-flow и явно
+передаётся всем собираемым архитектурам. Для воспроизводимой подготовки укажите
+его явно:
+
+```powershell
+.\scripts\Build-SearchEngineServicePackage.ps1 -Year 2027
+.\scripts\New-SearchEngineServicePackage.ps1 -Architecture x64 -Year 2027
+```
+
+Генератор записывает строковый `config.year` и вычисляет `config.asio_port` из
+порта исходного шаблона:
+
+```text
+generatedPort = floor(basePort / 10) * 10 + (year % 10)
+```
+
+Например, `15006` даёт `15007` для 2027 года и `15000` для 2030 года. Другие
+поля не меняются. Публикация staging-файла атомарна; при ошибке JSON/schema,
+диапазона 2000..2099, порта 1..65535, canonical validation или выходе пути за
+staging подготовка прекращается с ненулевым кодом, не повреждая предыдущий
+валидный файл.
+
+Обычная Debug-сборка генератор не запускает. Tracked template не изменяется.
+При update/reinstall установленный Settings рекурсивно импортируется поверх
+нового template: существующие и unknown-поля сохраняются, а явно выбранные
+пользователем значения имеют приоритет. Генератор не вызывается при старте
+SearchEngine и не входит в установочный runtime.
+
+Fresh template по умолчанию хранит каталог документов в SQLite
+(`document_catalog_storage=sqlite`), не обновляет краткое содержание PRM
+(`enable_prm_short_content_autodetect=false`) и не сканирует при каждом старте
+(`scan_on_startup=false`). Portable-пакет также включает
+`Local-Machine-Install.bat`: fresh-only установку без вопросов с instance id
+текущего года, автоматическим свободным портом, provisioning локального токена
+и синхронным `SearchEngine.exe --initial-update` до запуска службы.
+
+Локальный пакет и ZIP на Drive:
+
+```text
+out\package\<A.B.C>\SearchEngineService-x64\
+Releases\SearchEngineService\<A.B.C>\SearchEngineService-x64-<A.B.C>.zip
+```
+
+## Требуемые локальные зависимости
+
+По умолчанию CMake использует:
+
+| Зависимость | x64 | x86 |
+|---|---|---|
+| Boost 1.85 | `C:/Boost/windows` | `C:/Boost/windows32` |
+| OpenSSL 3 | `C:/Program Files/OpenSSL-Win64` | `C:/Program Files (x86)/OpenSSL-Win32` |
+| utf8proc | собирается из `utf8proc-2.10.0/utf8proc-2.10.0` |
+
+Пути можно изменить переменными:
+
+- `SEARCHENGINE_BOOST_ROOT`;
+- `SEARCHENGINE_BOOST_COMPILER`;
+- `SEARCHENGINE_OPENSSL_ROOT`;
+- `SEARCHENGINE_UTF8PROC_SOURCE_DIR`.
+
+CMake проверяет, что у бинарных Boost-компонентов есть обе конфигурации и
+что их архитектура совпадает с целью.
+
+## Согласованность Debug/Release
+
+Весь MSVC-граф сборки использует один CRT:
+
+- Debug: `/MDd`, `_ITERATOR_DEBUG_LEVEL=2`;
+- Release и RelWithDebInfo: `/MD`, `_ITERATOR_DEBUG_LEVEL=0`.
+
+Значение `_ITERATOR_DEBUG_LEVEL` не переопределяется вручную. Boost выбирается
+через imported targets, поэтому Debug линкуется с `-gd-` библиотеками, а
+Release — с обычными. OpenSSL находится стандартным `FindOpenSSL`, который
+выбирает каталоги `MDd` и `MD` соответственно.
+
+Debug и RelWithDebInfo создают полные PDB в `out/build/<preset>/symbols/`.
+В Debug явно отключены оптимизация и inline-подстановка (`/Od /Ob0`).
+
+Старый тестовый проект не входит в стандартный граф сборки. При необходимости
+его можно включить вручную через `-DBUILD_TESTS=ON`.
+
+## Пересборка Boost
+
+Обе архитектуры Boost можно пересобрать согласованно с VS 2022:
+
+```powershell
+.\cmake\BuildBoost.ps1 -Architecture all -Toolset msvc-14.3
+```
+
+Скрипт собирает `variant=debug,release`, `link=static`,
+`runtime-link=shared`. То есть Debug получает `/MDd` и debug runtime, Release
+— `/MD`. Для каждой архитектуры используются отдельные install/build
+каталоги.
+
+## Результаты ревизии старой конфигурации
+
+До исправления корневой CMake:
+
+- всегда задавал `C:/Boost/windows32` и `vc142`, включая x64;
+- определял `_X86_` для любого MSVC target;
+- всегда включал `/arch:AVX2`;
+- линковал единственный `utf8proc_static.lib`, который является x86;
+- использовал глобальные include/link directories и список
+  `${Boost_LIBRARIES}`, из-за чего выбор конфигурации зависел от cache;
+- не закреплял единый MSVC CRT для приложения, Boost и GoogleTest.
+
+Проверка локальных Boost.Serialization библиотек показала, что сами пары
+Boost корректны:
+
+- x64 `vc143`: Debug `/MDd`, iterator level 2; Release `/MD`, level 0;
+- x86 `vc142`: Debug `/MDd`, iterator level 2; Release `/MD`, level 0.
+
+Следовательно, основная проблема была в выборе архитектуры/конфигурации в
+CMake и в x86-only utf8proc, а не в debug level локального Boost.

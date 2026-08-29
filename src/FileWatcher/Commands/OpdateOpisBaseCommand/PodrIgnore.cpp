@@ -1,8 +1,7 @@
 #include "PodrIgnore.h"
-
+#include "MyUtils/LogFile.h"
 #include <fstream>
 #include <filesystem>
-#include <iostream>
 
 using std::string;
 namespace fs = std::filesystem;
@@ -60,7 +59,7 @@ PodrIgnore::PodrIgnore(string file_path)
         load();
     }
     catch (const std::exception& e) {
-        std::cerr << "PodrIgnore: " << e.what() << '\n';
+        LogFile::getRecord().write(std::string("PodrIgnore: ") + e.what());
         throw;
     }
 }

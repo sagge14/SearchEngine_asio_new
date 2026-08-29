@@ -11,6 +11,7 @@ public:
     static SQLiteConnectionManager& instance();
 
     std::shared_ptr<mySQLite> getConnection(const std::string& dbPath);
+    std::shared_ptr<mySQLite> getReadOnlyConnection(const std::string& dbPath);
     void closeConnection(const std::string& dbPath);
 
 private:
@@ -21,5 +22,6 @@ private:
     SQLiteConnectionManager& operator=(const SQLiteConnectionManager&) = delete;
 
     std::map<std::string, std::shared_ptr<mySQLite>> connections_;
+    std::map<std::string, std::shared_ptr<mySQLite>> readOnlyConnections_;
     std::mutex mutex_;
 };

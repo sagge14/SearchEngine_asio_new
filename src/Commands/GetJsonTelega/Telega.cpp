@@ -4,30 +4,15 @@
 
 #include "Telega.h"
 #include "SQLite/SQLiteConnectionManager.h"
-#include <codecvt>
+#include "MyUtils/Encoding.h"
+#include <algorithm>
+#include <cctype>
+#include <ctime>
 #include <string>
 #include <regex>
 #include <sstream>
 #include <optional>
 #include <iostream>
-
-namespace conv2
-{
-    using namespace std;
-    using convert_t = std::codecvt_utf8<wchar_t>;
-
-    wstring_convert<convert_t, wchar_t> strconverter;
-
-    string to_string(const std::wstring& wstr)                                 //Конструкция перевода в String из WString
-    {
-        return strconverter.to_bytes(wstr);
-    }
-
-    wstring to_wstring(const std::string& str)                                 //Конструкция перевода в WString из String
-    {
-        return strconverter.from_bytes(str);
-    }
-}
 
 
 
@@ -128,7 +113,7 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
 
             auto sql_qry = ss.str();
 
-            auto db = SQLiteConnectionManager::instance().getConnection(base_name);
+            auto db = SQLiteConnectionManager::instance().getReadOnlyConnection(base_name);
             db->execSql(sql_qry);
 
             if (!db->empty()) {
@@ -143,10 +128,139 @@ std::list<std::map<std::string,std::string>> Telega::findBase(const std::string&
             }
         }
     }
-    catch(...)
-    {std::cout << "sql error" << std::endl;}
+    catch (const std::exception&)
+    {
+        throw;
+    }
 
     return std::move(result);
+}
+
+const std::string& Telega::baseDir(TYPE type) noexcept
+{
+    switch (type)
+    {
+        case TYPE::VHOD: return prm_base_dir;
+        case TYPE::ISHOD: return prd_base_dir;
+        case TYPE::NOTTG: break;
+    }
+    static const std::string empty;
+    return empty;
+}
+
+bool Telega::isSourceConfigured(TYPE type) noexcept
+{
+    if (!archive_mode)
+        return !baseDir(type).empty();
+    switch (type)
+    {
+        case TYPE::VHOD:
+            return !prm_monthly_bases_dir.empty() || !prm_base_dir.empty();
+        case TYPE::ISHOD:
+            return !prd_monthly_bases_dir.empty() || !prd_base_dir.empty();
+        case TYPE::NOTTG:
+            return false;
+    }
+    return false;
+}
+
+std::string Telega::monthlyBaseDir(TYPE type)
+{
+    const std::string* explicitDirectory = nullptr;
+    switch (type)
+    {
+        case TYPE::VHOD: explicitDirectory = &prm_monthly_bases_dir; break;
+        case TYPE::ISHOD: explicitDirectory = &prd_monthly_bases_dir; break;
+        case TYPE::NOTTG: return {};
+    }
+    if (explicitDirectory && !explicitDirectory->empty())
+        return *explicitDirectory;
+    const auto& base = baseDir(type);
+    return base.empty() ? std::string() : base + "\\METH_BASES";
+}
+
+const char* Telega::sourceLabel(TYPE type) noexcept
+{
+    switch (type)
+    {
+        case TYPE::VHOD: return "PRM";
+        case TYPE::ISHOD: return "PRD";
+        case TYPE::NOTTG: break;
+    }
+    return "UNKNOWN";
+}
+
+std::string Telega::disabledDiagnostic(TYPE type)
+{
+    return std::string(sourceLabel(type)) + " data source is disabled";
+}
+
+std::string Telega::unavailableDiagnostic(TYPE type)
+{
+    return std::string(sourceLabel(type)) + " data source is unavailable";
+}
+
+Telega::SourceAvailability Telega::probeSource(TYPE type)
+{
+    if (!isSourceConfigured(type))
+        return SourceAvailability::Disabled;
+
+    std::error_code ec;
+    const auto path = std::filesystem::u8path(
+        archive_mode ? monthlyBaseDir(type) : baseDir(type));
+    if (!std::filesystem::is_directory(path, ec) || ec)
+        return SourceAvailability::Unavailable;
+    return SourceAvailability::Configured;
+}
+
+void Telega::ensureBasesLoaded(TYPE type)
+{
+    if (type != TYPE::VHOD && type != TYPE::ISHOD)
+    {
+        throw SourceError(
+            SourceAvailability::Unavailable,
+            type,
+            "unsupported AutoPad source type");
+    }
+
+    if (!isSourceConfigured(type))
+    {
+        if (type == TYPE::VHOD)
+            b_prm.clear();
+        else
+            b_prd.clear();
+        throw SourceError(
+            SourceAvailability::Disabled,
+            type,
+            disabledDiagnostic(type));
+    }
+
+    if (probeSource(type) == SourceAvailability::Unavailable)
+    {
+        throw SourceError(
+            SourceAvailability::Unavailable,
+            type,
+            unavailableDiagnostic(type));
+    }
+
+    auto bases = getBases(type);
+    if (type == TYPE::VHOD)
+        b_prm = std::move(bases);
+    else
+        b_prd = std::move(bases);
+}
+
+std::string Telega::archiveDbPathFor(TYPE type)
+{
+    // A frozen server is backed exclusively by year/month databases.  Never
+    // expose a synthetic ARCHIVE.db3 path: writable maintenance code must not
+    // create an operational database inside the archive.
+    if (archive_mode)
+        return {};
+    const auto& dir = baseDir(type);
+    if (dir.empty())
+        return {};
+    return dir + "\\ARCHIVE.DB3";
 }
 
 std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
@@ -173,14 +287,23 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
             break;
     }
 
-    if(getYearNow() == Telega::year)
-        res.push_back(bases_dir + "\\ARCHIVE.db3");
+    // Empty path means the source is disabled: never touch the filesystem
+    // and never build rooted paths like "\ARCHIVE.db3".
+    if (!isSourceConfigured(_type))
+        return res;
+
+    const std::string archive_database = bases_dir + "\\ARCHIVE.db3";
+    if(!archive_mode && getYearNow() == Telega::year &&
+       std::filesystem::is_regular_file(archive_database))
+        res.push_back(archive_database);
+
+    const std::string monthly_dir = monthlyBaseDir(_type);
 
     for(int i = 12; i >= 0; i--)
     {
 
         std::ostringstream oss;
-        oss << bases_dir << "\\METH_BASES\\" << ms[i] << "-" << Telega::year << ".db3";
+        oss << monthly_dir << "\\" << ms[i] << "-" << Telega::year << ".db3";
         auto base_name = oss.str();
 
         if (!std::filesystem::exists(base_name))
@@ -191,8 +314,9 @@ std::vector<std::string> Telega::getBases(Telega::TYPE _type) {
 
     }
 
-    if(res.empty() && getYearNow() != Telega::year)
-        res.push_back(bases_dir + "ARCHIVE.db3");
+    if(!archive_mode && res.empty() && getYearNow() != Telega::year &&
+       std::filesystem::is_regular_file(archive_database))
+        res.push_back(archive_database);
 
     return res;
 }
@@ -224,7 +348,7 @@ void Telega::initTelega(const std::map<std::string, std::string> &_record) {
             gde_sht = _record.at("GdeSHT");
             try
             {
-                auto tt = conv2::to_wstring(from_to);
+                auto tt = encoding::utf8_to_wstring(from_to);
             }
             catch(...)
             {
@@ -253,7 +377,7 @@ std::string Telega::getNumFromFileName(const std::filesystem::path& path)
         return {};
 }
 
-Telega::Telega(const std::filesystem::path& _p, float _rel) : Telega(TYPE::NOTTG, _p, _rel) {
+Telega::Telega(const std::filesystem::path& _p, float _rel, bool _deleted) : Telega(TYPE::NOTTG, _p, _rel, _deleted) {
 
     type = getTypeFromDir(_p);
 
@@ -261,4 +385,9 @@ Telega::Telega(const std::filesystem::path& _p, float _rel) : Telega(TYPE::NOTTG
 
     if(!res.empty())
         initTelega(res.front());
+
+    // Карточка из автопада не найдена (или не разобралась) — номера остаются
+    // пустыми/нулями на клиенте, в «Краткое содержание» пишем пояснение.
+    if (num.empty())
+        kr = "Нет учётных данных в базах автопад";
 }

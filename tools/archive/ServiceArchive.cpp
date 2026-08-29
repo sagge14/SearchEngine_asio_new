@@ -1,0 +1,3443 @@
+#include "ServiceArchive.h"
+
+#include "Backup/FileHash.h"
+#include "Backup/SQLiteBackup.h"
+#include "MyUtils/Encoding.h"
+#include "nlohmann/json.hpp"
+#include "sqlite3.h"
+
+#include <Windows.h>
+#include <Shellapi.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cwctype>
+#include <fstream>
+#include <iomanip>
+#include <map>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <system_error>
+#include <thread>
+#include <utility>
+
+namespace searchengine_archive {
+namespace {
+
+using json = nlohmann::json;
+
+constexpr wchar_t kManifestName[] = L"archive-operation.json";
+constexpr DWORD kServiceWaitMilliseconds = 120000;
+
+std::string utf8(const fs::path& path)
+{
+    return encoding::wstring_to_utf8(path.wstring());
+}
+
+std::string utf8(const std::wstring& value)
+{
+    return encoding::wstring_to_utf8(value);
+}
+
+fs::path fromUtf8(const std::string& value)
+{
+    return fs::path(encoding::utf8_to_wstring(value));
+}
+
+std::wstring lower(std::wstring value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(),
+        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return value;
+}
+
+bool samePath(const fs::path& left, const fs::path& right)
+{
+    return isPathEqualOrBelow(left, right) && isPathEqualOrBelow(right, left);
+}
+
+bool pathsOverlap(const fs::path& left, const fs::path& right)
+{
+    return isPathEqualOrBelow(left, right) || isPathEqualOrBelow(right, left);
+}
+
+bool isDriveRoot(const fs::path& value)
+{
+    const fs::path normalized = value.lexically_normal();
+    return !normalized.root_path().empty() &&
+        normalized == normalized.root_path();
+}
+
+fs::path absoluteNormalized(const fs::path& value)
+{
+    std::error_code error;
+    fs::path result = fs::absolute(value, error);
+    if (error)
+        result = value;
+    return result.lexically_normal();
+}
+
+bool isRestorableRunningPhase(const std::string& phase)
+{
+    return phase == "archive-running" ||
+        phase == "archive-running-source-cleanup-in-progress" ||
+        phase == "archive-running-source-cleanup-incomplete" ||
+        phase == "archive-running-source-cleaned";
+}
+
+bool sourceCleanupMayHaveStarted(const std::string& phase)
+{
+    return phase != "archive-running" && isRestorableRunningPhase(phase);
+}
+
+std::wstring expandEnvironment(const std::wstring& value)
+{
+    const DWORD required = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
+    if (required == 0)
+        throw std::runtime_error("ExpandEnvironmentStringsW failed");
+    std::wstring result(required, L'\0');
+    const DWORD written = ExpandEnvironmentStringsW(
+        value.c_str(), result.data(), required);
+    if (written == 0 || written > required)
+        throw std::runtime_error("ExpandEnvironmentStringsW failed");
+    result.resize(written - 1);
+    return result;
+}
+
+std::wstring quoteArgument(const std::wstring& value)
+{
+    std::wstring result = L"\"";
+    std::size_t slashes = 0;
+    for (wchar_t ch : value) {
+        if (ch == L'\\') {
+            ++slashes;
+            continue;
+        }
+        if (ch == L'\"') {
+            result.append(slashes * 2 + 1, L'\\');
+            result.push_back(L'\"');
+            slashes = 0;
+            continue;
+        }
+        result.append(slashes, L'\\');
+        slashes = 0;
+        result.push_back(ch);
+    }
+    result.append(slashes * 2, L'\\');
+    result.push_back(L'\"');
+    return result;
+}
+
+json readJson(const fs::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw std::runtime_error("cannot open JSON: " + utf8(path));
+    json value;
+    input >> value;
+    if (!input.eof() && input.fail())
+        throw std::runtime_error("cannot parse JSON: " + utf8(path));
+    return value;
+}
+
+void saveJsonAtomically(const fs::path& path, const json& value)
+{
+    fs::create_directories(path.parent_path());
+    const fs::path temporary = path.wstring() + L".tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output)
+            throw std::runtime_error("cannot write JSON: " + utf8(temporary));
+        output << value.dump(2) << '\n';
+        if (!output)
+            throw std::runtime_error("cannot finish JSON: " + utf8(temporary));
+    }
+    if (!MoveFileExW(
+            temporary.c_str(), path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        throw std::runtime_error(
+            "cannot publish JSON; Win32 error=" +
+            std::to_string(GetLastError()));
+    }
+}
+
+class ServiceHandle final {
+public:
+    explicit ServiceHandle(SC_HANDLE handle = nullptr) : handle_(handle) {}
+    ~ServiceHandle()
+    {
+        if (handle_)
+            CloseServiceHandle(handle_);
+    }
+    ServiceHandle(const ServiceHandle&) = delete;
+    ServiceHandle& operator=(const ServiceHandle&) = delete;
+    ServiceHandle(ServiceHandle&& other) noexcept
+        : handle_(std::exchange(other.handle_, nullptr)) {}
+    ServiceHandle& operator=(ServiceHandle&& other) noexcept
+    {
+        if (this != &other) {
+            if (handle_)
+                CloseServiceHandle(handle_);
+            handle_ = std::exchange(other.handle_, nullptr);
+        }
+        return *this;
+    }
+    SC_HANDLE get() const noexcept { return handle_; }
+    explicit operator bool() const noexcept { return handle_ != nullptr; }
+
+private:
+    SC_HANDLE handle_{};
+};
+
+class ScManager final {
+public:
+    explicit ScManager(DWORD access)
+        : handle_(OpenSCManagerW(nullptr, nullptr, access))
+    {
+        if (!handle_)
+            throw std::runtime_error(
+                "cannot open Windows Service Control Manager; Win32 error=" +
+                std::to_string(GetLastError()));
+    }
+    SC_HANDLE get() const noexcept { return handle_.get(); }
+
+private:
+    ServiceHandle handle_;
+};
+
+SERVICE_STATUS_PROCESS queryStatus(SC_HANDLE service)
+{
+    SERVICE_STATUS_PROCESS status{};
+    DWORD bytes = 0;
+    if (!QueryServiceStatusEx(
+            service, SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<BYTE*>(&status), sizeof(status), &bytes))
+    {
+        throw std::runtime_error(
+            "QueryServiceStatusEx failed; Win32 error=" +
+            std::to_string(GetLastError()));
+    }
+    return status;
+}
+
+std::wstring queryImagePath(SC_HANDLE service)
+{
+    DWORD bytes = 0;
+    QueryServiceConfigW(service, nullptr, 0, &bytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0)
+        throw std::runtime_error("QueryServiceConfigW size query failed");
+    std::vector<BYTE> buffer(bytes);
+    auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+    if (!QueryServiceConfigW(service, config, bytes, &bytes))
+        throw std::runtime_error(
+            "QueryServiceConfigW failed; Win32 error=" +
+            std::to_string(GetLastError()));
+    return config->lpBinaryPathName ? config->lpBinaryPathName : L"";
+}
+
+void waitForState(SC_HANDLE service, DWORD desired)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kServiceWaitMilliseconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto status = queryStatus(service);
+        if (status.dwCurrentState == desired)
+            return;
+        if (desired == SERVICE_RUNNING &&
+            status.dwCurrentState == SERVICE_STOPPED)
+        {
+            throw std::runtime_error(
+                "service stopped during startup; service Win32 exit=" +
+                std::to_string(status.dwWin32ExitCode));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    throw std::runtime_error("timeout waiting for Windows service state");
+}
+
+void stopService(SC_HANDLE service)
+{
+    auto status = queryStatus(service);
+    if (status.dwCurrentState == SERVICE_STOPPED)
+        return;
+    if (status.dwCurrentState == SERVICE_STOP_PENDING) {
+        waitForState(service, SERVICE_STOPPED);
+        return;
+    }
+    if (status.dwCurrentState != SERVICE_RUNNING &&
+        status.dwCurrentState != SERVICE_PAUSED)
+    {
+        throw std::runtime_error("service is in an unsupported transition");
+    }
+    SERVICE_STATUS control{};
+    if (!ControlService(service, SERVICE_CONTROL_STOP, &control))
+        throw std::runtime_error(
+            "ControlService(STOP) failed; Win32 error=" +
+            std::to_string(GetLastError()));
+    waitForState(service, SERVICE_STOPPED);
+}
+
+void startService(SC_HANDLE service)
+{
+    const auto status = queryStatus(service);
+    if (status.dwCurrentState == SERVICE_RUNNING)
+        return;
+    if (status.dwCurrentState == SERVICE_START_PENDING) {
+        waitForState(service, SERVICE_RUNNING);
+        return;
+    }
+    if (status.dwCurrentState != SERVICE_STOPPED)
+        throw std::runtime_error("service is not stopped before startup");
+    if (!StartServiceW(service, 0, nullptr))
+        throw std::runtime_error(
+            "StartServiceW failed; Win32 error=" +
+            std::to_string(GetLastError()));
+    waitForState(service, SERVICE_RUNNING);
+}
+
+void setImagePath(SC_HANDLE service, const std::wstring& imagePath)
+{
+    if (!ChangeServiceConfigW(
+            service,
+            SERVICE_NO_CHANGE,
+            SERVICE_NO_CHANGE,
+            SERVICE_NO_CHANGE,
+            imagePath.c_str(),
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr))
+    {
+        throw std::runtime_error(
+            "ChangeServiceConfigW failed; Win32 error=" +
+            std::to_string(GetLastError()));
+    }
+    if (queryImagePath(service) != imagePath)
+        throw std::runtime_error("SCM ImagePath verification failed");
+}
+
+ServiceHandle openServiceForArchive(
+    SC_HANDLE manager,
+    const std::wstring& serviceName)
+{
+    ServiceHandle service(OpenServiceW(
+        manager,
+        serviceName.c_str(),
+        SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS |
+        SERVICE_STOP | SERVICE_START | SERVICE_CHANGE_CONFIG));
+    if (!service)
+        throw std::runtime_error(
+            "cannot open service '" + utf8(serviceName) +
+            "'; Win32 error=" + std::to_string(GetLastError()));
+    return service;
+}
+
+struct CopiedFile {
+    fs::path source;
+    fs::path stagedTarget;
+    FileHashResult original;
+};
+
+bool isTlgRoot(const fs::path& value)
+{
+    return samePath(value, fs::path(L"D:\\TLG"));
+}
+
+bool isReparsePoint(const fs::path& value)
+{
+    const DWORD attributes = GetFileAttributesW(value.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
+void copyOneFile(
+    const fs::path& source,
+    const fs::path& target,
+    std::vector<CopiedFile>& copied)
+{
+    fs::create_directories(target.parent_path());
+    if (fs::exists(target))
+        throw std::runtime_error("target collision: " + utf8(target));
+    std::error_code error;
+    fs::copy_file(source, target, fs::copy_options::none, error);
+    if (error)
+        throw std::runtime_error(
+            "cannot copy '" + utf8(source) + "': " + error.message());
+    const auto sourceTime = fs::last_write_time(source, error);
+    if (!error)
+        fs::last_write_time(target, sourceTime, error);
+    const FileHashResult sourceHash = sha256File(source);
+    const FileHashResult targetHash = sha256File(target);
+    if (!sourceHash.ok || !targetHash.ok ||
+        sourceHash.size != targetHash.size ||
+        sourceHash.sha256 != targetHash.sha256)
+    {
+        throw std::runtime_error(
+            "copied file verification failed: " + utf8(source));
+    }
+    copied.push_back({source, target, sourceHash});
+}
+
+void copyTree(
+    const fs::path& source,
+    const fs::path& target,
+    int archivedYear,
+    std::vector<CopiedFile>& copied,
+    const std::vector<fs::path>& excludedRoots = {})
+{
+    if (!fs::is_directory(source))
+        throw std::runtime_error("source directory is missing: " + utf8(source));
+    if (isReparsePoint(source))
+        throw std::runtime_error("source root is a reparse point: " + utf8(source));
+    fs::create_directories(target);
+    for (fs::recursive_directory_iterator it(source), end; it != end; ++it) {
+        const bool excluded = std::any_of(
+            excludedRoots.begin(), excludedRoots.end(),
+            [&](const fs::path& root) {
+                return !root.empty() && isPathEqualOrBelow(it->path(), root);
+            });
+        if (excluded) {
+            if (it->is_directory())
+                it.disable_recursion_pending();
+            continue;
+        }
+        if (isReparsePoint(it->path())) {
+            if (it->is_directory())
+                it.disable_recursion_pending();
+            throw std::runtime_error(
+                "reparse points are not archived automatically: " +
+                utf8(it->path()));
+        }
+        const fs::path relative = it->path().lexically_relative(source);
+        if (shouldSkipArchiveTreeEntry(
+                source,
+                it->path().filename(),
+                it.depth(),
+                it->is_directory(),
+                archivedYear))
+        {
+            if (it->is_directory())
+                it.disable_recursion_pending();
+            continue;
+        }
+        const fs::path destination = target / relative;
+        if (it->is_directory())
+            fs::create_directories(destination);
+        else if (it->is_regular_file())
+            copyOneFile(it->path(), destination, copied);
+    }
+}
+
+void replaceStagedIndexWithSnapshot(
+    const fs::path& sourceIndex,
+    const fs::path& stagedIndex,
+    std::vector<CopiedFile>& copied)
+{
+    const fs::path snapshot = stagedIndex.wstring() + L".archive-snapshot";
+    const SQLiteBackupResult backup = backupSQLiteDatabase(
+        sourceIndex, snapshot);
+    if (!backup.ok) {
+        throw std::runtime_error(
+            "inverted index SQLite backup failed: " + backup.message);
+    }
+
+    const std::vector<fs::path> replacedFiles{
+        stagedIndex,
+        fs::path(stagedIndex.wstring() + L"-wal"),
+        fs::path(stagedIndex.wstring() + L"-shm"),
+        fs::path(stagedIndex.wstring() + L"-journal")};
+    for (const auto& path : replacedFiles) {
+        std::error_code error;
+        fs::remove(path, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot remove raw staged SQLite file '" + utf8(path) +
+                "': " + error.message());
+        }
+    }
+
+    std::error_code publishError;
+    fs::rename(snapshot, stagedIndex, publishError);
+    if (publishError) {
+        throw std::runtime_error(
+            "cannot publish staged inverted index snapshot: " +
+            publishError.message());
+    }
+
+    copied.erase(
+        std::remove_if(
+            copied.begin(), copied.end(),
+            [&](const CopiedFile& file) {
+                return std::any_of(
+                    replacedFiles.begin() + 1,
+                    replacedFiles.end(),
+                    [&](const fs::path& sidecar) {
+                        return samePath(file.stagedTarget, sidecar);
+                    });
+            }),
+        copied.end());
+}
+
+std::wstring safeServiceLeaf(const std::wstring& serviceName)
+{
+    std::wstring value = serviceName;
+    for (wchar_t& ch : value) {
+        if (!std::iswalnum(ch) && ch != L'-' && ch != L'_')
+            ch = L'_';
+    }
+    return value.empty() ? L"SearchEngineService" : value;
+}
+
+void addMapping(
+    ServiceArchivePlan& plan,
+    const fs::path& source,
+    const fs::path& target)
+{
+    const fs::path normalized = absoluteNormalized(source);
+    if (normalized.empty() || !normalized.is_absolute() || isDriveRoot(normalized))
+        throw std::runtime_error("unsafe source root: " + utf8(source));
+    for (const auto& existing : plan.mappings) {
+        if (samePath(existing.target, target) &&
+            !samePath(existing.source, normalized))
+        {
+            throw std::runtime_error(
+                "archive content roots have the same folder name; "
+                "rename one source folder: " + utf8(normalized.filename()));
+        }
+        if (isPathEqualOrBelow(normalized, existing.source))
+            return;
+        if (isPathEqualOrBelow(existing.source, normalized)) {
+            throw std::runtime_error(
+                "archive content root contains a server program/data root: " +
+                utf8(normalized));
+        }
+    }
+    if (isPathEqualOrBelow(plan.finalDirectory, normalized) ||
+        isPathEqualOrBelow(normalized, plan.finalDirectory))
+    {
+        throw std::runtime_error(
+            "archive destination overlaps a source root: " + utf8(normalized));
+    }
+    plan.mappings.push_back({normalized, target});
+}
+
+std::string requiredString(const json& config, const char* name)
+{
+    if (!config.contains(name) || !config.at(name).is_string())
+        throw std::runtime_error(std::string("config.") + name + " is required");
+    return config.at(name).get<std::string>();
+}
+
+std::vector<fs::path> configuredIndexRoots(const json& config)
+{
+    if (!config.contains("index_roots") ||
+        !config.at("index_roots").is_array() ||
+        config.at("index_roots").empty())
+    {
+        throw std::runtime_error("config.index_roots must be a non-empty array");
+    }
+    std::vector<fs::path> roots;
+    for (const auto& value : config.at("index_roots")) {
+        if (!value.is_string())
+            throw std::runtime_error("config.index_roots contains a non-string");
+        roots.push_back(fromUtf8(value.get<std::string>()));
+    }
+    return roots;
+}
+
+fs::path configuredMonthlyDirectory(
+    const json& config,
+    const char* explicitName,
+    const char* baseName)
+{
+    if (config.contains(explicitName)) {
+        if (!config.at(explicitName).is_string())
+            throw std::runtime_error(
+                std::string("config.") + explicitName + " must be a string");
+        return fromUtf8(config.at(explicitName).get<std::string>());
+    }
+    const std::string base = requiredString(config, baseName);
+    return base.empty() ? fs::path{} : fromUtf8(base) / L"METH_BASES";
+}
+
+std::optional<fs::path> tryRebase(
+    const fs::path& value,
+    const std::vector<PathMapping>& mappings)
+{
+    for (const auto& mapping : mappings) {
+        if (isPathEqualOrBelow(value, mapping.source))
+            return rebasePath(value, mappings);
+    }
+    return std::nullopt;
+}
+
+void rewriteSettings(
+    const fs::path& settingsPath,
+    const std::vector<PathMapping>& mappings,
+    const fs::path& prmMonthlyDirectory,
+    const fs::path& prdMonthlyDirectory,
+    const char* mode)
+{
+    json root = readJson(settingsPath);
+    if (!root.contains("config") || !root.at("config").is_object())
+        throw std::runtime_error("Settings.json has no config object");
+    json& config = root["config"];
+    const auto rewriteArray = [&](const char* name, bool keepOutside) {
+        if (!config.contains(name))
+            return;
+        if (!config.at(name).is_array())
+            throw std::runtime_error(std::string("config.") + name + " must be an array");
+        for (auto& item : config[name]) {
+            if (!item.is_string())
+                throw std::runtime_error(std::string("config.") + name + " contains a non-string");
+            const fs::path source = fromUtf8(item.get<std::string>());
+            if (const auto target = tryRebase(source, mappings))
+                item = utf8(*target);
+            else if (!keepOutside)
+                throw std::runtime_error(
+                    std::string("config.") + name +
+                    " path is outside archive mappings: " + utf8(source));
+        }
+    };
+    rewriteArray("index_roots", false);
+    rewriteArray("excluded_subtrees", true);
+    rewriteArray("exclude_dirs", true);
+    const auto rewriteScalar = [&](const char* name) {
+        if (!config.contains(name))
+            return;
+        if (!config.at(name).is_string())
+            throw std::runtime_error(
+                std::string("config.") + name + " must be a string");
+        const fs::path source = fromUtf8(config.at(name).get<std::string>());
+        if (source.empty())
+            return;
+        if (const auto target = tryRebase(source, mappings))
+            config[name] = utf8(*target);
+    };
+    rewriteScalar("tlg_send_root");
+    rewriteScalar("razn_output_dir");
+    rewriteScalar("opis_base_dir");
+    rewriteScalar("f12_base_dir");
+
+    config["server_mode"] = mode;
+    config["document_catalog_storage"] = "sqlite";
+    config["scan_on_startup"] = false;
+    config["prm_monthly_bases_dir"] = utf8(prmMonthlyDirectory);
+    config["prd_monthly_bases_dir"] = utf8(prdMonthlyDirectory);
+    if (std::string(mode) == "archive") {
+        // ARCHIVE.db3 is the live operational database.  A frozen server uses
+        // only the copied monthly databases and must have no writable base
+        // directory in which SQLite could recreate ARCHIVE.db3.
+        config["prm_base_dir"] = "";
+        config["prd_base_dir"] = "";
+    } else {
+        config["prm_base_dir"] = prmMonthlyDirectory.empty()
+            ? std::string() : utf8(prmMonthlyDirectory.parent_path());
+        config["prd_base_dir"] = prdMonthlyDirectory.empty()
+            ? std::string() : utf8(prdMonthlyDirectory.parent_path());
+    }
+    saveJsonAtomically(settingsPath, root);
+}
+
+void ensureDocsSchema(sqlite3* database)
+{
+    sqlite3_stmt* statement = nullptr;
+    if (sqlite3_prepare_v2(
+            database, "PRAGMA table_info(docs)", -1, &statement, nullptr) != SQLITE_OK)
+    {
+        throw std::runtime_error("cannot inspect inverted_index.sqlite docs schema");
+    }
+    bool path = false;
+    while (sqlite3_step(statement) == SQLITE_ROW) {
+        const auto* raw = sqlite3_column_text(statement, 1);
+        path = path || (raw && std::string(
+            reinterpret_cast<const char*>(raw)) == "path");
+    }
+    sqlite3_finalize(statement);
+    if (!path)
+        throw std::runtime_error("inverted_index.sqlite has no docs.path column");
+}
+
+void sqliteExec(sqlite3* database, const char* sql)
+{
+    char* rawError = nullptr;
+    const int rc = sqlite3_exec(database, sql, nullptr, nullptr, &rawError);
+    if (rc == SQLITE_OK)
+        return;
+    const std::string detail = rawError ? rawError : sqlite3_errmsg(database);
+    sqlite3_free(rawError);
+    throw std::runtime_error("SQLite command failed: " + detail);
+}
+
+std::string sqliteFailure(
+    sqlite3* database,
+    const char* operation,
+    int result)
+{
+    std::ostringstream message;
+    message << operation
+            << "; SQLite result=" << result
+            << ", extended=" << sqlite3_extended_errcode(database)
+            << ": " << sqlite3_errmsg(database);
+    return message.str();
+}
+
+json mappingJson(const std::vector<PathMapping>& mappings)
+{
+    json value = json::array();
+    for (const auto& mapping : mappings) {
+        value.push_back({
+            {"source", utf8(mapping.source)},
+            {"target", utf8(mapping.target)}});
+    }
+    return value;
+}
+
+std::vector<PathMapping> mappingsFromJson(const json& value, bool reverse)
+{
+    std::vector<PathMapping> result;
+    for (const auto& item : value) {
+        const fs::path source = fromUtf8(item.at("source").get<std::string>());
+        const fs::path target = fromUtf8(item.at("target").get<std::string>());
+        result.push_back(reverse
+            ? PathMapping{target, source}
+            : PathMapping{source, target});
+    }
+    return result;
+}
+
+void ensureNoOtherServiceUsesSources(
+    const std::wstring& selectedService,
+    const std::vector<PathMapping>& mappings)
+{
+    for (const auto& other : enumerateSearchEngineServices()) {
+        if (other.serviceName == selectedService)
+            continue;
+        const std::vector<fs::path> otherRuntimeRoots{
+            other.executable.parent_path(), other.dataDirectory};
+        for (const auto& mapping : mappings) {
+            for (const auto& otherRoot : otherRuntimeRoots) {
+                if (pathsOverlap(mapping.source, otherRoot)) {
+                    throw std::runtime_error(
+                        "source root is also used by service '" +
+                        utf8(other.serviceName) + "': " + utf8(mapping.source));
+                }
+            }
+        }
+    }
+}
+
+void removeEmptyDirectoryTree(const fs::path& root)
+{
+    if (!fs::exists(root))
+        return;
+    if (!fs::is_directory(root) || isDriveRoot(root) || isReparsePoint(root))
+        throw std::runtime_error("restore target is not a safe directory: " + utf8(root));
+    std::vector<fs::path> directories;
+    for (fs::recursive_directory_iterator it(root), end; it != end; ++it) {
+        if (isReparsePoint(it->path()) || !it->is_directory()) {
+            throw std::runtime_error(
+                "restore target contains a file or reparse point: " +
+                utf8(it->path()));
+        }
+        directories.push_back(it->path());
+    }
+    std::sort(
+        directories.begin(), directories.end(),
+        [](const fs::path& left, const fs::path& right) {
+            return left.wstring().size() > right.wstring().size();
+        });
+    for (const auto& directory : directories) {
+        std::error_code error;
+        if (!fs::remove(directory, error) || error) {
+            throw std::runtime_error(
+                "cannot remove empty restore directory: " + utf8(directory));
+        }
+    }
+    std::error_code error;
+    if (!fs::remove(root, error) || error)
+        throw std::runtime_error("cannot remove empty restore root: " + utf8(root));
+}
+
+void publishMergedTree(const fs::path& staging, const fs::path& target)
+{
+    if (!fs::is_directory(staging) || isReparsePoint(staging)) {
+        throw std::runtime_error(
+            "restore staging is not a safe directory: " + utf8(staging));
+    }
+    if (fs::exists(target) &&
+        (!fs::is_directory(target) || isReparsePoint(target)))
+    {
+        throw std::runtime_error(
+            "restore merge target is not a safe directory: " + utf8(target));
+    }
+    fs::create_directories(target);
+
+    std::vector<fs::path> directories;
+    std::vector<fs::path> files;
+    for (fs::recursive_directory_iterator it(staging), end; it != end; ++it) {
+        if (isReparsePoint(it->path())) {
+            throw std::runtime_error(
+                "reparse point in restore staging: " + utf8(it->path()));
+        }
+        if (it->is_directory()) {
+            directories.push_back(it->path());
+        } else if (it->is_regular_file()) {
+            files.push_back(it->path());
+        } else {
+            throw std::runtime_error(
+                "unsupported entry in restore staging: " + utf8(it->path()));
+        }
+    }
+
+    for (const auto& directory : directories) {
+        const fs::path relative = directory.lexically_relative(staging);
+        const fs::path destination = target / relative;
+        if (fs::exists(destination) &&
+            (!fs::is_directory(destination) || isReparsePoint(destination)))
+        {
+            throw std::runtime_error(
+                "restore merge directory already differs: " +
+                utf8(destination));
+        }
+        fs::create_directories(destination);
+    }
+
+    for (const auto& file : files) {
+        const fs::path relative = file.lexically_relative(staging);
+        const fs::path destination = target / relative;
+        if (fs::exists(destination)) {
+            if (!fs::is_regular_file(destination) ||
+                isReparsePoint(destination))
+            {
+                throw std::runtime_error(
+                    "restore merge target already differs: " +
+                    utf8(destination));
+            }
+            const FileHashResult stagedHash = sha256File(file);
+            const FileHashResult targetHash = sha256File(destination);
+            if (!stagedHash.ok || !targetHash.ok ||
+                stagedHash.size != targetHash.size ||
+                stagedHash.sha256 != targetHash.sha256)
+            {
+                throw std::runtime_error(
+                    "restore merge target already differs: " +
+                    utf8(destination));
+            }
+            std::error_code error;
+            if (!fs::remove(file, error) || error) {
+                throw std::runtime_error(
+                    "cannot remove duplicate restore staging file: " +
+                    utf8(file));
+            }
+            continue;
+        }
+        std::error_code error;
+        fs::rename(file, destination, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot publish restored file: " + error.message());
+        }
+    }
+
+    removeEmptyDirectoryTree(staging);
+}
+
+bool directoryTreesEqual(const fs::path& left, const fs::path& right)
+{
+    if (!fs::is_directory(left) || !fs::is_directory(right))
+        return false;
+    const auto files = [](const fs::path& root) {
+        std::vector<std::pair<fs::path, FileHashResult>> result;
+        for (fs::recursive_directory_iterator it(root), end; it != end; ++it) {
+            if (isReparsePoint(it->path()))
+                throw std::runtime_error("reparse point in restore tree");
+            if (it->is_regular_file())
+                result.emplace_back(
+                    it->path().lexically_relative(root), sha256File(it->path()));
+        }
+        std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+            return lower(a.first.wstring()) < lower(b.first.wstring());
+        });
+        return result;
+    };
+    const auto leftFiles = files(left);
+    const auto rightFiles = files(right);
+    if (leftFiles.size() != rightFiles.size())
+        return false;
+    for (std::size_t index = 0; index < leftFiles.size(); ++index) {
+        if (!samePath(leftFiles[index].first, rightFiles[index].first) ||
+            !leftFiles[index].second.ok || !rightFiles[index].second.ok ||
+            leftFiles[index].second.size != rightFiles[index].second.size ||
+            leftFiles[index].second.sha256 != rightFiles[index].second.sha256)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isStrictlyBelow(const fs::path& value, const fs::path& root)
+{
+    return isPathEqualOrBelow(value, root) && !samePath(value, root);
+}
+
+void ensureServicesDoNotUseArchive(
+    const fs::path& archiveDirectory,
+    const std::vector<InstalledService>& services)
+{
+    for (const auto& service : services) {
+        if (pathsOverlap(service.executable.parent_path(), archiveDirectory) ||
+            pathsOverlap(service.dataDirectory, archiveDirectory))
+        {
+            throw std::runtime_error(
+                "SearchEngine service still uses the archive directory: " +
+                utf8(service.serviceName));
+        }
+    }
+}
+
+void ensureArchiveTreeHasNoReparsePoints(const fs::path& archiveDirectory)
+{
+    if (isReparsePoint(archiveDirectory))
+        throw std::runtime_error("archive directory is a reparse point");
+    for (fs::recursive_directory_iterator it(archiveDirectory), end; it != end; ++it) {
+        if (isReparsePoint(it->path())) {
+            if (it->is_directory())
+                it.disable_recursion_pending();
+            throw std::runtime_error(
+                "archive contains a reparse point: " + utf8(it->path()));
+        }
+    }
+}
+
+fs::path archiveRelativePath(
+    const fs::path& value,
+    const fs::path& archiveDirectory,
+    const char* label)
+{
+    const fs::path normalized = absoluteNormalized(value);
+    if (!normalized.is_absolute() ||
+        !isStrictlyBelow(normalized, archiveDirectory))
+    {
+        throw std::runtime_error(
+            std::string(label) + " escapes archive directory: " +
+            utf8(normalized));
+    }
+    const fs::path relative = normalized.lexically_relative(archiveDirectory);
+    if (relative.empty() || relative.is_absolute()) {
+        throw std::runtime_error(
+            std::string(label) + " has no safe relative archive path");
+    }
+    for (const auto& component : relative) {
+        if (component == L"..") {
+            throw std::runtime_error(
+                std::string(label) + " contains parent traversal");
+        }
+    }
+    return relative;
+}
+
+void appendRequiredRestoreDirectory(
+    ServiceRestorePlan& plan,
+    const fs::path& value)
+{
+    fs::path current = absoluteNormalized(value);
+    while (!samePath(current, plan.restoreRoot)) {
+        if (!isStrictlyBelow(current, plan.restoreRoot)) {
+            throw std::runtime_error(
+                "restore directory escapes selected root: " + utf8(current));
+        }
+        const bool known = std::any_of(
+            plan.requiredDirectories.begin(),
+            plan.requiredDirectories.end(),
+            [&](const fs::path& existing) { return samePath(existing, current); });
+        if (!known)
+            plan.requiredDirectories.push_back(current);
+        const fs::path parent = current.parent_path();
+        if (parent == current)
+            throw std::runtime_error("cannot resolve restore directory parent");
+        current = parent;
+    }
+}
+
+bool mappingContainsRestoredRuntime(
+    const ServiceRestorePlan& plan,
+    const PathMapping& mapping)
+{
+    return isPathEqualOrBelow(plan.restoredExecutable, mapping.target) ||
+        isPathEqualOrBelow(plan.restoredDataDirectory, mapping.target);
+}
+
+void validateRestoreMergeDestination(
+    const PathMapping& mapping,
+    int year)
+{
+    if (!fs::exists(mapping.target))
+        return;
+    if (!fs::is_directory(mapping.target) || isReparsePoint(mapping.target)) {
+        throw std::runtime_error(
+            "restore merge target is not a normal directory: " +
+            utf8(mapping.target));
+    }
+    for (fs::recursive_directory_iterator it(mapping.target), end;
+         it != end; ++it)
+    {
+        if (isReparsePoint(it->path())) {
+            throw std::runtime_error(
+                "restore merge target contains a reparse point: " +
+                utf8(it->path()));
+        }
+    }
+
+    for (fs::recursive_directory_iterator it(mapping.source), end;
+         it != end; ++it)
+    {
+        if (isReparsePoint(it->path())) {
+            throw std::runtime_error(
+                "archive restore source contains a reparse point: " +
+                utf8(it->path()));
+        }
+        if (shouldSkipArchiveTreeEntry(
+                mapping.source,
+                it->path().filename(),
+                it.depth(),
+                it->is_directory(),
+                year))
+        {
+            if (it->is_directory())
+                it.disable_recursion_pending();
+            continue;
+        }
+
+        const fs::path destination = mapping.target /
+            it->path().lexically_relative(mapping.source);
+        if (!fs::exists(destination))
+            continue;
+        if (it->is_directory()) {
+            if (!fs::is_directory(destination) ||
+                isReparsePoint(destination))
+            {
+                throw std::runtime_error(
+                    "restore directory conflicts with an existing target: " +
+                    utf8(destination));
+            }
+            continue;
+        }
+        if (!it->is_regular_file() || !fs::is_regular_file(destination) ||
+            isReparsePoint(destination))
+        {
+            throw std::runtime_error(
+                "restore file conflicts with an existing target: " +
+                utf8(destination));
+        }
+        const FileHashResult archivedHash = sha256File(it->path());
+        const FileHashResult destinationHash = sha256File(destination);
+        if (!archivedHash.ok || !destinationHash.ok ||
+            archivedHash.size != destinationHash.size ||
+            archivedHash.sha256 != destinationHash.sha256)
+        {
+            throw std::runtime_error(
+                "restore file already exists with different content: " +
+                utf8(destination));
+        }
+    }
+}
+
+bool isPreservedPrdDecember(
+    const ServiceRestorePlan& plan,
+    const fs::path& path)
+{
+    return !plan.restoredPrdMonthlyDirectory.empty() &&
+        samePath(path.parent_path(), plan.restoredPrdMonthlyDirectory) &&
+        lower(path.filename().wstring()) ==
+            (L"12-" + std::to_wstring(plan.year) + L".db3");
+}
+
+void validateOriginalServiceRestoreDestination(
+    const ServiceRestorePlan& plan)
+{
+    if (plan.mode != ServiceRestoreMode::OriginalLocations ||
+        plan.archiveDirectory.empty() || !plan.archiveDirectory.is_absolute())
+    {
+        throw std::runtime_error("invalid original-location restore plan");
+    }
+
+    if (!plan.sourceCleanupCompleted) {
+        if (!fs::is_regular_file(plan.restoredExecutable) ||
+            !fs::is_regular_file(
+                plan.restoredDataDirectory / L"Settings.json") ||
+            !fs::is_regular_file(
+                plan.restoredDataDirectory / L"inverted_index.sqlite"))
+        {
+            throw std::runtime_error(
+                "preserved original server copy is incomplete");
+        }
+        return;
+    }
+
+    for (const auto& mapping : plan.mappings) {
+        if (!mapping.source.is_absolute() ||
+            !isStrictlyBelow(mapping.source, plan.archiveDirectory) ||
+            !fs::is_directory(mapping.source) ||
+            !mapping.target.is_absolute() || isDriveRoot(mapping.target) ||
+            pathsOverlap(mapping.target, plan.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe or missing original-location restore mapping");
+        }
+        if (mappingContainsRestoredRuntime(plan, mapping)) {
+            if (!fs::exists(mapping.target))
+                continue;
+            if (!fs::is_directory(mapping.target) ||
+                isReparsePoint(mapping.target))
+            {
+                throw std::runtime_error(
+                    "runtime restore target is not a normal directory: " +
+                    utf8(mapping.target));
+            }
+            for (fs::recursive_directory_iterator it(mapping.target), end;
+                 it != end; ++it)
+            {
+                if (isReparsePoint(it->path()) || !it->is_directory()) {
+                    throw std::runtime_error(
+                        "runtime restore target is not empty: " +
+                        utf8(mapping.target));
+                }
+            }
+        } else {
+            validateRestoreMergeDestination(mapping, plan.year);
+        }
+    }
+
+    for (const auto& database : plan.monthlyDatabases) {
+        if (!database.source.is_absolute() ||
+            !isStrictlyBelow(database.source, plan.archiveDirectory) ||
+            !fs::is_regular_file(database.source) ||
+            !database.target.is_absolute() || isDriveRoot(database.target) ||
+            pathsOverlap(database.target, plan.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe or missing original monthly restore path");
+        }
+        if (!fs::exists(database.target))
+            continue;
+        if (!isPreservedPrdDecember(plan, database.target) ||
+            !fs::is_regular_file(database.target) ||
+            isReparsePoint(database.target))
+        {
+            throw std::runtime_error(
+                "monthly restore destination already exists: " +
+                utf8(database.target));
+        }
+    }
+}
+
+void validateServiceRestoreDestination(const ServiceRestorePlan& plan)
+{
+    if (plan.restoreRoot.empty() || !plan.restoreRoot.is_absolute() ||
+        samePath(plan.restoreRoot, plan.archiveDirectory)) {
+        throw std::runtime_error(
+            "restore root must be an absolute directory different from the "
+            "archive directory");
+    }
+    if (fs::exists(plan.restoreRoot) &&
+        (!fs::is_directory(plan.restoreRoot) ||
+         isReparsePoint(plan.restoreRoot)))
+    {
+        throw std::runtime_error(
+            "restore root is not a normal directory: " +
+            utf8(plan.restoreRoot));
+    }
+
+    // The archive may be below the selected drive root (for example the
+    // archive is D:\123\... and the service is restored to D:\program,
+    // D:\data, ...). Only actual restore destinations must stay disjoint from
+    // the archive; rejecting the common drive ancestor would be overbroad.
+    for (const auto& mapping : plan.mappings) {
+        if (pathsOverlap(mapping.target, plan.archiveDirectory)) {
+            throw std::runtime_error(
+                "restore destination overlaps the archive directory: " +
+                utf8(mapping.target));
+        }
+    }
+    for (const auto& database : plan.monthlyDatabases) {
+        if (pathsOverlap(database.target, plan.archiveDirectory)) {
+            throw std::runtime_error(
+                "monthly restore destination overlaps the archive directory: " +
+                utf8(database.target));
+        }
+    }
+
+    std::vector<fs::path> collisions;
+    for (const auto& directory : plan.requiredDirectories) {
+        if (fs::exists(directory))
+            collisions.push_back(directory);
+    }
+    for (const auto& database : plan.monthlyDatabases) {
+        if (fs::exists(database.target))
+            collisions.push_back(database.target);
+    }
+    if (collisions.empty())
+        return;
+
+    std::ostringstream message;
+    message << "selected restore root already contains archive destination "
+               "folders/files; no merge or overwrite is allowed:";
+    for (const auto& collision : collisions)
+        message << "\n  " << utf8(collision);
+    message << "\nChoose another restore root or free only the listed "
+               "destinations. A drive root is allowed when these destinations "
+               "do not exist. Для корня диска освободите только перечисленные "
+               "целевые каталоги и файлы.";
+    throw std::runtime_error(message.str());
+}
+
+void publishRestoreStagingRoot(
+    const fs::path& stagingRoot,
+    const fs::path& restoreRoot)
+{
+    if (!fs::is_directory(stagingRoot) || isReparsePoint(stagingRoot))
+        throw std::runtime_error("restore staging root is unsafe");
+
+    std::vector<fs::path> entries;
+    for (const auto& entry : fs::directory_iterator(stagingRoot)) {
+        if (!entry.is_directory() || isReparsePoint(entry.path())) {
+            throw std::runtime_error(
+                "restore staging contains an invalid top-level entry: " +
+                utf8(entry.path()));
+        }
+        entries.push_back(entry.path());
+    }
+    if (entries.empty())
+        throw std::runtime_error("restore staging root is empty");
+    std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+        return lower(left.filename().wstring()) <
+            lower(right.filename().wstring());
+    });
+
+    // Recheck every publication destination before the first rename. This is
+    // the final no-merge/no-overwrite gate after staging has been verified.
+    for (const auto& entry : entries) {
+        const fs::path destination = restoreRoot / entry.filename();
+        if (fs::exists(destination)) {
+            throw std::runtime_error(
+                "restore destination appeared before publish; no merge is "
+                "allowed: " + utf8(destination));
+        }
+    }
+
+    std::vector<std::pair<fs::path, fs::path>> published;
+    try {
+        for (const auto& entry : entries) {
+            const fs::path destination = restoreRoot / entry.filename();
+            std::error_code error;
+            fs::rename(entry, destination, error);
+            if (error) {
+                throw std::runtime_error(
+                    "cannot publish restored directory: " + error.message());
+            }
+            published.emplace_back(destination, entry);
+        }
+    } catch (...) {
+        for (auto it = published.rbegin(); it != published.rend(); ++it) {
+            std::error_code ignored;
+            fs::rename(it->first, it->second, ignored);
+        }
+        throw;
+    }
+
+    std::error_code error;
+    if (!fs::remove(stagingRoot, error) || error)
+        throw std::runtime_error("cannot remove empty restore staging root");
+}
+
+fs::path sqliteReplacementStagingPath(const fs::path& destination)
+{
+    const auto stamp = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    return destination.parent_path() /
+        (L"." + destination.filename().wstring() + L".replace-" +
+         std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(stamp));
+}
+
+void removeSQLiteReplacementSidecars(const fs::path& database)
+{
+    for (const wchar_t* suffix : {L"-wal", L"-shm", L"-journal"}) {
+        std::error_code error;
+        fs::remove(database.wstring() + suffix, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot remove SQLite sidecar before replacement: " +
+                utf8(database.wstring() + suffix) + ": " + error.message());
+        }
+    }
+}
+
+void publishSQLiteReplacement(
+    const fs::path& staging,
+    const fs::path& destination)
+{
+    if (!fs::is_regular_file(staging) || isReparsePoint(staging)) {
+        throw std::runtime_error(
+            "SQLite replacement staging is invalid: " + utf8(staging));
+    }
+    if (fs::exists(destination) &&
+        (!fs::is_regular_file(destination) || isReparsePoint(destination)))
+    {
+        throw std::runtime_error(
+            "SQLite replacement destination is invalid: " +
+            utf8(destination));
+    }
+
+    fs::create_directories(destination.parent_path());
+    removeSQLiteReplacementSidecars(destination);
+    if (!MoveFileExW(
+            staging.c_str(), destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        throw std::runtime_error(
+            "cannot replace retained SQLite database; Win32 error=" +
+            std::to_string(GetLastError()));
+    }
+}
+
+bool autoPadDatabasesUseSameDirectToRoots(
+    const fs::path& leftDatabase,
+    const fs::path& rightDatabase)
+{
+    const auto leftRoots = inspectAutoPadDirectToRoots(leftDatabase);
+    const auto rightRoots = inspectAutoPadDirectToRoots(rightDatabase);
+    return leftRoots.size() == rightRoots.size() && std::all_of(
+        leftRoots.begin(), leftRoots.end(),
+        [&](const fs::path& left) {
+            return std::any_of(
+                rightRoots.begin(), rightRoots.end(),
+                [&](const fs::path& right) {
+                    return samePath(left, right);
+                });
+        });
+}
+
+} // namespace
+
+void replaceRetainedAutoPadDatabase(
+    const fs::path& snapshotDatabase,
+    const fs::path& destinationDatabase,
+    const std::vector<PathMapping>& mappings)
+{
+    if (!fs::is_regular_file(snapshotDatabase) ||
+        isReparsePoint(snapshotDatabase))
+    {
+        throw std::runtime_error(
+            "retained database snapshot is invalid: " +
+            utf8(snapshotDatabase));
+    }
+    if (samePath(snapshotDatabase, destinationDatabase)) {
+        throw std::runtime_error(
+            "retained database snapshot and destination must differ");
+    }
+
+    const fs::path staging =
+        sqliteReplacementStagingPath(destinationDatabase);
+    if (fs::exists(staging)) {
+        throw std::runtime_error(
+            "retained database replacement staging already exists: " +
+            utf8(staging));
+    }
+
+    try {
+        const SQLiteBackupResult backup = backupSQLiteDatabase(
+            snapshotDatabase, staging);
+        if (!backup.ok) {
+            throw std::runtime_error(
+                "retained database SQLite backup failed: " + backup.message);
+        }
+        if (!mappings.empty())
+            rewriteAutoPadDirectTo(staging, mappings);
+
+        std::string verifyError;
+        if (!verifySQLiteDatabase(staging, verifyError)) {
+            throw std::runtime_error(
+                "retained database SQLite verification failed: " +
+                verifyError);
+        }
+        publishSQLiteReplacement(staging, destinationDatabase);
+    } catch (...) {
+        std::error_code ignored;
+        fs::remove(staging, ignored);
+        throw;
+    }
+}
+
+std::wstring serviceArchiveDirectoryLeaf(
+    const std::wstring& serviceName,
+    int year)
+{
+    const std::wstring leaf = safeServiceLeaf(serviceName);
+    const std::wstring yearSuffix = L"-" + std::to_wstring(year);
+    if (leaf.size() >= yearSuffix.size() &&
+        leaf.compare(
+            leaf.size() - yearSuffix.size(),
+            yearSuffix.size(),
+            yearSuffix) == 0)
+    {
+        return leaf;
+    }
+    return leaf + yearSuffix;
+}
+
+void mergeRestoreStagingTree(
+    const fs::path& staging,
+    const fs::path& target)
+{
+    publishMergedTree(staging, target);
+}
+
+fs::path normalizeServiceRestoreRoot(const fs::path& restoreRoot)
+{
+    if (restoreRoot.empty())
+        throw std::runtime_error("restore root is empty");
+
+    const std::wstring value = restoreRoot.wstring();
+    if (value.size() == 2 && std::iswalpha(value[0]) && value[1] == L':')
+        return fs::path(value + L"\\").lexically_normal();
+
+    if (!restoreRoot.is_absolute()) {
+        throw std::runtime_error(
+            "restore root must be absolute; use D: or D:\\ for a drive root, "
+            "or D:\\Folder for a directory");
+    }
+    return absoluteNormalized(restoreRoot);
+}
+
+fs::path serviceInstallDirectory(const fs::path& executable)
+{
+    const fs::path normalizedExecutable = absoluteNormalized(executable);
+    const fs::path binaryDirectory = normalizedExecutable.parent_path();
+    if (binaryDirectory.empty() || !binaryDirectory.is_absolute() ||
+        isDriveRoot(binaryDirectory))
+    {
+        throw std::runtime_error(
+            "service executable has no safe managed directory: " +
+            utf8(normalizedExecutable));
+    }
+    if (lower(binaryDirectory.filename().wstring()) != L"bin")
+        return binaryDirectory;
+
+    const fs::path installDirectory = binaryDirectory.parent_path();
+    if (installDirectory.empty() || !installDirectory.is_absolute() ||
+        isDriveRoot(installDirectory))
+    {
+        throw std::runtime_error(
+            "service bin directory has no safe installation parent: " +
+            utf8(binaryDirectory));
+    }
+    return installDirectory;
+}
+
+namespace {
+
+std::vector<fs::path> normalizedRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots)
+{
+    std::vector<fs::path> result;
+    for (const auto& root : roots) {
+        const fs::path normalized = absoluteNormalized(root);
+        if (normalized.empty() || !normalized.is_absolute() ||
+            isDriveRoot(normalized))
+        {
+            throw std::runtime_error(
+                "unsafe runtime cleanup directory: " + utf8(normalized));
+        }
+        if (std::any_of(
+                result.begin(), result.end(),
+                [&](const fs::path& existing) {
+                    return isPathEqualOrBelow(normalized, existing);
+                }))
+        {
+            continue;
+        }
+        result.erase(
+            std::remove_if(
+                result.begin(), result.end(),
+                [&](const fs::path& existing) {
+                    return isPathEqualOrBelow(existing, normalized);
+                }),
+            result.end());
+        result.push_back(normalized);
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const fs::path& left, const fs::path& right) {
+            return lower(left.wstring()) < lower(right.wstring());
+        });
+    return result;
+}
+
+fs::path currentProcessExecutable()
+{
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size())
+        throw std::runtime_error("GetModuleFileNameW failed");
+    return absoluteNormalized(fs::path(std::wstring(buffer.data(), length)));
+}
+
+} // namespace
+
+void validateServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots)
+{
+    const auto normalizedRoots = normalizedRuntimeCleanupDirectories(roots);
+    const fs::path currentExecutable = currentProcessExecutable();
+    for (const auto& root : normalizedRoots) {
+        if (isPathEqualOrBelow(currentExecutable, root)) {
+            throw std::runtime_error(
+                "archive cleanup utility is running from the directory that "
+                "must be deleted; run Archive-SearchEngineService.bat from "
+                "the portable release folder: " + utf8(root));
+        }
+        if (!fs::exists(root))
+            continue;
+        if (!fs::is_directory(root) || isReparsePoint(root)) {
+            throw std::runtime_error(
+                "runtime cleanup root is not a normal directory: " +
+                utf8(root));
+        }
+        for (fs::recursive_directory_iterator it(root), end; it != end; ++it) {
+            if (isReparsePoint(it->path())) {
+                if (it->is_directory())
+                    it.disable_recursion_pending();
+                throw std::runtime_error(
+                    "runtime cleanup tree contains a reparse point: " +
+                    utf8(it->path()));
+            }
+            if (!it->is_directory() && !it->is_regular_file()) {
+                throw std::runtime_error(
+                    "runtime cleanup tree contains an unsupported entry: " +
+                    utf8(it->path()));
+            }
+        }
+    }
+}
+
+void removeServiceRuntimeCleanupDirectories(
+    const std::vector<fs::path>& roots,
+    const ProgressCallback& progress)
+{
+    const auto normalizedRoots = normalizedRuntimeCleanupDirectories(roots);
+    validateServiceRuntimeCleanupDirectories(normalizedRoots);
+    for (const auto& root : normalizedRoots) {
+        if (!fs::exists(root))
+            continue;
+        if (progress)
+            progress(L"Полное удаление каталога среды выполнения: " + root.wstring());
+        std::error_code error;
+        fs::remove_all(root, error);
+        if (error || fs::exists(root)) {
+            throw std::runtime_error(
+                "cannot completely delete runtime directory: " + utf8(root) +
+                (error ? "; " + error.message() : std::string()));
+        }
+    }
+}
+
+ServiceRestorePlan planServiceRestore(
+    const fs::path& archiveDirectory,
+    const fs::path& restoreRoot)
+{
+    ServiceRestorePlan plan;
+    plan.mode = ServiceRestoreMode::SelectedRoot;
+    plan.archiveDirectory = absoluteNormalized(archiveDirectory);
+    plan.restoreRoot = normalizeServiceRestoreRoot(restoreRoot);
+    if (!fs::is_directory(plan.archiveDirectory) ||
+        isDriveRoot(plan.archiveDirectory) ||
+        !fs::is_regular_file(plan.archiveDirectory / kManifestName))
+    {
+        throw std::runtime_error("service archive directory is incomplete");
+    }
+
+    const json manifest = readJson(plan.archiveDirectory / kManifestName);
+    const std::string phase = manifest.value("phase", "");
+    if (manifest.value("operation", "") != "service-archive" ||
+        !isRestorableRunningPhase(phase))
+    {
+        throw std::runtime_error(
+            "service archive is not in a restorable running phase");
+    }
+    ensureArchiveTreeHasNoReparsePoints(plan.archiveDirectory);
+    plan.sourceCleanupCompleted = sourceCleanupMayHaveStarted(phase);
+
+    plan.year = manifest.at("year").get<int>();
+    plan.serviceName = encoding::utf8_to_wstring(
+        manifest.at("service_name").get<std::string>());
+    plan.archivedImagePath = encoding::utf8_to_wstring(
+        manifest.at("archived_image_path").get<std::string>());
+
+    for (const auto& item : manifest.at("mappings")) {
+        const fs::path archived = absoluteNormalized(fromUtf8(
+            item.at("target").get<std::string>()));
+        if (!fs::is_directory(archived))
+            throw std::runtime_error(
+                "archived restore tree is missing: " + utf8(archived));
+        const fs::path relative = archiveRelativePath(
+            archived, plan.archiveDirectory, "mapping target");
+        const fs::path destination = plan.restoreRoot / relative;
+        for (const auto& existing : plan.mappings) {
+            if (pathsOverlap(existing.source, archived) ||
+                pathsOverlap(existing.target, destination))
+            {
+                throw std::runtime_error(
+                    "restore manifest contains overlapping directory trees");
+            }
+        }
+        plan.mappings.push_back({archived, destination});
+        appendRequiredRestoreDirectory(plan, destination);
+        for (fs::recursive_directory_iterator it(archived), end; it != end; ++it) {
+            if (it->is_directory()) {
+                appendRequiredRestoreDirectory(
+                    plan,
+                    destination / it->path().lexically_relative(archived));
+            }
+        }
+    }
+    if (plan.mappings.empty())
+        throw std::runtime_error("service archive has no path mappings");
+
+    const fs::path archivedExecutable = absoluteNormalized(fromUtf8(
+        manifest.at("archived_executable").get<std::string>()));
+    const fs::path archivedData = absoluteNormalized(fromUtf8(
+        manifest.at("archived_data_directory").get<std::string>()));
+    if (!fs::is_regular_file(archivedExecutable) ||
+        !fs::is_directory(archivedData))
+    {
+        throw std::runtime_error(
+            "archive copy has no executable or data directory");
+    }
+    plan.restoredExecutable = rebasePath(archivedExecutable, plan.mappings);
+    plan.restoredDataDirectory = rebasePath(archivedData, plan.mappings);
+    plan.restoredImagePath = buildServiceImagePath(
+        plan.restoredExecutable,
+        plan.serviceName,
+        plan.restoredDataDirectory);
+
+    for (const auto& item : manifest.at("monthly_databases")) {
+        const fs::path archived = absoluteNormalized(fromUtf8(
+            item.at("target").get<std::string>()));
+        if (!fs::is_regular_file(archived))
+            throw std::runtime_error(
+                "archived monthly database is missing: " + utf8(archived));
+        const fs::path relative = archiveRelativePath(
+            archived, plan.archiveDirectory, "monthly database target");
+        const fs::path destination = plan.restoreRoot / relative;
+        const bool duplicate = std::any_of(
+            plan.monthlyDatabases.begin(),
+            plan.monthlyDatabases.end(),
+            [&](const PathMapping& existing) {
+                return samePath(existing.source, archived) ||
+                    samePath(existing.target, destination);
+            });
+        if (duplicate)
+            throw std::runtime_error("duplicate monthly database restore target");
+        plan.monthlyDatabases.push_back({archived, destination});
+        appendRequiredRestoreDirectory(plan, destination.parent_path());
+
+        const std::string kind = item.at("kind").get<std::string>();
+        fs::path* monthlyDirectory = nullptr;
+        if (kind == "PRM")
+            monthlyDirectory = &plan.restoredPrmMonthlyDirectory;
+        else if (kind == "PRD")
+            monthlyDirectory = &plan.restoredPrdMonthlyDirectory;
+        else
+            throw std::runtime_error("unknown monthly database kind");
+        if (monthlyDirectory->empty())
+            *monthlyDirectory = destination.parent_path();
+        else if (!samePath(*monthlyDirectory, destination.parent_path()))
+            throw std::runtime_error(
+                "monthly databases of one kind use different restore folders");
+    }
+
+    std::sort(
+        plan.requiredDirectories.begin(),
+        plan.requiredDirectories.end(),
+        [](const fs::path& left, const fs::path& right) {
+            if (left.wstring().size() != right.wstring().size())
+                return left.wstring().size() < right.wstring().size();
+            return lower(left.wstring()) < lower(right.wstring());
+        });
+    validateServiceRestoreDestination(plan);
+    return plan;
+}
+
+ServiceRestorePlan planServiceRestoreOriginalLocations(
+    const fs::path& archiveDirectory)
+{
+    ServiceRestorePlan plan;
+    plan.mode = ServiceRestoreMode::OriginalLocations;
+    plan.archiveDirectory = absoluteNormalized(archiveDirectory);
+    if (!fs::is_directory(plan.archiveDirectory) ||
+        isDriveRoot(plan.archiveDirectory) ||
+        !fs::is_regular_file(plan.archiveDirectory / kManifestName))
+    {
+        throw std::runtime_error("service archive directory is incomplete");
+    }
+
+    const json manifest = readJson(plan.archiveDirectory / kManifestName);
+    const std::string phase = manifest.value("phase", "");
+    if (manifest.value("operation", "") != "service-archive" ||
+        !isRestorableRunningPhase(phase))
+    {
+        throw std::runtime_error(
+            "service archive is not in a restorable running phase");
+    }
+    ensureArchiveTreeHasNoReparsePoints(plan.archiveDirectory);
+    plan.sourceCleanupCompleted = sourceCleanupMayHaveStarted(phase);
+
+    plan.year = manifest.at("year").get<int>();
+    plan.serviceName = encoding::utf8_to_wstring(
+        manifest.at("service_name").get<std::string>());
+    plan.archivedImagePath = encoding::utf8_to_wstring(
+        manifest.at("archived_image_path").get<std::string>());
+    plan.restoredImagePath = encoding::utf8_to_wstring(
+        manifest.at("original_image_path").get<std::string>());
+    plan.restoredExecutable = absoluteNormalized(fromUtf8(
+        manifest.at("original_executable").get<std::string>()));
+    plan.restoredDataDirectory = absoluteNormalized(fromUtf8(
+        manifest.at("original_data_directory").get<std::string>()));
+
+    for (const auto& item : manifest.at("mappings")) {
+        const fs::path archived = absoluteNormalized(fromUtf8(
+            item.at("target").get<std::string>()));
+        const fs::path destination = absoluteNormalized(fromUtf8(
+            item.at("source").get<std::string>()));
+        if (!fs::is_directory(archived))
+            throw std::runtime_error(
+                "archived restore tree is missing: " + utf8(archived));
+        (void)archiveRelativePath(
+            archived, plan.archiveDirectory, "mapping target");
+        if (!destination.is_absolute() || isDriveRoot(destination) ||
+            pathsOverlap(destination, plan.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe original restore destination: " + utf8(destination));
+        }
+        for (const auto& existing : plan.mappings) {
+            if (pathsOverlap(existing.source, archived) ||
+                pathsOverlap(existing.target, destination))
+            {
+                throw std::runtime_error(
+                    "restore manifest contains overlapping directory trees");
+            }
+        }
+        plan.mappings.push_back({archived, destination});
+    }
+    if (plan.mappings.empty())
+        throw std::runtime_error("service archive has no path mappings");
+
+    const fs::path archivedExecutable = absoluteNormalized(fromUtf8(
+        manifest.at("archived_executable").get<std::string>()));
+    const fs::path archivedData = absoluteNormalized(fromUtf8(
+        manifest.at("archived_data_directory").get<std::string>()));
+    if (!fs::is_regular_file(archivedExecutable) ||
+        !fs::is_directory(archivedData) ||
+        !samePath(
+            rebasePath(archivedExecutable, plan.mappings),
+            plan.restoredExecutable) ||
+        !samePath(
+            rebasePath(archivedData, plan.mappings),
+            plan.restoredDataDirectory))
+    {
+        throw std::runtime_error(
+            "archive and original runtime paths do not match the manifest");
+    }
+    const ServiceInvocation originalInvocation =
+        parseServiceInvocation(plan.restoredImagePath);
+    if (!samePath(originalInvocation.executable, plan.restoredExecutable) ||
+        !samePath(
+            originalInvocation.dataDirectory,
+            plan.restoredDataDirectory) ||
+        (!originalInvocation.serviceNameArgument.empty() &&
+         originalInvocation.serviceNameArgument != plan.serviceName))
+    {
+        throw std::runtime_error(
+            "original ImagePath does not match original runtime paths");
+    }
+
+    const std::string manifestPrmText = manifest.value(
+        "original_prm_monthly_directory", std::string());
+    const std::string manifestPrdText = manifest.value(
+        "original_prd_monthly_directory", std::string());
+    plan.restoredPrmMonthlyDirectory = manifestPrmText.empty()
+        ? fs::path{}
+        : absoluteNormalized(fromUtf8(manifestPrmText));
+    plan.restoredPrdMonthlyDirectory = manifestPrdText.empty()
+        ? fs::path{}
+        : absoluteNormalized(fromUtf8(manifestPrdText));
+
+    for (const auto& item : manifest.at("monthly_databases")) {
+        const fs::path archived = absoluteNormalized(fromUtf8(
+            item.at("target").get<std::string>()));
+        const fs::path destination = absoluteNormalized(fromUtf8(
+            item.at("source").get<std::string>()));
+        if (!fs::is_regular_file(archived))
+            throw std::runtime_error(
+                "archived monthly database is missing: " + utf8(archived));
+        (void)archiveRelativePath(
+            archived, plan.archiveDirectory, "monthly database target");
+        if (!destination.is_absolute() || isDriveRoot(destination) ||
+            pathsOverlap(destination, plan.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe original monthly restore destination: " +
+                utf8(destination));
+        }
+        const bool duplicate = std::any_of(
+            plan.monthlyDatabases.begin(),
+            plan.monthlyDatabases.end(),
+            [&](const PathMapping& existing) {
+                return samePath(existing.source, archived) ||
+                    samePath(existing.target, destination);
+            });
+        if (duplicate)
+            throw std::runtime_error("duplicate monthly database restore target");
+        plan.monthlyDatabases.push_back({archived, destination});
+
+        const std::string kind = item.at("kind").get<std::string>();
+        fs::path* monthlyDirectory = nullptr;
+        if (kind == "PRM")
+            monthlyDirectory = &plan.restoredPrmMonthlyDirectory;
+        else if (kind == "PRD")
+            monthlyDirectory = &plan.restoredPrdMonthlyDirectory;
+        else
+            throw std::runtime_error("unknown monthly database kind");
+        if (monthlyDirectory->empty() ||
+            !samePath(*monthlyDirectory, destination.parent_path()))
+        {
+            throw std::runtime_error(
+                "monthly databases of one kind use different restore folders");
+        }
+    }
+
+    validateOriginalServiceRestoreDestination(plan);
+    return plan;
+}
+
+ServiceInvocation parseServiceInvocation(const std::wstring& imagePath)
+{
+    int count = 0;
+    LPWSTR* raw = CommandLineToArgvW(imagePath.c_str(), &count);
+    if (!raw || count < 1) {
+        if (raw)
+            LocalFree(raw);
+        throw std::runtime_error("cannot parse service ImagePath");
+    }
+    struct ArgsGuard {
+        LPWSTR* value;
+        ~ArgsGuard() { LocalFree(value); }
+    } guard{raw};
+
+    ServiceInvocation invocation;
+    invocation.imagePath = imagePath;
+    invocation.executable = absoluteNormalized(expandEnvironment(raw[0]));
+    bool serviceFlag = false;
+    std::optional<std::wstring> data;
+    for (int index = 1; index < count; ++index) {
+        const std::wstring argument = raw[index];
+        if (argument == L"--service") {
+            serviceFlag = true;
+        } else if (argument == L"--service-name" && index + 1 < count) {
+            invocation.serviceNameArgument = raw[++index];
+        } else if ((argument == L"--data-dir" || argument == L"--base-dir") &&
+                   index + 1 < count) {
+            if (data)
+                throw std::runtime_error("service ImagePath has duplicate data-dir");
+            data = expandEnvironment(raw[++index]);
+        }
+    }
+    if (!serviceFlag)
+        throw std::runtime_error("service ImagePath has no --service flag");
+    if (!data || data->empty())
+        throw std::runtime_error("service ImagePath has no --data-dir");
+    invocation.dataDirectory = fs::path(*data).is_absolute()
+        ? absoluteNormalized(*data)
+        : absoluteNormalized(invocation.executable.parent_path() / *data);
+    return invocation;
+}
+
+std::wstring buildServiceImagePath(
+    const fs::path& executable,
+    const std::wstring& serviceName,
+    const fs::path& dataDirectory)
+{
+    if (serviceName.empty())
+        throw std::runtime_error("service name is empty");
+    return quoteArgument(absoluteNormalized(executable).wstring()) +
+        L" --service --service-name " + quoteArgument(serviceName) +
+        L" --data-dir " + quoteArgument(
+            absoluteNormalized(dataDirectory).wstring());
+}
+
+std::vector<InstalledService> enumerateSearchEngineServices()
+{
+    ScManager manager(SC_MANAGER_ENUMERATE_SERVICE | SC_MANAGER_CONNECT);
+    DWORD bytes = 0;
+    DWORD count = 0;
+    DWORD resume = 0;
+    EnumServicesStatusExW(
+        manager.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
+        SERVICE_STATE_ALL, nullptr, 0, &bytes, &count, &resume, nullptr);
+    if (GetLastError() != ERROR_MORE_DATA)
+        return {};
+    std::vector<BYTE> buffer(bytes);
+    resume = 0;
+    if (!EnumServicesStatusExW(
+            manager.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
+            SERVICE_STATE_ALL, buffer.data(), static_cast<DWORD>(buffer.size()),
+            &bytes, &count, &resume, nullptr))
+    {
+        throw std::runtime_error("cannot enumerate Windows services");
+    }
+    const auto* services =
+        reinterpret_cast<const ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+    std::vector<InstalledService> result;
+    for (DWORD index = 0; index < count; ++index) {
+        const std::wstring name = services[index].lpServiceName;
+        if (name != L"SearchEngineService" &&
+            name.rfind(L"SearchEngineService-", 0) != 0)
+        {
+            continue;
+        }
+        try {
+            result.push_back(inspectSearchEngineService(name));
+        } catch (...) {
+            // A similarly named but malformed service is not an eligible target.
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+        return left.serviceName < right.serviceName;
+    });
+    return result;
+}
+
+InstalledService inspectSearchEngineService(const std::wstring& serviceName)
+{
+    ScManager manager(SC_MANAGER_CONNECT);
+    ServiceHandle service(OpenServiceW(
+        manager.get(), serviceName.c_str(),
+        SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS));
+    if (!service)
+        throw std::runtime_error(
+            "SearchEngine service was not found: " + utf8(serviceName));
+    const std::wstring imagePath = queryImagePath(service.get());
+    const ServiceInvocation invocation = parseServiceInvocation(imagePath);
+    if (!invocation.serviceNameArgument.empty() &&
+        invocation.serviceNameArgument != serviceName)
+    {
+        throw std::runtime_error("SCM name and --service-name do not match");
+    }
+
+    DWORD bytes = 0;
+    QueryServiceConfigW(service.get(), nullptr, 0, &bytes);
+    std::vector<BYTE> buffer(bytes);
+    auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+    if (!QueryServiceConfigW(service.get(), config, bytes, &bytes))
+        throw std::runtime_error("QueryServiceConfigW failed");
+
+    InstalledService result;
+    result.serviceName = serviceName;
+    result.displayName = config->lpDisplayName ? config->lpDisplayName : L"";
+    result.imagePath = imagePath;
+    result.executable = invocation.executable;
+    result.dataDirectory = invocation.dataDirectory;
+    result.currentState = queryStatus(service.get()).dwCurrentState;
+    return result;
+}
+
+ServiceArchivePlan planServiceArchive(const ServiceArchiveOptions& options)
+{
+    if (options.serviceName.empty())
+        throw std::runtime_error("service name is required");
+    if (options.archiveRoot.empty() || !options.archiveRoot.is_absolute() ||
+        isDriveRoot(options.archiveRoot))
+    {
+        throw std::runtime_error("archive root must be a safe absolute directory");
+    }
+
+    ServiceArchivePlan plan;
+    plan.options = options;
+    plan.options.archiveRoot = absoluteNormalized(options.archiveRoot);
+    plan.service = inspectSearchEngineService(options.serviceName);
+    if (!fs::is_regular_file(plan.service.executable))
+        throw std::runtime_error("service executable is missing");
+    if (!fs::is_directory(plan.service.dataDirectory))
+        throw std::runtime_error("service data directory is missing");
+
+    const fs::path settingsPath =
+        plan.service.dataDirectory / L"Settings.json";
+    const json settings = readJson(settingsPath);
+    if (!settings.contains("config") || !settings.at("config").is_object())
+        throw std::runtime_error("Settings.json has no config object");
+    const json& config = settings.at("config");
+    if (config.value("document_catalog_storage", std::string("memory")) !=
+        "sqlite")
+    {
+        throw std::runtime_error(
+            "service archive requires document_catalog_storage=sqlite");
+    }
+    const std::string yearText = requiredString(config, "year");
+    plan.year = std::stoi(yearText);
+    if (plan.year < 1900 || plan.year > 9999)
+        throw std::runtime_error("configured year is outside 1900..9999");
+
+    plan.finalDirectory = plan.options.archiveRoot /
+        serviceArchiveDirectoryLeaf(options.serviceName, plan.year);
+    if (fs::exists(plan.finalDirectory))
+        throw std::runtime_error(
+            "service archive directory already exists: " +
+            utf8(plan.finalDirectory));
+
+    plan.originalInstallDirectory = serviceInstallDirectory(
+        plan.service.executable);
+    addMapping(
+        plan,
+        plan.originalInstallDirectory,
+        plan.finalDirectory / L"program");
+    addMapping(
+        plan,
+        plan.service.dataDirectory,
+        plan.finalDirectory / L"data");
+
+    YearMoveOptions yearOptions;
+    yearOptions.year = plan.year;
+    yearOptions.prmMonthlyDirectory = configuredMonthlyDirectory(
+        config, "prm_monthly_bases_dir", "prm_base_dir");
+    yearOptions.prdMonthlyDirectory = configuredMonthlyDirectory(
+        config, "prd_monthly_bases_dir", "prd_base_dir");
+    plan.originalPrmMonthlyDirectory = yearOptions.prmMonthlyDirectory;
+    plan.originalPrdMonthlyDirectory = yearOptions.prdMonthlyDirectory;
+    yearOptions.archiveRoot = plan.finalDirectory;
+    if (!yearOptions.prmMonthlyDirectory.empty() ||
+        !yearOptions.prdMonthlyDirectory.empty())
+    {
+        plan.monthlyDatabases = inspectMonthlyDatabases(
+            yearOptions, &plan.warnings);
+    }
+
+    std::vector<fs::path> contentRoots = configuredIndexRoots(config);
+    for (const auto& database : plan.monthlyDatabases) {
+        std::string verifyError;
+        if (!verifySQLiteDatabase(database.source, verifyError)) {
+            throw std::runtime_error(
+                "monthly SQLite integrity check failed: " + verifyError);
+        }
+        auto roots = inspectAutoPadDirectToRoots(database.source);
+        contentRoots.insert(contentRoots.end(), roots.begin(), roots.end());
+    }
+    contentRoots = collapseSourceRoots(std::move(contentRoots));
+    for (const auto& root : contentRoots) {
+        if (!fs::is_directory(root))
+            throw std::runtime_error("archive content root is missing: " + utf8(root));
+        for (const auto& monthlyDirectory : {
+                 plan.originalPrmMonthlyDirectory,
+                 plan.originalPrdMonthlyDirectory})
+        {
+            if (!monthlyDirectory.empty() &&
+                (isPathEqualOrBelow(root, monthlyDirectory) ||
+                 isPathEqualOrBelow(monthlyDirectory, root)))
+            {
+                throw std::runtime_error(
+                    "indexed content and monthly database directories overlap: " +
+                    utf8(root));
+            }
+        }
+        addMapping(
+            plan,
+            root,
+            plan.finalDirectory / L"content" /
+                safeServiceLeaf(root.filename().wstring()));
+    }
+
+    plan.archivedExecutable = rebasePath(
+        plan.service.executable, plan.mappings);
+    plan.archivedDataDirectory = rebasePath(
+        plan.service.dataDirectory, plan.mappings);
+    plan.archivedImagePath = buildServiceImagePath(
+        plan.archivedExecutable,
+        plan.service.serviceName,
+        plan.archivedDataDirectory);
+    ensureNoOtherServiceUsesSources(plan.service.serviceName, plan.mappings);
+    return plan;
+}
+
+void rewriteDocumentCatalogPaths(
+    const fs::path& database,
+    const std::vector<PathMapping>& mappings)
+{
+    sqlite3* handle = nullptr;
+    const std::string databaseUtf8 = utf8(database);
+    if (sqlite3_open_v2(
+            databaseUtf8.c_str(), &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK)
+    {
+        const std::string detail = handle ? sqlite3_errmsg(handle) : "no handle";
+        if (handle)
+            sqlite3_close_v2(handle);
+        throw std::runtime_error("cannot open inverted index: " + detail);
+    }
+    struct DbGuard {
+        sqlite3* value;
+        ~DbGuard() { sqlite3_close_v2(value); }
+    } guard{handle};
+    sqlite3_busy_timeout(handle, 30000);
+    sqlite3_extended_result_codes(handle, 1);
+    ensureDocsSchema(handle);
+    sqliteExec(handle, "BEGIN IMMEDIATE");
+    sqlite3_stmt* select = nullptr;
+    sqlite3_stmt* update = nullptr;
+    try {
+        int result = sqlite3_prepare_v2(
+            handle, "SELECT doc_id,path FROM docs ORDER BY doc_id",
+            -1, &select, nullptr);
+        if (result != SQLITE_OK)
+            throw std::runtime_error(sqliteFailure(
+                handle, "cannot prepare docs.path read", result));
+
+        struct CatalogPathRewrite {
+            sqlite3_int64 id{};
+            fs::path source;
+            std::string targetUtf8;
+        };
+        std::vector<CatalogPathRewrite> rows;
+        std::map<std::string, std::pair<sqlite3_int64, fs::path>> targetRows;
+        while (true) {
+            result = sqlite3_step(select);
+            if (result == SQLITE_DONE)
+                break;
+            if (result != SQLITE_ROW) {
+                throw std::runtime_error(sqliteFailure(
+                    handle, "cannot read docs.path", result));
+            }
+            const sqlite3_int64 id = sqlite3_column_int64(select, 0);
+            const auto* raw = sqlite3_column_text(select, 1);
+            if (!raw) {
+                throw std::runtime_error(
+                    "cannot rewrite NULL docs.path for doc_id=" +
+                    std::to_string(id));
+            }
+            const fs::path source = fromUtf8(
+                reinterpret_cast<const char*>(raw));
+            const fs::path target = rebasePath(source, mappings);
+            const std::string targetUtf8 = utf8(target);
+            const auto existing = targetRows.find(targetUtf8);
+            if (existing != targetRows.end()) {
+                throw std::runtime_error(
+                    "docs.path rewrite still produces a duplicate target: " +
+                    targetUtf8 +
+                    "; first doc_id=" +
+                    std::to_string(existing->second.first) +
+                    "; first source=" + utf8(existing->second.second) +
+                    "; second doc_id=" + std::to_string(id) +
+                    "; second source=" + utf8(source));
+            }
+            targetRows.emplace(targetUtf8, std::pair{id, source});
+            rows.push_back({id, source, targetUtf8});
+        }
+        sqlite3_finalize(select);
+        select = nullptr;
+
+        result = sqlite3_prepare_v2(
+            handle, "UPDATE docs SET path=? WHERE doc_id=?",
+            -1, &update, nullptr);
+        if (result != SQLITE_OK)
+            throw std::runtime_error(sqliteFailure(
+                handle, "cannot prepare docs.path update", result));
+
+        for (const auto& row : rows) {
+            sqlite3_reset(update);
+            sqlite3_clear_bindings(update);
+            result = sqlite3_bind_text(
+                update, 1, row.targetUtf8.c_str(),
+                static_cast<int>(row.targetUtf8.size()), SQLITE_TRANSIENT);
+            if (result == SQLITE_OK)
+                result = sqlite3_bind_int64(update, 2, row.id);
+            if (result == SQLITE_OK)
+                result = sqlite3_step(update);
+            if (result != SQLITE_DONE) {
+                throw std::runtime_error(
+                    sqliteFailure(handle, "cannot update docs.path", result) +
+                    "; doc_id=" + std::to_string(row.id) +
+                    "; source=" + utf8(row.source) +
+                    "; target=" + row.targetUtf8);
+            }
+        }
+        sqlite3_finalize(update);
+        update = nullptr;
+        sqliteExec(handle, "COMMIT");
+        sqliteExec(handle, "PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch (...) {
+        if (select)
+            sqlite3_finalize(select);
+        if (update)
+            sqlite3_finalize(update);
+        try { sqliteExec(handle, "ROLLBACK"); } catch (...) {}
+        throw;
+    }
+    std::string verifyError;
+    if (!verifySQLiteDatabase(database, verifyError))
+        throw std::runtime_error(
+            "rewritten inverted index failed integrity check: " + verifyError);
+}
+
+void rewriteSettingsForArchive(
+    const fs::path& settingsPath,
+    const std::vector<PathMapping>& mappings,
+    const fs::path& prmMonthlyDirectory,
+    const fs::path& prdMonthlyDirectory)
+{
+    rewriteSettings(
+        settingsPath, mappings,
+        prmMonthlyDirectory, prdMonthlyDirectory, "archive");
+}
+
+void rewriteSettingsForActive(
+    const fs::path& settingsPath,
+    const std::vector<PathMapping>& archiveToOriginalMappings,
+    const fs::path& prmMonthlyDirectory,
+    const fs::path& prdMonthlyDirectory)
+{
+    rewriteSettings(
+        settingsPath, archiveToOriginalMappings,
+        prmMonthlyDirectory, prdMonthlyDirectory, "active");
+}
+
+ServiceArchiveResult executeServiceArchive(
+    const ServiceArchivePlan& plan,
+    const ProgressCallback& progress)
+{
+    ServiceArchiveResult result;
+    result.archiveDirectory = plan.finalDirectory;
+    result.manifestPath = plan.finalDirectory / kManifestName;
+    bool serviceStopped = false;
+    bool imageSwitched = false;
+    bool published = false;
+    try {
+        ScManager manager(SC_MANAGER_CONNECT);
+        ServiceHandle service = openServiceForArchive(
+            manager.get(), plan.service.serviceName);
+        if (queryImagePath(service.get()) != plan.service.imagePath)
+            throw std::runtime_error("service ImagePath changed after planning");
+
+        if (progress)
+            progress(L"Остановка службы " + plan.service.serviceName);
+        stopService(service.get());
+        serviceStopped = true;
+
+        fs::create_directories(plan.options.archiveRoot);
+        const fs::path staging = plan.options.archiveRoot /
+            (L"." + plan.finalDirectory.filename().wstring() +
+             L".staging-" + std::to_wstring(GetCurrentProcessId()));
+        if (fs::exists(staging))
+            throw std::runtime_error("service archive staging already exists");
+        fs::create_directories(staging);
+
+        std::vector<CopiedFile> copied;
+        const std::vector<fs::path> excludedMonthlyDirectories{
+            plan.originalPrmMonthlyDirectory,
+            plan.originalPrdMonthlyDirectory};
+        for (const auto& mapping : plan.mappings) {
+            if (progress)
+                progress(L"Копирование каталога: " + mapping.source.wstring());
+            copyTree(
+                mapping.source,
+                staging / mapping.target.lexically_relative(plan.finalDirectory),
+                plan.year,
+                copied,
+                excludedMonthlyDirectories);
+        }
+
+        for (const auto& database : plan.monthlyDatabases) {
+            const fs::path target = staging / database.relativeTarget;
+            if (progress)
+                progress(L"SQLite backup: " + database.source.wstring());
+            fs::create_directories(target.parent_path());
+            const SQLiteBackupResult backup = backupSQLiteDatabase(
+                database.source, target);
+            if (!backup.ok)
+                throw std::runtime_error("monthly SQLite backup failed: " + backup.message);
+            rewriteAutoPadDirectTo(target, plan.mappings);
+            std::string verifyError;
+            if (!verifySQLiteDatabase(target, verifyError))
+                throw std::runtime_error("rewritten monthly SQLite failed: " + verifyError);
+        }
+
+        const fs::path stagedData = staging /
+            plan.archivedDataDirectory.lexically_relative(plan.finalDirectory);
+        const fs::path stagedSettings = stagedData / L"Settings.json";
+        const fs::path stagedIndex = stagedData / L"inverted_index.sqlite";
+        if (!fs::is_regular_file(stagedSettings) ||
+            !fs::is_regular_file(stagedIndex))
+        {
+            throw std::runtime_error(
+                "staged server data has no Settings.json/inverted_index.sqlite");
+        }
+        if (progress)
+            progress(L"SQLite backup: " +
+                (plan.service.dataDirectory / L"inverted_index.sqlite").wstring());
+        replaceStagedIndexWithSnapshot(
+            plan.service.dataDirectory / L"inverted_index.sqlite",
+            stagedIndex,
+            copied);
+        if (progress)
+            progress(L"Перепривязка путей поискового индекса");
+        rewriteDocumentCatalogPaths(stagedIndex, plan.mappings);
+        const fs::path archivedPrmMonthlyDirectory =
+            plan.originalPrmMonthlyDirectory.empty()
+            ? fs::path{}
+            : plan.finalDirectory / L"autopad" / L"PRM" / L"monthly";
+        const fs::path archivedPrdMonthlyDirectory =
+            plan.originalPrdMonthlyDirectory.empty()
+            ? fs::path{}
+            : plan.finalDirectory / L"autopad" / L"PRD" / L"monthly";
+        if (!archivedPrmMonthlyDirectory.empty()) {
+            fs::create_directories(
+                staging / archivedPrmMonthlyDirectory.lexically_relative(
+                    plan.finalDirectory));
+        }
+        if (!archivedPrdMonthlyDirectory.empty()) {
+            fs::create_directories(
+                staging / archivedPrdMonthlyDirectory.lexically_relative(
+                    plan.finalDirectory));
+        }
+        rewriteSettingsForArchive(
+            stagedSettings,
+            plan.mappings,
+            archivedPrmMonthlyDirectory,
+            archivedPrdMonthlyDirectory);
+
+        json manifest;
+        manifest["format_version"] = 1;
+        manifest["operation"] = "service-archive";
+        manifest["phase"] = "published";
+        manifest["year"] = plan.year;
+        manifest["service_name"] = utf8(plan.service.serviceName);
+        manifest["original_image_path"] = utf8(plan.service.imagePath);
+        manifest["archived_image_path"] = utf8(plan.archivedImagePath);
+        manifest["original_data_directory"] = utf8(plan.service.dataDirectory);
+        manifest["original_install_directory"] =
+            utf8(plan.originalInstallDirectory);
+        manifest["archived_data_directory"] = utf8(plan.archivedDataDirectory);
+        manifest["original_executable"] = utf8(plan.service.executable);
+        manifest["archived_executable"] = utf8(plan.archivedExecutable);
+        manifest["warnings"] = plan.warnings;
+        manifest["original_prm_monthly_directory"] =
+            utf8(plan.originalPrmMonthlyDirectory);
+        manifest["original_prd_monthly_directory"] =
+            utf8(plan.originalPrdMonthlyDirectory);
+        manifest["mappings"] = mappingJson(plan.mappings);
+        manifest["files"] = json::array();
+        for (const auto& file : copied) {
+            const fs::path finalTarget = plan.finalDirectory /
+                file.stagedTarget.lexically_relative(staging);
+            const FileHashResult target = sha256File(file.stagedTarget);
+            if (!target.ok)
+                throw std::runtime_error(target.message);
+            manifest["files"].push_back({
+                {"source", utf8(file.source)},
+                {"target", utf8(finalTarget)},
+                {"source_size", file.original.size},
+                {"source_sha256", file.original.sha256},
+                {"target_size", target.size},
+                {"target_sha256", target.sha256},
+                {"transformed", target.sha256 != file.original.sha256}});
+        }
+        manifest["monthly_databases"] = json::array();
+        for (const auto& database : plan.monthlyDatabases) {
+            const SQLiteSourceFingerprint fingerprint =
+                inspectSQLiteSource(database.source);
+            if (!fingerprint.ok)
+                throw std::runtime_error(fingerprint.message);
+            const FileHashResult source = sha256File(database.source);
+            if (!source.ok)
+                throw std::runtime_error(source.message);
+            const fs::path stagedTarget = staging / database.relativeTarget;
+            const FileHashResult target = sha256File(stagedTarget);
+            if (!target.ok)
+                throw std::runtime_error(target.message);
+            manifest["monthly_databases"].push_back({
+                {"kind", database.kind == MonthlyDatabase::Kind::Prm ? "PRM" : "PRD"},
+                {"month", database.month},
+                {"source", utf8(database.source)},
+                {"target", utf8(plan.finalDirectory / database.relativeTarget)},
+                {"source_fingerprint", fingerprint.value},
+                {"source_fingerprint_cacheable", fingerprint.cacheable},
+                {"source_journal_mode", fingerprint.journal_mode},
+                {"source_size", source.size},
+                {"source_sha256", source.sha256},
+                {"target_size", target.size},
+                {"target_sha256", target.sha256}});
+        }
+        saveJsonAtomically(staging / kManifestName, manifest);
+
+        std::error_code publishError;
+        fs::rename(staging, plan.finalDirectory, publishError);
+        if (publishError)
+            throw std::runtime_error(
+                "cannot publish service archive: " + publishError.message());
+        published = true;
+
+        if (progress)
+            progress(L"Переключение SCM на архивную копию");
+        setImagePath(service.get(), plan.archivedImagePath);
+        imageSwitched = true;
+        manifest["phase"] = "scm-switched";
+        saveJsonAtomically(result.manifestPath, manifest);
+        startService(service.get());
+        serviceStopped = false;
+        manifest["phase"] = "archive-running";
+        saveJsonAtomically(result.manifestPath, manifest);
+
+        result.ok = true;
+        result.message =
+            "service is running from verified archive; original sources are preserved";
+        return result;
+    } catch (const std::exception& error) {
+        std::string rollbackError;
+        try {
+            if (imageSwitched || serviceStopped) {
+                ScManager manager(SC_MANAGER_CONNECT);
+                ServiceHandle service = openServiceForArchive(
+                    manager.get(), plan.service.serviceName);
+                stopService(service.get());
+                if (imageSwitched)
+                    setImagePath(service.get(), plan.service.imagePath);
+                if (plan.service.currentState == SERVICE_RUNNING)
+                    startService(service.get());
+            }
+        } catch (const std::exception& rollback) {
+            rollbackError = rollback.what();
+        }
+        if (published) {
+            try {
+                json manifest = readJson(result.manifestPath);
+                manifest["phase"] = rollbackError.empty()
+                    ? "failed-rolled-back" : "failed-rollback-required";
+                manifest["failure"] = error.what();
+                if (!rollbackError.empty())
+                    manifest["rollback_failure"] = rollbackError;
+                saveJsonAtomically(result.manifestPath, manifest);
+            } catch (...) {}
+        }
+        result.message = error.what();
+        if (!rollbackError.empty())
+            result.message += "; rollback failed: " + rollbackError;
+        return result;
+    }
+}
+
+ServiceArchiveResult cleanupServiceArchiveSources(
+    const fs::path& archiveDirectory,
+    bool preservePrdDecember,
+    const ProgressCallback& progress)
+{
+    ServiceArchiveResult result;
+    result.archiveDirectory = absoluteNormalized(archiveDirectory);
+    result.manifestPath = result.archiveDirectory / kManifestName;
+    json manifest;
+    bool sourceCleanupStarted = false;
+    try {
+        if (!result.archiveDirectory.is_absolute() ||
+            isDriveRoot(result.archiveDirectory))
+        {
+            throw std::runtime_error("unsafe service archive directory");
+        }
+        manifest = readJson(result.manifestPath);
+        const std::string sourcePhase = manifest.value("phase", "");
+        if (manifest.value("operation", "") != "service-archive" ||
+            !isRestorableRunningPhase(sourcePhase))
+        {
+            throw std::runtime_error(
+                "service archive is not ready for source cleanup");
+        }
+
+        const std::wstring serviceName = encoding::utf8_to_wstring(
+            manifest.at("service_name").get<std::string>());
+        const std::wstring archivedImage = encoding::utf8_to_wstring(
+            manifest.at("archived_image_path").get<std::string>());
+        ScManager manager(SC_MANAGER_CONNECT);
+        ServiceHandle service = openServiceForArchive(manager.get(), serviceName);
+        if (queryImagePath(service.get()) != archivedImage)
+            throw std::runtime_error("service no longer points to this archive");
+
+        const auto mappings = mappingsFromJson(manifest.at("mappings"), false);
+        if (mappings.empty())
+            throw std::runtime_error("service archive manifest has no mappings");
+        for (const auto& mapping : mappings) {
+            if (!mapping.source.is_absolute() || isDriveRoot(mapping.source) ||
+                !isPathEqualOrBelow(mapping.target, result.archiveDirectory))
+            {
+                throw std::runtime_error("unsafe path mapping in service manifest");
+            }
+        }
+
+        const fs::path originalExecutable = absoluteNormalized(fromUtf8(
+            manifest.at("original_executable").get<std::string>()));
+        const fs::path originalInstallDirectory =
+            manifest.contains("original_install_directory")
+            ? absoluteNormalized(fromUtf8(
+                manifest.at("original_install_directory").get<std::string>()))
+            : serviceInstallDirectory(originalExecutable);
+        const fs::path originalDataDirectory = absoluteNormalized(fromUtf8(
+            manifest.at("original_data_directory").get<std::string>()));
+        if (!isPathEqualOrBelow(originalExecutable, originalInstallDirectory) ||
+            originalInstallDirectory.empty() ||
+            originalDataDirectory.empty() ||
+            !originalInstallDirectory.is_absolute() ||
+            !originalDataDirectory.is_absolute() ||
+            isDriveRoot(originalInstallDirectory) ||
+            isDriveRoot(originalDataDirectory) ||
+            pathsOverlap(originalInstallDirectory, result.archiveDirectory) ||
+            pathsOverlap(originalDataDirectory, result.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "unsafe original runtime directory in service manifest");
+        }
+        const std::vector<fs::path> runtimeCleanupDirectories{
+            originalInstallDirectory,
+            originalDataDirectory};
+
+        std::vector<PathMapping> protectedSources = mappings;
+        for (const auto& root : runtimeCleanupDirectories) {
+            protectedSources.push_back({root, result.archiveDirectory});
+        }
+        ensureNoOtherServiceUsesSources(serviceName, protectedSources);
+
+        const fs::path archivedData = fromUtf8(
+            manifest.at("archived_data_directory").get<std::string>());
+        if (!isPathEqualOrBelow(archivedData, result.archiveDirectory))
+            throw std::runtime_error("unsafe archived data directory in manifest");
+        const fs::path archivedIndex = archivedData / L"inverted_index.sqlite";
+        std::string verifyError;
+        if (!verifySQLiteDatabase(archivedIndex, verifyError)) {
+            throw std::runtime_error(
+                "archived inverted index failed integrity check: " + verifyError);
+        }
+        const json archivedSettings = readJson(archivedData / L"Settings.json");
+        if (!archivedSettings.contains("config") ||
+            archivedSettings.at("config").value("server_mode", "") != "archive")
+        {
+            throw std::runtime_error("archived Settings.json is not frozen");
+        }
+
+        std::vector<fs::path> removableFiles;
+        for (const auto& item : manifest.at("files")) {
+            const fs::path source = fromUtf8(
+                item.at("source").get<std::string>());
+            const fs::path target = fromUtf8(
+                item.at("target").get<std::string>());
+            const fs::path expected = rebasePath(source, mappings);
+            if (!samePath(expected, target) ||
+                !isPathEqualOrBelow(target, result.archiveDirectory))
+            {
+                throw std::runtime_error(
+                    "file path does not match service archive mapping: " +
+                    utf8(source));
+            }
+            if (!fs::is_regular_file(target)) {
+                throw std::runtime_error(
+                    "archived target file is missing: " + utf8(target));
+            }
+            if (!fs::exists(source))
+                continue;
+            const FileHashResult sourceHash = sha256File(source);
+            if (!sourceHash.ok ||
+                sourceHash.size != item.at("source_size").get<std::uint64_t>() ||
+                sourceHash.sha256 != item.at("source_sha256").get<std::string>())
+            {
+                throw std::runtime_error(
+                    "source changed after archive publication; cleanup refused: " +
+                    utf8(source));
+            }
+
+            // Program and indexed-content files are immutable in archive mode.
+            // Data files may legitimately change while the archived service runs.
+            if (!isPathEqualOrBelow(target, archivedData)) {
+                const FileHashResult targetHash = sha256File(target);
+                if (!targetHash.ok ||
+                    targetHash.size != item.at("target_size").get<std::uint64_t>() ||
+                    targetHash.sha256 != item.at("target_sha256").get<std::string>())
+                {
+                    throw std::runtime_error(
+                        "archived immutable file changed; cleanup refused: " +
+                        utf8(target));
+                }
+            }
+            const bool belongsToRuntimeDirectory = std::any_of(
+                runtimeCleanupDirectories.begin(),
+                runtimeCleanupDirectories.end(),
+                [&](const fs::path& root) {
+                    return isPathEqualOrBelow(source, root);
+                });
+            if (!belongsToRuntimeDirectory)
+                removableFiles.push_back(source);
+        }
+
+        struct RetainedMonthlyDatabase {
+            fs::path snapshot;
+            fs::path destination;
+            bool replacementRequired{false};
+            bool prdDecember{false};
+        };
+        std::vector<fs::path> removableMonthlyDatabases;
+        std::vector<RetainedMonthlyDatabase> retainedMonthlyDatabases;
+        for (const auto& item : manifest.at("monthly_databases")) {
+            const std::string kind = item.at("kind").get<std::string>();
+            const int month = item.at("month").get<int>();
+            const bool isPrdDecember = kind == "PRD" && month == 12;
+            const bool retainDatabase =
+                isPrdDecember && preservePrdDecember;
+            const fs::path source = fromUtf8(
+                item.at("source").get<std::string>());
+            const fs::path target = fromUtf8(
+                item.at("target").get<std::string>());
+            if (!source.is_absolute() || isDriveRoot(source) ||
+                !isPathEqualOrBelow(target, result.archiveDirectory) ||
+                !fs::is_regular_file(target))
+            {
+                throw std::runtime_error(
+                    "unsafe or missing monthly database in manifest");
+            }
+            if (!verifySQLiteDatabase(target, verifyError)) {
+                throw std::runtime_error(
+                    "archived monthly database failed integrity check: " +
+                    verifyError);
+            }
+            const FileHashResult targetHash = sha256File(target);
+            if (!targetHash.ok ||
+                targetHash.size != item.at("target_size").get<std::uint64_t>() ||
+                targetHash.sha256 != item.at("target_sha256").get<std::string>())
+            {
+                throw std::runtime_error(
+                    "archived monthly database changed: " + utf8(target));
+            }
+
+            const bool sourceExists = fs::exists(source);
+            const bool alreadyRebased = retainDatabase && sourceExists &&
+                fs::is_regular_file(source) &&
+                autoPadDatabasesUseSameDirectToRoots(source, target);
+            if (sourceExists && !alreadyRebased) {
+                const FileHashResult sourceHash = sha256File(source);
+                const SQLiteSourceFingerprint fingerprint =
+                    inspectSQLiteSource(source);
+                if (!sourceHash.ok || !fingerprint.ok ||
+                    sourceHash.size != item.at("source_size").get<std::uint64_t>() ||
+                    sourceHash.sha256 != item.at("source_sha256").get<std::string>() ||
+                    fingerprint.value !=
+                        item.at("source_fingerprint").get<std::string>())
+                {
+                    throw std::runtime_error(
+                        "source monthly database changed; cleanup refused: " +
+                        utf8(source));
+                }
+            }
+
+            if (retainDatabase) {
+                retainedMonthlyDatabases.push_back({
+                    target, source, !alreadyRebased, isPrdDecember});
+            } else if (sourceExists) {
+                removableMonthlyDatabases.push_back(source);
+            }
+        }
+
+        // Every archive target, unchanged manifest source, and complete runtime
+        // tree is validated before the first deletion. Missing files from an
+        // earlier interrupted cleanup are allowed.
+        validateServiceRuntimeCleanupDirectories(runtimeCleanupDirectories);
+        manifest["phase"] = "archive-running-source-cleanup-in-progress";
+        manifest.erase("source_cleanup_failure");
+        saveJsonAtomically(result.manifestPath, manifest);
+        sourceCleanupStarted = true;
+
+        for (const auto& database : retainedMonthlyDatabases) {
+            if (!database.replacementRequired)
+                continue;
+            if (progress) {
+                progress(
+                    database.prdDecember
+                    ? L"Обновление декабрьской BASES_PRD для TverdakManager: " +
+                        database.destination.wstring()
+                    : L"Обновление сохранённой месячной базы: " +
+                        database.destination.wstring());
+            }
+            replaceRetainedAutoPadDatabase(
+                database.snapshot, database.destination);
+        }
+
+        std::vector<fs::path> deletedFiles;
+        for (const auto& source : removableFiles) {
+            if (progress)
+                progress(L"Удаление проверенного исходного файла: " + source.wstring());
+            std::error_code error;
+            if (!fs::remove(source, error) || error)
+                throw std::runtime_error("cannot delete source file: " + utf8(source));
+            deletedFiles.push_back(source);
+        }
+        for (const auto& source : removableMonthlyDatabases) {
+            if (progress)
+                progress(L"Удаление проверенной месячной базы: " + source.wstring());
+            std::error_code error;
+            if (!fs::remove(source, error) || error) {
+                throw std::runtime_error(
+                    "cannot delete source monthly database: " + utf8(source));
+            }
+            deletedFiles.push_back(source);
+        }
+
+        std::set<fs::path> candidateDirectories;
+        for (const auto& file : deletedFiles) {
+            fs::path current = file.parent_path();
+            for (const auto& mapping : mappings) {
+                if (!isPathEqualOrBelow(current, mapping.source))
+                    continue;
+                while (isPathEqualOrBelow(current, mapping.source)) {
+                    if (!samePath(current, fs::path(L"D:\\TLG")))
+                        candidateDirectories.insert(current);
+                    if (samePath(current, mapping.source))
+                        break;
+                    current = current.parent_path();
+                }
+                break;
+            }
+        }
+        std::vector<fs::path> orderedDirectories(
+            candidateDirectories.begin(), candidateDirectories.end());
+        std::sort(
+            orderedDirectories.begin(), orderedDirectories.end(),
+            [](const fs::path& left, const fs::path& right) {
+                return left.wstring().size() > right.wstring().size();
+            });
+        for (const auto& directory : orderedDirectories) {
+            std::error_code error;
+            fs::remove(directory, error); // Empty directories only.
+        }
+
+        removeServiceRuntimeCleanupDirectories(
+            runtimeCleanupDirectories, progress);
+        for (const auto& root : runtimeCleanupDirectories) {
+            if (fs::exists(root)) {
+                throw std::runtime_error(
+                    "runtime directory still exists after cleanup: " +
+                    utf8(root));
+            }
+        }
+
+        manifest["phase"] = "archive-running-source-cleaned";
+        manifest["source_cleanup_deleted_files"] = deletedFiles.size();
+        manifest["source_cleanup_deleted_monthly_databases"] =
+            removableMonthlyDatabases.size();
+        manifest["source_cleanup_retained_monthly_databases"] = json::array();
+        for (const auto& database : retainedMonthlyDatabases) {
+            manifest["source_cleanup_retained_monthly_databases"].push_back(
+                utf8(database.destination));
+        }
+        manifest["source_cleanup_preserved_prd_december"] =
+            std::any_of(
+                retainedMonthlyDatabases.begin(),
+                retainedMonthlyDatabases.end(),
+                [](const RetainedMonthlyDatabase& database) {
+                    return database.prdDecember;
+                });
+        manifest["source_cleanup_runtime_directories"] = json::array();
+        for (const auto& root : runtimeCleanupDirectories) {
+            manifest["source_cleanup_runtime_directories"].push_back(
+                utf8(root));
+        }
+        saveJsonAtomically(result.manifestPath, manifest);
+        result.ok = true;
+        result.retainedMonthlyDatabases = retainedMonthlyDatabases.size();
+        result.preservedPrdDecember =
+            manifest.at("source_cleanup_preserved_prd_december").get<bool>();
+        result.message = result.preservedPrdDecember
+            ? "complete service runtime cleanup completed; PRD December "
+              "preserved for TverdakManager with archive paths"
+            : "complete service runtime cleanup completed";
+        return result;
+    } catch (const std::exception& error) {
+        if (sourceCleanupStarted) {
+            try {
+                manifest["phase"] =
+                    "archive-running-source-cleanup-incomplete";
+                manifest["source_cleanup_failure"] = error.what();
+                saveJsonAtomically(result.manifestPath, manifest);
+            } catch (...) {}
+        }
+        result.message = error.what();
+        return result;
+    }
+}
+
+ServiceArchiveResult restoreServiceArchive(
+    const fs::path& archiveDirectory,
+    const fs::path& restoreRoot,
+    const ProgressCallback& progress)
+{
+    ServiceArchiveResult result;
+    result.archiveDirectory = absoluteNormalized(archiveDirectory);
+    result.manifestPath = result.archiveDirectory / kManifestName;
+    try {
+        // Pure planning performs the first complete collision preflight before
+        // SCM is touched and before any staging directory is created.
+        const ServiceRestorePlan plan = planServiceRestore(
+            result.archiveDirectory, restoreRoot);
+        json manifest = readJson(result.manifestPath);
+        ScManager manager(SC_MANAGER_CONNECT);
+        ServiceHandle service = openServiceForArchive(
+            manager.get(), plan.serviceName);
+        if (queryImagePath(service.get()) != plan.archivedImagePath)
+            throw std::runtime_error("service no longer points to this archive");
+        if (progress)
+            progress(L"Остановка архивной службы " + plan.serviceName);
+        stopService(service.get());
+        bool imageSwitched = false;
+        bool published = false;
+        bool restoreRootCreated = false;
+        fs::path stagingRoot;
+        try {
+            // Recheck all final destination directories after stopping the
+            // service and still before the first copy.
+            validateServiceRestoreDestination(plan);
+            if (!fs::exists(plan.restoreRoot)) {
+                fs::create_directories(plan.restoreRoot);
+                restoreRootCreated = true;
+            }
+
+            stagingRoot = plan.restoreRoot /
+                (L".SearchEngine.restore-" +
+                 std::to_wstring(GetCurrentProcessId()) + L"-" +
+                 std::to_wstring(
+                     std::chrono::steady_clock::now()
+                         .time_since_epoch().count()));
+            if (fs::exists(stagingRoot))
+                throw std::runtime_error("restore staging root already exists");
+            fs::create_directories(stagingRoot);
+
+            for (const auto& mapping : plan.mappings) {
+                const fs::path relative =
+                    mapping.target.lexically_relative(plan.restoreRoot);
+                if (progress)
+                    progress(L"Подготовка возврата: " + mapping.target.wstring());
+                std::vector<CopiedFile> copied;
+                copyTree(
+                    mapping.source,
+                    stagingRoot / relative,
+                    plan.year,
+                    copied);
+            }
+
+            const fs::path stagedData = stagingRoot /
+                plan.restoredDataDirectory.lexically_relative(plan.restoreRoot);
+            const fs::path stagedSettings = stagedData / L"Settings.json";
+            const fs::path stagedIndex = stagedData / L"inverted_index.sqlite";
+            const fs::path archivedData = fromUtf8(
+                manifest.at("archived_data_directory").get<std::string>());
+            if (!fs::is_regular_file(stagedSettings) ||
+                !fs::is_regular_file(stagedIndex) ||
+                !isStrictlyBelow(archivedData, result.archiveDirectory))
+            {
+                throw std::runtime_error(
+                    "archive copy has no restorable Settings/index");
+            }
+
+            // Normalize the live archived WAL database into a standalone
+            // snapshot before rebasing paths to the selected restore root.
+            const fs::path indexSnapshot = stagedIndex.wstring() + L".snapshot";
+            const SQLiteBackupResult indexBackup = backupSQLiteDatabase(
+                archivedData / L"inverted_index.sqlite", indexSnapshot);
+            if (!indexBackup.ok)
+                throw std::runtime_error(
+                    "cannot snapshot archived index: " + indexBackup.message);
+            std::error_code fileError;
+            fs::remove(stagedIndex, fileError);
+            if (fileError)
+                throw std::runtime_error("cannot replace staged index");
+            fs::remove(stagedIndex.wstring() + L"-wal", fileError);
+            fileError.clear();
+            fs::remove(stagedIndex.wstring() + L"-shm", fileError);
+            fileError.clear();
+            fs::rename(indexSnapshot, stagedIndex, fileError);
+            if (fileError) {
+                throw std::runtime_error(
+                    "cannot publish staged index snapshot: " +
+                    fileError.message());
+            }
+
+            if (progress)
+                progress(L"Возврат путей поискового индекса");
+            rewriteDocumentCatalogPaths(stagedIndex, plan.mappings);
+            rewriteSettingsForActive(
+                stagedSettings,
+                plan.mappings,
+                plan.restoredPrmMonthlyDirectory,
+                plan.restoredPrdMonthlyDirectory);
+
+            for (const auto& database : plan.monthlyDatabases) {
+                const fs::path staging = stagingRoot /
+                    database.target.lexically_relative(plan.restoreRoot);
+                fs::create_directories(staging.parent_path());
+                const SQLiteBackupResult backup = backupSQLiteDatabase(
+                    database.source, staging);
+                if (!backup.ok) {
+                    throw std::runtime_error(
+                        "monthly restore backup failed: " + backup.message);
+                }
+                rewriteAutoPadDirectTo(staging, plan.mappings);
+                std::string verifyError;
+                if (!verifySQLiteDatabase(staging, verifyError)) {
+                    throw std::runtime_error(
+                        "restored monthly database failed integrity check: " +
+                        verifyError);
+                }
+            }
+
+            // A last no-merge check protects against a destination created
+            // while the verified staging copy was being prepared.
+            validateServiceRestoreDestination(plan);
+            publishRestoreStagingRoot(stagingRoot, plan.restoreRoot);
+            stagingRoot.clear();
+            published = true;
+
+            std::string verifyError;
+            if (!verifySQLiteDatabase(
+                    plan.restoredDataDirectory / L"inverted_index.sqlite",
+                    verifyError))
+            {
+                throw std::runtime_error(
+                    "restored inverted index failed integrity check: " +
+                    verifyError);
+            }
+
+            setImagePath(service.get(), plan.restoredImagePath);
+            imageSwitched = true;
+            startService(service.get());
+            if (queryImagePath(service.get()) != plan.restoredImagePath)
+                throw std::runtime_error(
+                    "restored service ImagePath verification failed");
+            if (queryStatus(service.get()).dwCurrentState != SERVICE_RUNNING)
+                throw std::runtime_error(
+                    "restored service did not reach SERVICE_RUNNING");
+            if (!fs::is_regular_file(plan.restoredExecutable) ||
+                !fs::is_directory(plan.restoredDataDirectory) ||
+                !fs::is_regular_file(
+                    plan.restoredDataDirectory / L"Settings.json") ||
+                !fs::is_regular_file(
+                    plan.restoredDataDirectory / L"inverted_index.sqlite"))
+            {
+                throw std::runtime_error(
+                    "restored executable or data directory is incomplete");
+            }
+            ensureServicesDoNotUseArchive(
+                result.archiveDirectory,
+                enumerateSearchEngineServices());
+        } catch (...) {
+            if (!stagingRoot.empty()) {
+                std::error_code ignored;
+                fs::remove_all(stagingRoot, ignored);
+            }
+            if (restoreRootCreated && !published) {
+                std::error_code ignored;
+                fs::remove(plan.restoreRoot, ignored);
+            }
+            if (imageSwitched)
+                setImagePath(service.get(), plan.archivedImagePath);
+            try { startService(service.get()); } catch (...) {}
+            throw;
+        }
+        manifest["phase"] = "restored-running";
+        manifest["restore_mode"] = "selected-root";
+        manifest["restore_root"] = utf8(plan.restoreRoot);
+        manifest["restored_image_path"] = utf8(plan.restoredImagePath);
+        manifest["restored_executable"] = utf8(plan.restoredExecutable);
+        manifest["restored_data_directory"] =
+            utf8(plan.restoredDataDirectory);
+        manifest["restored_prm_monthly_directory"] =
+            utf8(plan.restoredPrmMonthlyDirectory);
+        manifest["restored_prd_monthly_directory"] =
+            utf8(plan.restoredPrdMonthlyDirectory);
+        saveJsonAtomically(result.manifestPath, manifest);
+        result.ok = true;
+        result.message =
+            "service files were restored under the selected root and the "
+            "active copy is running";
+        return result;
+    } catch (const std::exception& error) {
+        result.message = error.what();
+        return result;
+    }
+}
+
+ServiceArchiveResult restoreServiceArchiveOriginalLocations(
+    const fs::path& archiveDirectory,
+    const ProgressCallback& progress)
+{
+    ServiceArchiveResult result;
+    result.archiveDirectory = absoluteNormalized(archiveDirectory);
+    result.manifestPath = result.archiveDirectory / kManifestName;
+    try {
+        // Build and validate the complete original-location plan before SCM is
+        // touched. The plan uses archive -> original mappings from manifest.
+        const ServiceRestorePlan plan =
+            planServiceRestoreOriginalLocations(result.archiveDirectory);
+        json manifest = readJson(result.manifestPath);
+
+        std::vector<PathMapping> originalSources;
+        originalSources.reserve(plan.mappings.size());
+        for (const auto& mapping : plan.mappings)
+            originalSources.push_back({mapping.target, mapping.source});
+        ensureNoOtherServiceUsesSources(plan.serviceName, originalSources);
+
+        ScManager manager(SC_MANAGER_CONNECT);
+        ServiceHandle service = openServiceForArchive(
+            manager.get(), plan.serviceName);
+        if (queryImagePath(service.get()) != plan.archivedImagePath)
+            throw std::runtime_error("service no longer points to this archive");
+        if (progress)
+            progress(L"Остановка архивной службы " + plan.serviceName);
+        stopService(service.get());
+
+        struct RestoreTree {
+            PathMapping mapping;
+            fs::path staging;
+            bool runtimeRoot{false};
+        };
+        struct MonthlyRestore {
+            fs::path target;
+            fs::path staging;
+            bool replaceExisting{false};
+        };
+        std::vector<RestoreTree> restoreTrees;
+        std::vector<MonthlyRestore> monthlyRestores;
+        bool imageSwitched = false;
+        try {
+            validateOriginalServiceRestoreDestination(plan);
+            if (plan.sourceCleanupCompleted) {
+                std::vector<PathMapping> originalToStaging;
+                std::size_t ordinal = 0;
+                for (const auto& mapping : plan.mappings) {
+                    fs::create_directories(mapping.target.parent_path());
+                    fs::path leaf = mapping.target.filename();
+                    if (leaf.empty())
+                        throw std::runtime_error(
+                            "original restore target has no safe leaf");
+                    const fs::path staging = mapping.target.parent_path() /
+                        (L"." + leaf.wstring() + L".restore-" +
+                         std::to_wstring(GetCurrentProcessId()) + L"-" +
+                         std::to_wstring(++ordinal));
+                    if (fs::exists(staging)) {
+                        throw std::runtime_error(
+                            "restore staging already exists: " + utf8(staging));
+                    }
+                    if (progress) {
+                        progress(
+                            L"Подготовка возврата в исходное место: " +
+                            mapping.target.wstring());
+                    }
+                    std::vector<CopiedFile> copied;
+                    copyTree(mapping.source, staging, plan.year, copied);
+                    restoreTrees.push_back({
+                        mapping,
+                        staging,
+                        mappingContainsRestoredRuntime(plan, mapping)});
+                    originalToStaging.push_back({mapping.target, staging});
+                }
+
+                const fs::path stagedData = rebasePath(
+                    plan.restoredDataDirectory, originalToStaging);
+                const fs::path stagedSettings =
+                    stagedData / L"Settings.json";
+                const fs::path stagedIndex =
+                    stagedData / L"inverted_index.sqlite";
+                const fs::path archivedData = absoluteNormalized(fromUtf8(
+                    manifest.at("archived_data_directory").get<std::string>()));
+                if (!fs::is_regular_file(stagedSettings) ||
+                    !fs::is_regular_file(stagedIndex) ||
+                    !isStrictlyBelow(archivedData, result.archiveDirectory))
+                {
+                    throw std::runtime_error(
+                        "archive copy has no restorable Settings/index");
+                }
+
+                const fs::path indexSnapshot =
+                    stagedIndex.wstring() + L".snapshot";
+                const SQLiteBackupResult indexBackup = backupSQLiteDatabase(
+                    archivedData / L"inverted_index.sqlite", indexSnapshot);
+                if (!indexBackup.ok) {
+                    throw std::runtime_error(
+                        "cannot snapshot archived index: " +
+                        indexBackup.message);
+                }
+                std::error_code fileError;
+                fs::remove(stagedIndex, fileError);
+                if (fileError)
+                    throw std::runtime_error("cannot replace staged index");
+                fs::remove(stagedIndex.wstring() + L"-wal", fileError);
+                fileError.clear();
+                fs::remove(stagedIndex.wstring() + L"-shm", fileError);
+                fileError.clear();
+                fs::rename(indexSnapshot, stagedIndex, fileError);
+                if (fileError) {
+                    throw std::runtime_error(
+                        "cannot publish staged index snapshot: " +
+                        fileError.message());
+                }
+
+                if (progress)
+                    progress(L"Возврат исходных путей поискового индекса");
+                rewriteDocumentCatalogPaths(stagedIndex, plan.mappings);
+                rewriteSettingsForActive(
+                    stagedSettings,
+                    plan.mappings,
+                    plan.restoredPrmMonthlyDirectory,
+                    plan.restoredPrdMonthlyDirectory);
+
+                std::size_t monthlyOrdinal = 0;
+                for (const auto& database : plan.monthlyDatabases) {
+                    const bool replaceExisting =
+                        fs::exists(database.target) &&
+                        isPreservedPrdDecember(plan, database.target);
+                    if (fs::exists(database.target) && !replaceExisting) {
+                        throw std::runtime_error(
+                            "monthly restore destination already exists: " +
+                            utf8(database.target));
+                    }
+                    fs::create_directories(database.target.parent_path());
+                    const fs::path staging = database.target.parent_path() /
+                        (L"." + database.target.filename().wstring() +
+                         L".restore-" +
+                         std::to_wstring(GetCurrentProcessId()) + L"-" +
+                         std::to_wstring(++monthlyOrdinal));
+                    if (fs::exists(staging))
+                        throw std::runtime_error(
+                            "monthly restore staging already exists");
+                    const SQLiteBackupResult backup = backupSQLiteDatabase(
+                        database.source, staging);
+                    if (!backup.ok) {
+                        throw std::runtime_error(
+                            "monthly restore backup failed: " + backup.message);
+                    }
+                    rewriteAutoPadDirectTo(staging, plan.mappings);
+                    std::string verifyError;
+                    if (!verifySQLiteDatabase(staging, verifyError)) {
+                        throw std::runtime_error(
+                            "restored monthly database failed integrity check: " +
+                            verifyError);
+                    }
+                    monthlyRestores.push_back({
+                        database.target, staging, replaceExisting});
+                }
+
+                // Recheck destinations after staging and before publication.
+                validateOriginalServiceRestoreDestination(plan);
+                for (auto& tree : restoreTrees) {
+                    if (!tree.runtimeRoot) {
+                        publishMergedTree(tree.staging, tree.mapping.target);
+                        tree.staging.clear();
+                        continue;
+                    }
+                    if (fs::exists(tree.mapping.target))
+                        removeEmptyDirectoryTree(tree.mapping.target);
+                    std::error_code publishError;
+                    fs::rename(
+                        tree.staging, tree.mapping.target, publishError);
+                    if (publishError) {
+                        throw std::runtime_error(
+                            "cannot publish restored runtime directory: " +
+                            publishError.message());
+                    }
+                    tree.staging.clear();
+                }
+                for (auto& database : monthlyRestores) {
+                    if (database.replaceExisting) {
+                        publishSQLiteReplacement(
+                            database.staging, database.target);
+                        database.staging.clear();
+                        continue;
+                    }
+                    if (fs::exists(database.target)) {
+                        throw std::runtime_error(
+                            "monthly restore destination appeared during publish: " +
+                            utf8(database.target));
+                    }
+                    std::error_code publishError;
+                    fs::rename(
+                        database.staging, database.target, publishError);
+                    if (publishError) {
+                        throw std::runtime_error(
+                            "cannot publish restored monthly database: " +
+                            publishError.message());
+                    }
+                    database.staging.clear();
+                }
+
+                std::string verifyError;
+                if (!verifySQLiteDatabase(
+                        plan.restoredDataDirectory /
+                            L"inverted_index.sqlite",
+                        verifyError))
+                {
+                    throw std::runtime_error(
+                        "restored inverted index failed integrity check: " +
+                        verifyError);
+                }
+            }
+
+            setImagePath(service.get(), plan.restoredImagePath);
+            imageSwitched = true;
+            startService(service.get());
+            if (queryImagePath(service.get()) != plan.restoredImagePath)
+                throw std::runtime_error(
+                    "restored service ImagePath verification failed");
+            if (queryStatus(service.get()).dwCurrentState != SERVICE_RUNNING)
+                throw std::runtime_error(
+                    "restored service did not reach SERVICE_RUNNING");
+            if (!fs::is_regular_file(plan.restoredExecutable) ||
+                !fs::is_directory(plan.restoredDataDirectory) ||
+                !fs::is_regular_file(
+                    plan.restoredDataDirectory / L"Settings.json") ||
+                !fs::is_regular_file(
+                    plan.restoredDataDirectory / L"inverted_index.sqlite"))
+            {
+                throw std::runtime_error(
+                    "restored executable or data directory is incomplete");
+            }
+            ensureServicesDoNotUseArchive(
+                result.archiveDirectory,
+                enumerateSearchEngineServices());
+        } catch (...) {
+            for (const auto& tree : restoreTrees) {
+                if (!tree.staging.empty()) {
+                    std::error_code ignored;
+                    fs::remove_all(tree.staging, ignored);
+                }
+            }
+            for (const auto& database : monthlyRestores) {
+                if (!database.staging.empty()) {
+                    std::error_code ignored;
+                    fs::remove(database.staging, ignored);
+                }
+            }
+            if (imageSwitched)
+                setImagePath(service.get(), plan.archivedImagePath);
+            try { startService(service.get()); } catch (...) {}
+            throw;
+        }
+
+        manifest["phase"] = "restored-running";
+        manifest["restore_mode"] = "original-locations";
+        manifest.erase("restore_root");
+        manifest["restored_image_path"] = utf8(plan.restoredImagePath);
+        manifest["restored_executable"] = utf8(plan.restoredExecutable);
+        manifest["restored_data_directory"] =
+            utf8(plan.restoredDataDirectory);
+        manifest["restored_prm_monthly_directory"] =
+            utf8(plan.restoredPrmMonthlyDirectory);
+        manifest["restored_prd_monthly_directory"] =
+            utf8(plan.restoredPrdMonthlyDirectory);
+        saveJsonAtomically(result.manifestPath, manifest);
+        result.ok = true;
+        result.message = plan.sourceCleanupCompleted
+            ? "service files were restored to their recorded original "
+              "locations and the active copy is running"
+            : "service is running from the preserved original active copy";
+        return result;
+    } catch (const std::exception& error) {
+        result.message = error.what();
+        return result;
+    }
+}
+
+ServiceArchiveResult validateRestoredServiceArchiveDeletion(
+    const fs::path& archiveDirectory,
+    const std::vector<InstalledService>& installedServices)
+{
+    ServiceArchiveResult result;
+    result.archiveDirectory = absoluteNormalized(archiveDirectory);
+    result.manifestPath = result.archiveDirectory / kManifestName;
+    try {
+        if (!result.archiveDirectory.is_absolute() ||
+            isDriveRoot(result.archiveDirectory) ||
+            isDriveRoot(result.archiveDirectory.parent_path()) ||
+            !fs::is_directory(result.archiveDirectory))
+        {
+            throw std::runtime_error(
+                "archive deletion requires an exact safe service directory");
+        }
+        if (!fs::is_regular_file(result.manifestPath))
+            throw std::runtime_error("archive-operation.json is missing");
+
+        const json manifest = readJson(result.manifestPath);
+        if (manifest.value("operation", "") != "service-archive" ||
+            manifest.value("phase", "") != "restored-running")
+        {
+            throw std::runtime_error(
+                "service archive is not in restored-running phase");
+        }
+
+        const std::wstring serviceName = encoding::utf8_to_wstring(
+            manifest.at("service_name").get<std::string>());
+        const int year = manifest.at("year").get<int>();
+        const fs::path expectedDirectory = result.archiveDirectory.parent_path() /
+            serviceArchiveDirectoryLeaf(serviceName, year);
+        if (!samePath(expectedDirectory, result.archiveDirectory))
+            throw std::runtime_error(
+                "archive directory name does not match service manifest");
+
+        const std::wstring originalImage = encoding::utf8_to_wstring(
+            manifest.at("original_image_path").get<std::string>());
+        const std::wstring archivedImage = encoding::utf8_to_wstring(
+            manifest.at("archived_image_path").get<std::string>());
+        const std::wstring restoredImage = encoding::utf8_to_wstring(
+            manifest.value(
+                "restored_image_path",
+                manifest.at("original_image_path").get<std::string>()));
+        const ServiceInvocation original = parseServiceInvocation(originalImage);
+        const ServiceInvocation archived = parseServiceInvocation(archivedImage);
+        const ServiceInvocation restored = parseServiceInvocation(restoredImage);
+        const fs::path originalExecutable = fromUtf8(
+            manifest.at("original_executable").get<std::string>());
+        const fs::path originalData = fromUtf8(
+            manifest.at("original_data_directory").get<std::string>());
+        const fs::path archivedExecutable = fromUtf8(
+            manifest.at("archived_executable").get<std::string>());
+        const fs::path archivedData = fromUtf8(
+            manifest.at("archived_data_directory").get<std::string>());
+        const fs::path restoredExecutable = fromUtf8(manifest.value(
+            "restored_executable", utf8(originalExecutable)));
+        const fs::path restoredData = fromUtf8(manifest.value(
+            "restored_data_directory", utf8(originalData)));
+        if (!samePath(original.executable, originalExecutable) ||
+            !samePath(original.dataDirectory, originalData) ||
+            !samePath(archived.executable, archivedExecutable) ||
+            !samePath(archived.dataDirectory, archivedData) ||
+            !samePath(restored.executable, restoredExecutable) ||
+            !samePath(restored.dataDirectory, restoredData) ||
+            !isStrictlyBelow(archivedExecutable, result.archiveDirectory) ||
+            !isStrictlyBelow(archivedData, result.archiveDirectory) ||
+            isPathEqualOrBelow(restoredExecutable, result.archiveDirectory) ||
+            isPathEqualOrBelow(restoredData, result.archiveDirectory) ||
+            !fs::is_regular_file(archivedExecutable) ||
+            !fs::is_directory(archivedData))
+        {
+            throw std::runtime_error(
+                "service paths do not match the archive manifest");
+        }
+
+        if (!fs::is_regular_file(restoredExecutable) ||
+            !fs::is_directory(restoredData) ||
+            !fs::is_regular_file(restoredData / L"Settings.json") ||
+            !fs::is_regular_file(restoredData / L"inverted_index.sqlite"))
+        {
+            throw std::runtime_error(
+                "restored executable or data directory is incomplete");
+        }
+
+        const InstalledService* selected = nullptr;
+        for (const auto& service : installedServices) {
+            if (service.serviceName == serviceName) {
+                if (selected)
+                    throw std::runtime_error("duplicate selected service snapshot");
+                selected = &service;
+            }
+        }
+        if (!selected)
+            throw std::runtime_error("restored SearchEngine service is missing");
+        if (selected->imagePath != restoredImage ||
+            !samePath(selected->executable, restoredExecutable) ||
+            !samePath(selected->dataDirectory, restoredData))
+        {
+            throw std::runtime_error(
+                "restored service ImagePath does not match the manifest");
+        }
+        if (selected->currentState != SERVICE_RUNNING)
+            throw std::runtime_error("restored service is not SERVICE_RUNNING");
+
+        const auto requireArchivePath = [&](const fs::path& path, const char* label) {
+            if (!path.is_absolute() ||
+                !isStrictlyBelow(path, result.archiveDirectory))
+            {
+                throw std::runtime_error(
+                    std::string(label) + " escapes archiveDirectory");
+            }
+        };
+        for (const auto& mapping : manifest.at("mappings")) {
+            requireArchivePath(
+                fromUtf8(mapping.at("target").get<std::string>()),
+                "mapping target");
+        }
+        for (const auto& item : manifest.at("files")) {
+            requireArchivePath(
+                fromUtf8(item.at("target").get<std::string>()),
+                "file target");
+        }
+        for (const auto& item : manifest.at("monthly_databases")) {
+            requireArchivePath(
+                fromUtf8(item.at("target").get<std::string>()),
+                "monthly database target");
+        }
+
+        ensureServicesDoNotUseArchive(
+            result.archiveDirectory,
+            installedServices);
+        ensureArchiveTreeHasNoReparsePoints(result.archiveDirectory);
+
+        result.ok = true;
+        result.message =
+            "restored service is running from the selected location; "
+            "archive deletion checks passed";
+        return result;
+    } catch (const std::exception& error) {
+        result.message = error.what();
+        return result;
+    }
+}
+
+ServiceArchiveResult deleteRestoredServiceArchive(
+    const fs::path& archiveDirectory,
+    const std::vector<InstalledService>& installedServices,
+    const ProgressCallback& progress)
+{
+    ServiceArchiveResult result = validateRestoredServiceArchiveDeletion(
+        archiveDirectory,
+        installedServices);
+    if (!result.ok)
+        return result;
+    if (progress)
+        progress(L"Удаление проверенной архивной копии: " +
+                 result.archiveDirectory.wstring());
+    std::error_code error;
+    fs::remove_all(result.archiveDirectory, error);
+    if (error || fs::exists(result.archiveDirectory)) {
+        result.ok = false;
+        result.message =
+            "restored service remains active at the selected location; "
+            "archive deletion failed or was incomplete: " + error.message();
+        return result;
+    }
+    result.ok = true;
+    result.message = "verified service archive copy was deleted";
+    return result;
+}
+
+ServiceArchiveResult deleteRestoredServiceArchive(
+    const fs::path& archiveDirectory,
+    const ProgressCallback& progress)
+{
+    return deleteRestoredServiceArchive(
+        archiveDirectory,
+        enumerateSearchEngineServices(),
+        progress);
+}
+
+} // namespace searchengine_archive

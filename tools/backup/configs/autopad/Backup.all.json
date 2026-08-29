@@ -1,0 +1,152 @@
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 60,
+      "targets": [
+        {
+          "src": "D:\\BASES\\ARCHIVE.db3",
+          "max_versions": 180,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\BASES_PRD\\ARCHIVE.db3",
+          "max_versions": 180,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\F12\\base.db",
+          "max_versions": 180,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\F12\\2026.db",
+          "max_versions": 180,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 900,
+      "targets": [
+        {
+          "src": "D:\\BASES\\JURNAL.db3",
+          "max_versions": 96,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\BASES_PRD\\PARAMETERS.db3",
+          "max_versions": 96,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 3600,
+      "targets": [
+        {
+          "src": "D:\\OTPRAVKA\\Settings.db3",
+          "max_versions": 168,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\OTPRAVKA\\Settings2.db3",
+          "max_versions": 168,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\OTPRAVKA\\SettingsO.db3",
+          "max_versions": 168,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 300,
+      "targets": [
+        {
+          "src": "D:\\TVRD",
+          "max_versions": 2016,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 3600,
+      "targets": [
+        {
+          "src": "D:\\BASES",
+          "max_versions": 168,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\BASES_PRD",
+          "max_versions": 168,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 21600,
+      "targets": [
+        {
+          "src": "D:\\F12",
+          "max_versions": 120,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\OTPRAVKA",
+          "max_versions": 120,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        }
+      ]
+    }
+  ]
+}
