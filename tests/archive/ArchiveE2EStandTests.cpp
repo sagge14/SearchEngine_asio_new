@@ -373,6 +373,29 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
                     "SELECT COUNT(DISTINCT CAST(Lists AS INTEGER)) FROM ARCHIVE"),
                 9);
         }
+        const fs::path prmDatabase =
+            options.root / L"autopad" / L"PRM" / L"METH_BASES" /
+            fileName.str();
+        EXPECT_EQ(
+            sqliteScalarInt(
+                prmDatabase,
+                "SELECT COUNT(*) FROM ARCHIVE WHERE COALESCE(KolPril,'')<>'' "
+                "AND (substr(PrilName,-1,1)<>';' OR "
+                "substr(SizeAll,-1,1)<>';' OR substr(Psekretno,-1,1)<>';')"),
+            0);
+        EXPECT_EQ(
+            sqliteScalarInt(
+                prmDatabase,
+                "SELECT COUNT(*) FROM ARCHIVE WHERE COALESCE(KolPril,'')='' "
+                "AND (COALESCE(PrilName,'')<>'' OR COALESCE(SizeAll,'')<>'' "
+                "OR COALESCE(Psekretno,'')<>'')"),
+            0);
+        EXPECT_EQ(
+            sqliteScalarInt(
+                prmDatabase,
+                "SELECT COUNT(*) FROM ARCHIVE WHERE COALESCE(Sekretno,'')='' "
+                "OR COALESCE(Podrazd,'')=''"),
+            0);
     }
     EXPECT_FALSE(fs::exists(options.root / L"autopad" / L"PRM" / L"ARCHIVE.db3"));
     EXPECT_FALSE(fs::exists(options.root / L"autopad" / L"PRD" / L"ARCHIVE.db3"));
@@ -406,6 +429,24 @@ TEST(ArchiveE2EStand, DetectsChangedAttachmentSize)
         std::ofstream output(attachment, std::ios::binary | std::ios::trunc);
         output << "changed";
     }
+    EXPECT_THROW(
+        (void)searchengine_archive_e2e::verifyStand(options.root),
+        std::runtime_error);
+}
+
+TEST(ArchiveE2EStand, DetectsMismatchedF12AttachmentMetadata)
+{
+    TemporaryDirectory temporary;
+    const StandOptions options = standOptions(temporary);
+    (void)searchengine_archive_e2e::generateStand(options);
+
+    const fs::path database =
+        options.root / L"autopad" / L"PRM" / L"METH_BASES" /
+        L"01-2026.db3";
+    sqliteExecute(
+        database,
+        "UPDATE ARCHIVE SET Psekretno='' WHERE \"Index\"=126001001");
+
     EXPECT_THROW(
         (void)searchengine_archive_e2e::verifyStand(options.root),
         std::runtime_error);

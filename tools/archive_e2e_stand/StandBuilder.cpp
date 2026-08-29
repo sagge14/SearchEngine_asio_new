@@ -198,6 +198,15 @@ std::string join(const std::vector<std::string>& values, char separator)
     return stream.str();
 }
 
+std::string joinTerminated(
+    const std::vector<std::string>& values,
+    char separator)
+{
+    if (values.empty())
+        return {};
+    return join(values, separator) + separator;
+}
+
 std::vector<std::string> split(const std::string& value, char separator)
 {
     std::vector<std::string> result;
@@ -206,6 +215,26 @@ std::vector<std::string> split(const std::string& value, char separator)
     while (std::getline(stream, item, separator)) {
         if (!item.empty())
             result.push_back(item);
+    }
+    return result;
+}
+
+std::vector<std::string> splitTerminatedF12List(const std::string& value)
+{
+    if (value.empty())
+        return {};
+    if (value.back() != ';')
+        throw std::runtime_error("synthetic F12 list has no trailing delimiter");
+
+    std::vector<std::string> result;
+    std::size_t begin = 0;
+    const std::size_t contentSize = value.size() - 1;
+    while (begin < contentSize) {
+        const std::size_t end = value.find(';', begin);
+        if (end == std::string::npos || end == begin || end > contentSize)
+            throw std::runtime_error("synthetic F12 list contains an empty item");
+        result.push_back(value.substr(begin, end - begin));
+        begin = end + 1;
     }
     return result;
 }
@@ -450,6 +479,7 @@ std::string createArchiveSql(const std::vector<Column>& columns)
 struct Attachment {
     std::string name;
     std::uint32_t size{};
+    std::string security;
 };
 
 struct Row {
@@ -628,6 +658,7 @@ std::vector<Row> makeRows(
                 std::to_string(attachment) + ".bin";
             item.size = static_cast<std::uint32_t>(
                 192 + month * 17 + record * 13 + attachment * 31);
+            item.security = "SYNTHETIC-GRIF";
             row.attachments.push_back(std::move(item));
         }
 
@@ -687,8 +718,8 @@ void createDatabase(
     const std::string sql = prm
         ? "INSERT INTO ARCHIVE (\"Index\",DData,FFrom,TelNo,PodpNo,DataPodp,"
           "Familia,PrilName1,PrilName,KolPril,DirectTo,FileName,Copyes2,Edit,"
-          "GdeSHT,SizeAll,Keys,Primechanie,Lists,Ekzempl) "
-          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+          "GdeSHT,SizeAll,Keys,Primechanie,Psekretno,Sekretno,Podrazd,"
+          "Lists,Ekzempl) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         : "INSERT INTO ARCHIVE (\"Index\",DData,FFrom1,TelNo,PodpNo,DataPodp,"
           "Copyes,FFrom5,PrilName,KolPril,DirectTo,FileName,Blank,Edit,GdeSHT,"
           "SizeAll,SetevNo,FFrom2,FFrom3,AllPDTV1,Lists,Ekzempl) "
@@ -703,9 +734,11 @@ void createDatabase(
         for (const auto& row : rows) {
             std::vector<std::string> names;
             std::vector<std::string> sizes;
+            std::vector<std::string> securities;
             for (const auto& attachment : row.attachments) {
                 names.push_back(attachment.name);
                 sizes.push_back(std::to_string(attachment.size));
+                securities.push_back(attachment.security);
             }
             if (sqlite3_bind_int(statement, 1, row.id) != SQLITE_OK)
                 throw std::runtime_error("SQLite id bind failed");
@@ -716,21 +749,25 @@ void createDatabase(
             bindText(statement, 6, row.date);
             bindText(statement, 7, prm ? "TEST-OPERATOR" : "TEST-COPIES");
             bindText(statement, 8, "UNIQUE-SUMMARY-" + std::to_string(row.id));
-            bindText(statement, 9, join(names, ';'));
-            bindText(statement, 10, std::to_string(names.size()));
+            bindText(statement, 9, prm ? joinTerminated(names, ';') : join(names, ';'));
+            bindText(statement, 10, names.empty() ? "" : std::to_string(names.size()));
             bindText(statement, 11, row.directTo);
             bindText(statement, 12, row.fileName);
             bindText(statement, 13, "SYNTHETIC-BLANK-" + std::to_string(row.id));
             bindText(statement, 14, "0");
             bindText(statement, 15, "E2E-STAND");
-            bindText(statement, 16, join(sizes, ';'));
+            bindText(statement, 16, prm ? joinTerminated(sizes, ';') : join(sizes, ';'));
             bindText(statement, 17, prm ? "SYNTHETIC-KEY" : "TEST");
             bindText(statement, 18, prm ? "SYNTHETIC-ONLY" : "ATLAS-TEST");
-            if (!prm) {
+            if (prm) {
+                bindText(statement, 19, joinTerminated(securities, ';'));
+                bindText(statement, 20, "SYNTHETIC-GRIF");
+                bindText(statement, 21, "E2E-STAND");
+            } else {
                 bindText(statement, 19, "ISTOK-TEST");
                 bindText(statement, 20, "");
             }
-            const int listsIndex = prm ? 19 : 21;
+            const int listsIndex = prm ? 22 : 21;
             bindText(statement, listsIndex, std::to_string(syntheticLists(row.id)));
             bindText(statement, listsIndex + 1, "1");
             if (sqlite3_step(statement) != SQLITE_DONE)
@@ -1589,7 +1626,7 @@ StandSummary verifyInternal(
         sqlite3_stmt* statement = nullptr;
         const char sql[] =
             "SELECT \"Index\",TelNo,KolPril,PrilName,SizeAll,DirectTo,FileName,"
-            "Lists,Ekzempl "
+            "Lists,Ekzempl,Psekretno,Sekretno,Podrazd "
             "FROM ARCHIVE ORDER BY \"Index\"";
         if (sqlite3_prepare_v2(database.get(), sql, -1, &statement, nullptr) !=
             SQLITE_OK)
@@ -1602,14 +1639,26 @@ StandSummary verifyInternal(
             ++summary.telegramRowCount;
             const int id = sqlite3_column_int(statement, 0);
             const int telNo = sqlite3_column_int(statement, 1);
-            const int declaredCount = std::stoi(sqliteText(statement, 2));
-            const auto names = split(sqliteText(statement, 3), ';');
-            const auto sizes = split(sqliteText(statement, 4), ';');
+            const std::string declaredText = sqliteText(statement, 2);
+            const int declaredCount = declaredText.empty()
+                ? 0 : std::stoi(declaredText);
+            const auto names = prm
+                ? splitTerminatedF12List(sqliteText(statement, 3))
+                : split(sqliteText(statement, 3), ';');
+            const auto sizes = prm
+                ? splitTerminatedF12List(sqliteText(statement, 4))
+                : split(sqliteText(statement, 4), ';');
+            const auto securities = prm
+                ? splitTerminatedF12List(sqliteText(statement, 9))
+                : std::vector<std::string>{};
             const int lists = sqlite3_column_int(statement, 7);
             const int ekzempl = sqlite3_column_int(statement, 8);
             if (telNo != autoPadTelNo(id) ||
                 declaredCount != static_cast<int>(names.size()) ||
                 names.size() != sizes.size() ||
+                (prm && (names.size() != securities.size() ||
+                    sqliteText(statement, 10).empty() ||
+                    sqliteText(statement, 11).empty())) ||
                 lists != syntheticLists(id) || ekzempl != 1)
             {
                 sqlite3_finalize(statement);
