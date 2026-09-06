@@ -476,6 +476,12 @@ $inspectBlockPattern = 'chcp 65001[^\r\n]*\r?\n"%HELPER%" inspect-installed'
 Assert-True ([regex]::IsMatch($configureText, $inspectBlockPattern)) (
     '9a. Configure inspect-installed path keeps chcp 65001 before redirected helper output'
 )
+Assert-True ($configureText.Contains('CONFIGURE_OEM_CP')) (
+    '9a. Configure restores the previous console code page after inspect-installed'
+)
+Assert-True ($configureText.Contains('if defined CONFIGURE_OEM_CP chcp %CONFIGURE_OEM_CP% >nul')) (
+    '9a. Configure returns to the saved OEM code page before later script-message UI'
+)
 Assert-True (-not $configureText.Contains('2026-prd')) (
     '9a. Configure-SearchEngineService.bat does not hardcode instance 2026-prd'
 )

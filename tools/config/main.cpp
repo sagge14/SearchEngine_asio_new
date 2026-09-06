@@ -114,13 +114,15 @@ void writeInteractive(const std::wstring& text)
         GetConsoleMode(output, &mode))
     {
         DWORD written = 0;
-        if (!WriteConsoleW(
+        if (WriteConsoleW(
                 output, text.data(), static_cast<DWORD>(text.size()),
                 &written, nullptr))
         {
-            throw std::runtime_error("cannot write to the console");
+            return;
         }
-        return;
+        // Windows 7: WriteConsoleW often fails after `chcp 65001`.
+        // Keep the helper running so Configure can still show Notepad
+        // and apply Settings.json.
     }
     std::cout << utf8(text);
     std::cout.flush();

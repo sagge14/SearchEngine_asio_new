@@ -139,9 +139,12 @@ if errorlevel 1 (
 
 rem --- Step 1: Resolve actual data-dir via SCM ---
 call :UI configure.resolving
+for /f "tokens=2 delims=:" %%A in ('chcp') do set "CONFIGURE_OEM_CP=%%A"
+set "CONFIGURE_OEM_CP=%CONFIGURE_OEM_CP: =%"
 chcp 65001 >nul
 "%HELPER%" inspect-installed --instance "%SERVICE_INSTANCE%" > "%HELPER_OUTPUT%" 2>&1
 if errorlevel 1 (
+    if defined CONFIGURE_OEM_CP chcp %CONFIGURE_OEM_CP% >nul
     type "%HELPER_OUTPUT%"
     del /Q "%HELPER_OUTPUT%" >nul 2>&1
     call :UI configure.resolve_failed "%SERVICE_NAME%"
@@ -155,6 +158,7 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%HELPER_OUTPUT%") do (
     if /I "%%A"=="installed_program_path" set "PROGRAM_PATH=%%B"
 )
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
+if defined CONFIGURE_OEM_CP chcp %CONFIGURE_OEM_CP% >nul
 if not defined DATA_DIR (
     call :UI configure.inspect_missing
     call :PAUSE_UI
