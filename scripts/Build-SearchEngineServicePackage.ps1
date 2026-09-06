@@ -26,6 +26,22 @@ $releaseSettingsYear = if ($PSBoundParameters.ContainsKey('Year')) {
 if ($releaseSettingsYear -lt 2000 -or $releaseSettingsYear -gt 2099) {
     throw "Year must be inside 2000..2099; got $releaseSettingsYear."
 }
+$lockScript = Resolve-SearchEngineReleaseScript -ProjectRoot $projectRoot `
+    -ScriptName 'Enter-WorkspaceReleaseLock.ps1'
+if (-not $SkipCloudPublish) {
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = $env:WORKSPACE_RELEASE_CLOUD_ROOT
+    }
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = [Environment]::GetEnvironmentVariable('WORKSPACE_RELEASE_CLOUD_ROOT', 'User')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CloudRoot) -and
+        -not (Test-Path -LiteralPath $CloudRoot -PathType Container)) {
+        throw "Configured release cloud root is unavailable: $CloudRoot"
+    }
+}
+$releaseLock = & $lockScript -ProjectRoot $projectRoot
+try {
 $versionInfo = Sync-SearchEngineAppVersion `
     -ProjectRoot $projectRoot `
     -ProductName $productName `
@@ -78,7 +94,7 @@ foreach ($build in $builds) {
             }
             & cmake --build --preset $build.Build `
                 --target SearchEngine SearchEngineConfig AuthDbTool `
-                SearchClientTokenIssuer SearchEngineArchive -- /m
+                SearchClientTokenIssuer SearchEngineAccessSetup SearchEngineArchive -- /m
             if ($LASTEXITCODE -ne 0) {
                 throw (
                     "SearchEngine, SearchEngineConfig, AuthDbTool, " +
@@ -111,6 +127,40 @@ foreach ($build in $builds) {
         $packageArguments.CloudRoot = $CloudRoot
     }
 
-    & (Join-Path $PSScriptRoot 'New-SearchEngineServicePackage.ps1') `
-        @packageArguments
+    $packageOutput = @(& (Join-Path $PSScriptRoot 'New-SearchEngineServicePackage.ps1') `
+        @packageArguments)
+    $results = @($packageOutput | Where-Object {
+        $null -ne $_ -and $null -ne $_.PSObject.Properties['PackageDirectory']
+    })
+    if ($results.Count -ne 1) {
+        throw 'Packager did not return one structured package result.'
+    }
+    $package = $results[0]
+    foreach ($path in @($package.PackageDirectory, $package.PackagedExe)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+            throw "Required release artifact is missing: $path"
+        }
+    }
+    Assert-PeMatchesAppVersion -BinaryPath $package.PackagedExe `
+        -ExpectedProductVersion $versionInfo.Version `
+        -ExpectedFileVersion $versionInfo.FileVersion `
+        -ExpectedProductName $productName -ExpectedOriginalFilename 'SearchEngine.exe'
+    foreach ($name in @('package-manifest.json', 'package-checksums.sha256')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $package.PackageDirectory $name))) {
+            throw "Required package verification file is missing: $name"
+        }
+    }
+    if (-not $SkipCloudPublish -and -not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+        if (-not $package.CloudPublished) { throw 'Configured cloud publication did not complete.' }
+        foreach ($path in @($package.ZipPath, $package.Sha256Path)) {
+            if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+                throw "Required published artifact is missing: $path"
+            }
+        }
+    }
+    $package
+}
+} finally {
+    $releaseLock.Mutex.ReleaseMutex()
+    $releaseLock.Mutex.Dispose()
 }

@@ -1,6 +1,11 @@
 #include "Auth/AuthClientStore.h"
 #include "Auth/DeviceIdentity.h"
 #include "TokenLoader.hpp"
+#include "Auth/IssuerPublicKeyPath.h"
+#include "Auth/RsaIdentitySignatureVerifier.h"
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 #include <iostream>
 #include <stdexcept>
@@ -18,7 +23,8 @@ void printUsage()
            "--device-id <id> [--disabled]\n"
         << "  update --id <id> --name <name> --device-type usb|computer "
            "--device-id <id> [--disabled|--enabled]\n"
-        << "  add-from-token --token <path> [--disabled]\n"
+        << "  add-from-token --token <path> [--disabled|--enabled] [--public-key <path>]\n"
+        << "  verify-token --token <path> --public-key <path>\n"
         << "  enable --id <id>\n"
         << "  disable --id <id>\n"
         << "  remove --id <id>\n"
@@ -69,13 +75,25 @@ void printClientRow(const auth::AuthClientRecord& row)
 
 } // namespace
 
+#ifdef _WIN32
+int wmain(int argc, wchar_t** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
     try {
         std::vector<std::string> args;
         args.reserve(static_cast<std::size_t>(argc));
         for (int i = 1; i < argc; ++i) {
+            #ifdef _WIN32
+            const int size = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, nullptr, 0, nullptr, nullptr);
+            std::string arg(size, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, arg.data(), size, nullptr, nullptr);
+            arg.resize(size - 1);
+            args.push_back(std::move(arg));
+#else
             args.emplace_back(argv[i]);
+#endif
         }
 
         if (args.empty() || args[0] == "--help" || args[0] == "-h") {
@@ -90,6 +108,7 @@ int main(int argc, char** argv)
         std::string device_type;
         std::string device_id;
         std::string token_path;
+        std::string public_key;
         bool have_enabled = false;
         bool enabled = true;
 
@@ -105,6 +124,8 @@ int main(int argc, char** argv)
                 device_type = requireArg(args, i, "--device-type");
             } else if (arg == "--device-id") {
                 device_id = requireArg(args, i, "--device-id");
+            } else if (arg == "--public-key") {
+                public_key = requireArg(args, i, "--public-key");
             } else if (arg == "--token") {
                 token_path = requireArg(args, i, "--token");
             } else if (arg == "--disabled") {
@@ -130,8 +151,26 @@ int main(int argc, char** argv)
             return 1;
         }
 
+        std::optional<auth_db::TokenFields> verified;
+        if (command == "add-from-token" || command == "verify-token") {
+            if (token_path.empty()) throw std::runtime_error("--token is required");
+            verified = auth_db::loadTokenFields(std::filesystem::u8path(token_path));
+            const auto key = public_key.empty()
+                ? auth::ResolveIssuerPublicPemPath(std::filesystem::u8path(db_path))
+                : std::filesystem::u8path(public_key);
+            auth::RsaIdentitySignatureVerifier verifier(key);
+            if (const auto error = verifier.configurationError()) throw std::runtime_error(*error);
+            const auto signature = nlohmann::json::parse(verified->signature_meta).at("value").get<std::string>();
+            if (!verifier.verify({verified->client_id, verified->client_name,
+                                 verified->device_type, verified->device_id}, signature))
+                throw std::runtime_error("token signature does not match the server issuer key");
+            if (command == "verify-token") {
+                std::cout << "token signature verified\n";
+                return 0;
+            }
+        }
         auth::AuthClientStore store;
-        store.open(db_path);
+        store.open(std::filesystem::u8path(db_path));
 
         if (command == "add" || command == "update") {
             device_type = trimCopy(device_type);
@@ -158,7 +197,7 @@ int main(int argc, char** argv)
             if (token_path.empty()) {
                 throw std::runtime_error("add-from-token requires --token");
             }
-            const auto fields = auth_db::loadTokenFields(token_path);
+            const auto& fields = *verified;
             const bool row_enabled = have_enabled ? enabled : true;
             store.upsertClient(
                 fields.client_id,
@@ -166,7 +205,7 @@ int main(int argc, char** argv)
                 fields.device_type,
                 fields.device_id,
                 row_enabled,
-                fields.signature_meta);
+                fields.signature_meta, true, !have_enabled);
             std::cout << "add-from-token ok: " << fields.client_id << '\t'
                       << fields.client_name << '\t' << fields.device_type
                       << '\t' << fields.device_id << '\t'

@@ -19,6 +19,15 @@ set "VERIFY_FAILED="
 for /f "usebackq tokens=1,*" %%H in ("%CHECKSUM_FILE%") do call :VERIFY_FILE "%%I" "%%H"
 if defined VERIFY_FAILED exit /b 1
 
+for /R "%PACKAGE_ROOT%" %%F in (searchclient-auth-token.json) do if exist "%%~fF" (
+    echo ERROR: auth token must be stored in the current user's LocalAppData, not in the portable package.
+    exit /b 1
+)
+for /R "%PACKAGE_ROOT%" %%F in (searchclient-auth-request.json) do if exist "%%~fF" (
+    echo ERROR: unsigned auth request must not be stored in the portable package.
+    exit /b 1
+)
+
 if /I not "%~1"=="/quiet" echo Package verification completed successfully.
 exit /b 0
 

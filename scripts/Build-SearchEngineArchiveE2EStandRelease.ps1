@@ -137,6 +137,25 @@ function Assert-ServicePackage([string]$PackageRoot) {
         Resolve-RequiredFile (Join-Path $PackageRoot $required) `
             "Required stand source '$required'" | Out-Null
     }
+
+    $installScript = Get-Content -LiteralPath (Join-Path $PackageRoot `
+        'Install-SearchEngineService.bat') -Raw
+    if ($installScript -notmatch '(?im)^\s*set "TOKEN_PATH=%LOCALAPPDATA%\\SearchEngine\\searchclient-auth-token\.json"\s*$' -or
+        $installScript -match '(?im)^\s*set "TOKEN_PATH=%ProgramData%\\SearchEngine\\searchclient-auth-token\.json"\s*$') {
+        throw (
+            'The SearchEngineService package uses an obsolete computer-token ' +
+            'location. Rebuild it with the per-user LocalAppData contract.'
+        )
+    }
+
+    $registrationScript = Get-Content -LiteralPath (Join-Path $PackageRoot `
+        'tools\Register-AuthClientFromToken.ps1') -Raw
+    if ($registrationScript -notmatch '(?s)function Get-StandardComputerTokenPath.*?\$env:LOCALAPPDATA.*?SearchEngine\\searchclient-auth-token\.json') {
+        throw (
+            'The packaged token registration helper does not use the current ' +
+            'user LocalAppData computer-token path.'
+        )
+    }
     return $manifest
 }
 

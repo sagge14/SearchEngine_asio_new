@@ -765,6 +765,8 @@ if(BUILD_AUTH_DB_TOOL)
             AuthDbTool
             tools/auth/main.cpp
             tools/auth/TokenLoader.cpp
+            src/Auth/IssuerPublicKeyPath.cpp
+            src/Auth/RsaIdentitySignatureVerifier.cpp
             src/Auth/AuthClientStore.cpp
             src/SQLite/sqlite3.c
     )
@@ -786,6 +788,7 @@ if(BUILD_AUTH_DB_TOOL)
                 PROPERTIES LANGUAGE C
         )
     endif()
+    target_link_libraries(AuthDbTool PRIVATE OpenSSL::Crypto)
     searchengine_configure_target(AuthDbTool)
 endif()
 
@@ -800,6 +803,7 @@ if(BUILD_TOKEN_ISSUER)
     add_executable(
             SearchClientTokenIssuer
             tools/token_issuer/main.cpp
+            tools/auth/TokenLoader.cpp
             tools/token_issuer/ComputerTokenPath.cpp
             tools/token_issuer/VolumeSerial.cpp
             tools/token_issuer/ComputerIdentity.cpp
@@ -812,6 +816,7 @@ if(BUILD_TOKEN_ISSUER)
             SearchClientTokenIssuer
             PRIVATE
             "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+            "${PROJECT_SOURCE_DIR}/tools/auth"
             "${PROJECT_SOURCE_DIR}/src"
     )
     target_link_libraries(
@@ -1134,6 +1139,48 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+# Interactive offline access setup; no additional scripting runtime is needed.
+if(WIN32 AND BUILD_TOKEN_ISSUER AND BUILD_AUTH_DB_TOOL)
+    add_library(SearchEngineAccessCore STATIC
+        tools/access_setup/AccessBundle.cpp
+        tools/auth/TokenLoader.cpp
+        tools/token_issuer/TokenDocument.cpp
+        tools/token_issuer/TokenAscii.cpp
+        tools/token_issuer/CryptoStub.cpp
+        src/Auth/AuthClientStore.cpp
+        src/Auth/IssuerPublicKeyPath.cpp
+        src/Auth/RsaIdentitySignatureVerifier.cpp
+        src/SQLite/sqlite3.c)
+    target_include_directories(SearchEngineAccessCore PUBLIC
+        "${PROJECT_SOURCE_DIR}/tools/access_setup"
+        "${PROJECT_SOURCE_DIR}/tools/auth"
+        "${PROJECT_SOURCE_DIR}/tools/token_issuer"
+        "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(SearchEngineAccessCore PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto)
+    target_compile_definitions(SearchEngineAccessCore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    searchengine_configure_target(SearchEngineAccessCore)
+    add_executable(SearchEngineAccessSetup
+        tools/access_setup/main.cpp
+        tools/token_issuer/ComputerIdentity.cpp
+        tools/token_issuer/ComputerTokenPath.cpp)
+    target_link_libraries(SearchEngineAccessSetup PRIVATE SearchEngineAccessCore
+        comdlg32 shell32 advapi32 ole32 oleaut32 wbemuuid)
+    searchengine_configure_target(SearchEngineAccessSetup)
+    searchengine_target_win32_versioninfo(SearchEngineAccessSetup
+        PRODUCT_NAME "SearchEngineService" ORIGINAL_FILENAME "SearchEngineAccessSetup.exe")
+    add_dependencies(SearchEngineAccessSetup SearchClientTokenIssuer)
+    if(TARGET SearchEngine)
+        add_dependencies(SearchEngine SearchEngineAccessSetup)
+    endif()
+    if(BUILD_TESTS)
+        add_executable(AccessSetup_test tests/auth/AccessSetupTests.cpp src/Commands/Auth/AuthenticateCmd.cpp)
+        target_link_libraries(AccessSetup_test PRIVATE SearchEngineAccessCore ole32)
+        searchengine_configure_target(AccessSetup_test)
+        add_test(NAME AccessSetup_test COMMAND AccessSetup_test)
+    endif()
+endif()
+
 if(BUILD_TESTS)
     if(NOT EXISTS "${PROJECT_SOURCE_DIR}/lib/googletest/CMakeLists.txt")
         message(
@@ -1174,6 +1221,7 @@ if(BUILD_TESTS)
             FILTER test_sources
             EXCLUDE REGEX "/tests/archive/ArchiveE2EStandTests\\.cpp$"
     )
+    list(FILTER test_sources EXCLUDE REGEX "/tests/auth/AccessSetupTests\\.cpp$")
     if(NOT test_sources)
         message(
                 WARNING
@@ -1282,6 +1330,18 @@ if(BUILD_TESTS)
     endif()
     searchengine_configure_target(SearchEngine_test)
     add_test(NAME SearchEngine_test COMMAND SearchEngine_test)
+
+    if(WIN32 AND TARGET SearchClientTokenIssuer AND TARGET AuthDbTool)
+        add_test(
+                NAME TokenRequestFlow_test
+                COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+                -File "${PROJECT_SOURCE_DIR}/scripts/tests/TokenRequestFlow.Tests.ps1"
+                -IssuerExe "$<TARGET_FILE:SearchClientTokenIssuer>"
+                -AuthDbExe "$<TARGET_FILE:AuthDbTool>"
+                -OpenSslExe "${SEARCHENGINE_OPENSSL_ROOT}/bin/openssl.exe"
+                -WorkRoot "${CMAKE_CURRENT_BINARY_DIR}/token-request-tests"
+        )
+    endif()
 
     add_executable(
             ArchiveE2EStand_test

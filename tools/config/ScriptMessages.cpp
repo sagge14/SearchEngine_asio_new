@@ -817,6 +817,54 @@ constexpr Message kMessages[] = {
         L"ERROR: The local computer token could not be created or registered.\n"
     },
     {
+        L"install.local_auth_profile_missing",
+        L"ОШИБКА: Переменная LOCALAPPDATA текущего пользователя не определена.\n",
+        L"ERROR: The current user's LOCALAPPDATA variable is not defined.\n"
+    },
+    {
+        L"install.local_auth_token_dir_failed",
+        L"ОШИБКА: Не удалось создать пользовательский каталог токена:\n  {1}\n",
+        L"ERROR: The user token directory could not be created:\n  {1}\n"
+    },
+    {
+        L"install.local_auth_uuid_failed",
+        L"ОШИБКА: Не удалось получить пригодный UUID компьютера из "
+        L"Win32_ComputerSystemProduct. Код: {1}.\n",
+        L"ERROR: A usable computer UUID could not be obtained from "
+        L"Win32_ComputerSystemProduct. Exit code: {1}.\n"
+    },
+    {
+        L"install.local_auth_issue_failed",
+        L"ОШИБКА: Выпуск локального computer-токена завершился с кодом {1}.\n",
+        L"ERROR: Local computer token issuance failed with exit code {1}.\n"
+    },
+    {
+        L"install.local_auth_existing_keystore",
+        L"Обнаружено существующее хранилище ключей:\n  {1}\n"
+        L"Оно сохранено без изменений. Если хранилище создано с паролем, "
+        L"отличным от 12345678, автоматический выпуск токена невозможен.\n",
+        L"An existing issuer keystore was detected:\n  {1}\n"
+        L"It was preserved unchanged. If it was created with a password other "
+        L"than 12345678, automatic token issuance cannot continue.\n"
+    },
+    {
+        L"install.local_auth_export_failed",
+        L"ОШИБКА: Экспорт открытого ключа завершился с кодом {1}.\n",
+        L"ERROR: Issuer public-key export failed with exit code {1}.\n"
+    },
+    {
+        L"install.local_auth_register_failed",
+        L"ОШИБКА: Регистрация токена в auth_clients.sqlite завершилась "
+        L"с кодом {1}.\n",
+        L"ERROR: Token registration in auth_clients.sqlite failed with "
+        L"exit code {1}.\n"
+    },
+    {
+        L"install.local_auth_diagnostic",
+        L"Диагностический журнал:\n  {1}\n",
+        L"Diagnostic log:\n  {1}\n"
+    },
+    {
         L"install.local_initial_update",
         L"Одноразовое первоначальное сканирование и построение SQLite-индекса...\n",
         L"Running the one-time initial scan and SQLite index build...\n"

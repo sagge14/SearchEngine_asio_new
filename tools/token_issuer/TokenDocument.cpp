@@ -4,6 +4,7 @@
 #include "TokenAscii.hpp"
 
 #include <chrono>
+#include <array>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -11,6 +12,99 @@
 #include <stdexcept>
 
 namespace token_issuer {
+
+nlohmann::json BuildComputerRequestDocument(const TokenFields& fields)
+{
+    ValidateTokenFields(fields);
+    if (TrimCopy(fields.device_type) != auth::kDeviceTypeComputer) {
+        throw std::runtime_error("unsigned requests require device_type computer");
+    }
+    return {
+        {"format", kRequestFormat},
+        {"format_version", kRequestFormatVersion},
+        {"client_id", TrimCopy(fields.client_id)},
+        {"client_name", TrimCopy(fields.client_name)},
+        {"device_type", auth::kDeviceTypeComputer},
+        {"device_id", *auth::NormalizeComputerUuid(fields.device_id)},
+    };
+}
+
+TokenFields ParseComputerRequestDocument(const nlohmann::json& document)
+{
+    if (!document.is_object()) {
+        throw std::runtime_error("unsigned request must be a JSON object");
+    }
+    const char* string_keys[] = {
+        "format", "client_id", "client_name", "device_type", "device_id"
+    };
+    for (const char* key : string_keys) {
+        if (!document.contains(key) || !document.at(key).is_string()) {
+            throw std::runtime_error(
+                std::string("unsigned request requires string field: ") + key);
+        }
+    }
+    if (document.at("format") != kRequestFormat) {
+        throw std::runtime_error("select an unsigned searchclient-auth-request file");
+    }
+    if (!document.contains("format_version") ||
+        !document.at("format_version").is_number_integer() ||
+        document.at("format_version") != kRequestFormatVersion)
+    {
+        throw std::runtime_error("unsupported unsigned request format_version");
+    }
+    // Only the six identity/format fields belong in a request. In particular,
+    // do not accept signatures, issuer settings, or secret-bearing fields.
+    if (document.size() != 6) {
+        throw std::runtime_error("unsigned request contains unexpected fields");
+    }
+    TokenFields fields;
+    fields.client_id = document.at("client_id").get<std::string>();
+    fields.client_name = document.at("client_name").get<std::string>();
+    fields.device_type = document.at("device_type").get<std::string>();
+    fields.device_id = document.at("device_id").get<std::string>();
+    const auto normalized = BuildComputerRequestDocument(fields);
+    fields.client_id = normalized.at("client_id").get<std::string>();
+    fields.client_name = normalized.at("client_name").get<std::string>();
+    fields.device_type = normalized.at("device_type").get<std::string>();
+    fields.device_id = normalized.at("device_id").get<std::string>();
+    return fields;
+}
+
+TokenFields LoadComputerRequestFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("cannot open unsigned request file");
+    }
+    // Bound reads from files received from another computer.
+    std::array<char, 65537> buffer{};
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto length = input.gcount();
+    if (input.bad() || length <= 0 || length > 65536) {
+        throw std::runtime_error("unsigned request must be 1..65536 bytes");
+    }
+    const auto document = nlohmann::json::parse(
+        buffer.data(), buffer.data() + length, nullptr, false);
+    if (document.is_discarded()) {
+        throw std::runtime_error("invalid unsigned request JSON");
+    }
+    return ParseComputerRequestDocument(document);
+}
+
+void WriteComputerRequestFile(
+    const std::filesystem::path& path, const TokenFields& fields)
+{
+    const auto document = BuildComputerRequestDocument(fields);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("cannot write unsigned request file");
+    }
+    output << document.dump(2);
+    output.close();
+    if (!output) {
+        throw std::runtime_error("failed writing unsigned request file");
+    }
+}
 
 std::string NowUtcIso8601()
 {

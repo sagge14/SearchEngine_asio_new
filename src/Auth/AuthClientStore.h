@@ -43,12 +43,18 @@ namespace auth
             const std::string& device_type,
             const std::string& device_id,
             bool enabled = true,
-            const std::string& signature_meta = {});
+            const std::string& signature_meta = {},
+            bool reject_identity_conflict = false,
+            bool preserve_enabled = false);
 
         [[nodiscard]] std::optional<AuthClientRecord> getClient(
             const std::string& client_id) const;
 
         [[nodiscard]] std::vector<AuthClientRecord> listClients() const;
+
+        void beginTransaction();
+        void commitTransaction();
+        void rollbackTransaction() noexcept;
 
         void setEnabled(const std::string& client_id, bool enabled);
         void removeClient(const std::string& client_id);

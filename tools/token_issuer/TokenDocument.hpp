@@ -24,6 +24,17 @@ constexpr const char* kTokenFileName = "searchclient-auth-token.json";
 constexpr const char* kTokenFormat = "searchclient-auth-token";
 constexpr int kTokenFormatVersion = 1;
 
+// Offline enrollment document. It is deliberately not an auth token.
+constexpr const char* kRequestFileName = "searchclient-auth-request.json";
+constexpr const char* kRequestFormat = "searchclient-auth-request";
+constexpr int kRequestFormatVersion = 1;
+
+nlohmann::json BuildComputerRequestDocument(const TokenFields& fields);
+TokenFields ParseComputerRequestDocument(const nlohmann::json& document);
+TokenFields LoadComputerRequestFile(const std::filesystem::path& path);
+void WriteComputerRequestFile(
+    const std::filesystem::path& path, const TokenFields& fields);
+
 std::string NowUtcIso8601();
 
 void ValidateTokenFields(const TokenFields& fields);

@@ -4,20 +4,20 @@
 
 namespace token_issuer {
 
-std::optional<std::filesystem::path> ProgramDataRoot()
+std::optional<std::filesystem::path> LocalAppDataRoot()
 {
-    wchar_t* program_data = nullptr;
+    wchar_t* local_app_data = nullptr;
     std::size_t length = 0;
-    if (_wdupenv_s(&program_data, &length, L"ProgramData") != 0 ||
-        program_data == nullptr)
+    if (_wdupenv_s(&local_app_data, &length, L"LOCALAPPDATA") != 0 ||
+        local_app_data == nullptr)
     {
         return std::nullopt;
     }
 
-    std::filesystem::path root(program_data);
-    free(program_data);
+    std::filesystem::path root(local_app_data);
+    free(local_app_data);
 
-    if (root.empty()) {
+    if (root.empty() || !root.is_absolute()) {
         return std::nullopt;
     }
     return root;
@@ -25,11 +25,11 @@ std::optional<std::filesystem::path> ProgramDataRoot()
 
 std::optional<std::filesystem::path> StandardComputerTokenDirectory()
 {
-    const auto program_data = ProgramDataRoot();
-    if (!program_data) {
+    const auto local_app_data = LocalAppDataRoot();
+    if (!local_app_data) {
         return std::nullopt;
     }
-    return *program_data / L"SearchEngine";
+    return *local_app_data / L"SearchEngine";
 }
 
 std::optional<std::filesystem::path> StandardComputerTokenPath()

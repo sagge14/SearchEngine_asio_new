@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <filesystem>
+#include <nlohmann/json.hpp>
 
 namespace auth_db {
 
@@ -13,6 +15,7 @@ struct TokenFields
     std::string signature_meta;
 };
 
-TokenFields loadTokenFields(const std::string& token_path);
+TokenFields parseTokenFields(const nlohmann::json& document);
+TokenFields loadTokenFields(const std::filesystem::path& token_path);
 
 } // namespace auth_db

@@ -17,8 +17,10 @@ function Get-SearchEngineServiceSourceFingerprint {
         'src',
         'tools/archive',
         'tools/auth',
+        'tools/access_setup',
         'tools/config',
         'tools/token_issuer',
+        'tutorials',
         'deployment/SearchEngineServicePortable',
         'scripts/AppVersion.ps1',
         'scripts/Assert-SearchEngineConfigAutoPadContract.ps1',
@@ -39,13 +41,28 @@ function Get-SearchEngineServiceSourceFingerprint {
     $trackedFiles = @($trackedFiles | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_)
     })
-    if ($trackedFiles.Count -eq 0) {
-        throw 'SearchEngineService source fingerprint has no tracked inputs.'
+
+    # Tutorials are copied into the portable package even for a dirty candidate
+    # build. Include every actual tutorial file in the fingerprint, including
+    # untracked files, so a stand cannot reuse a package with stale instructions.
+    $tutorialRoot = Join-Path $ProjectRoot 'tutorials'
+    $tutorialFiles = @()
+    if (Test-Path -LiteralPath $tutorialRoot -PathType Container) {
+        $tutorialFiles = @(Get-ChildItem -LiteralPath $tutorialRoot `
+            -Recurse -File -Force | ForEach-Object {
+                $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/')
+            })
     }
-    [Array]::Sort($trackedFiles, [StringComparer]::Ordinal)
+
+    $accessFiles = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'tools\access_setup') -File | ForEach-Object { $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/') })
+    $sourceFiles = @($trackedFiles + $tutorialFiles + $accessFiles + @('deployment/SearchEngineServicePortable/Setup-Access.bat') | Sort-Object -Unique)
+    if ($sourceFiles.Count -eq 0) {
+        throw 'SearchEngineService source fingerprint has no source inputs.'
+    }
+    [Array]::Sort($sourceFiles, [StringComparer]::Ordinal)
 
     $fingerprintText = New-Object Text.StringBuilder
-    foreach ($relativePath in $trackedFiles) {
+    foreach ($relativePath in $sourceFiles) {
         $normalizedRelative = ([string]$relativePath).Replace('\', '/')
         $absolutePath = Join-Path $ProjectRoot `
             $normalizedRelative.Replace('/', '\')
@@ -74,6 +91,6 @@ function Get-SearchEngineServiceSourceFingerprint {
     [pscustomobject]@{
         Algorithm = 'searchengine-service-source-v1'
         Value = (($digest | ForEach-Object { $_.ToString('x2') }) -join '')
-        FileCount = $trackedFiles.Count
+        FileCount = $sourceFiles.Count
     }
 }

@@ -292,7 +292,7 @@ SCM `RUNNING`.
    отключённым PRM short-content update и `scan_on_startup=false`.
 3. Выпускает привязанный к SMBIOS computer-токен
    `client_id=local-machine`, `client_name=operator` в
-   `%ProgramData%\SearchEngine\searchclient-auth-token.json`, экспортирует
+   `%LOCALAPPDATA%\SearchEngine\searchclient-auth-token.json`, экспортирует
    `issuer-public.pem` и регистрирует токен enabled в `auth_clients.sqlite`.
 4. Запускает официальный одноразовый режим
    `SearchEngine.exe --initial-update --data-dir <data-dir>`. Этот режим не
@@ -303,9 +303,11 @@ SCM `RUNNING`.
 Пароль machine-wide keystore `%ProgramData%\SearchClientTokenIssuer\keys` в
 этом упрощённом сценарии фиксирован как `12345678` и передаётся issuer через
 environment variable. Это осознанный default локальной установки; значение
-открыто находится в BAT-файле. Stdout/stderr issuer подавлены, поэтому token
-preview и ключи не попадают в консоль или журнал установки. Существующий
-keystore с другим паролем не перезаписывается.
+открыто находится в BAT-файле. Stdout issuer подавлен, поэтому token preview и
+ключи не попадают в консоль или журнал установки. Stderr каждого этапа пишется
+в отдельный диагностический файл в `%TEMP%`. Существующий keystore с другим
+паролем не перезаписывается; при ошибке установщик показывает этап, код, путь к
+журналу и, если keystore уже существовал, путь к нему.
 
 Существующая служба текущего года или непустой целевой Program Files/ProgramData
 останавливает сценарий без удаления данных. Ошибка provisioning токена удаляет

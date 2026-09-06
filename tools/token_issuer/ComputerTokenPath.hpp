@@ -8,7 +8,7 @@
 
 namespace token_issuer {
 
-[[nodiscard]] std::optional<std::filesystem::path> ProgramDataRoot();
+[[nodiscard]] std::optional<std::filesystem::path> LocalAppDataRoot();
 
 [[nodiscard]] std::optional<std::filesystem::path> StandardComputerTokenDirectory();
 

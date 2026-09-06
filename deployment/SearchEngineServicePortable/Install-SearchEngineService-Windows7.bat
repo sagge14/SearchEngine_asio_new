@@ -611,20 +611,60 @@ if errorlevel 1 exit /b 0
 exit /b 1
 
 :PROVISION_LOCAL_MACHINE_AUTH
-set "TOKEN_PATH=%ProgramData%\SearchEngine\searchclient-auth-token.json"
+set "TOKEN_AUTH_LOG=%TEMP%\%SERVICE_NAME%-LocalAuth-%RANDOM%-%RANDOM%.log"
+set "TOKEN_KEYSTORE_EXISTED=0"
+if not defined LOCALAPPDATA (
+    call :UI install.local_auth_profile_missing
+    exit /b 1
+)
+set "TOKEN_PATH=%LOCALAPPDATA%\SearchEngine\searchclient-auth-token.json"
 set "TOKEN_KEYSTORE=%ProgramData%\SearchClientTokenIssuer\keys"
+if exist "%TOKEN_KEYSTORE%\private.enc.pem" set "TOKEN_KEYSTORE_EXISTED=1"
+if exist "%TOKEN_KEYSTORE%\public.pem" set "TOKEN_KEYSTORE_EXISTED=1"
+md "%LOCALAPPDATA%\SearchEngine" >nul 2>&1
+if not exist "%LOCALAPPDATA%\SearchEngine\" (
+    call :UI install.local_auth_token_dir_failed "%LOCALAPPDATA%\SearchEngine"
+    exit /b 1
+)
+
+"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --language "%UI_LANGUAGE%" --show-computer-id >"%TOKEN_AUTH_LOG%.uuid" 2>"%TOKEN_AUTH_LOG%"
+set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
+if not "%TOKEN_COMMAND_EXIT%"=="0" (
+    call :UI install.local_auth_uuid_failed "%TOKEN_COMMAND_EXIT%"
+    call :UI install.local_auth_diagnostic "%TOKEN_AUTH_LOG%"
+    exit /b 1
+)
+
 set "TOKEN_ISSUER_PASSWORD=12345678"
-"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --device-type computer --name operator --id local-machine --output "%TOKEN_PATH%" --defaults "%INSTALLED_TOOLS%\searchclient-auth-token.defaults.json" --keystore "%TOKEN_KEYSTORE%" --password-env TOKEN_ISSUER_PASSWORD --yes >nul 2>&1
+set "LOCAL_COMPUTER_UUID="
+set /p LOCAL_COMPUTER_UUID=<"%TOKEN_AUTH_LOG%.uuid"
+del /Q "%TOKEN_AUTH_LOG%.uuid" >nul 2>&1
+if not defined LOCAL_COMPUTER_UUID exit /b 1
+"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --language "%UI_LANGUAGE%" --device-type computer --name operator --id "PC-%LOCAL_COMPUTER_UUID%" --output "%TOKEN_PATH%" --defaults "%INSTALLED_TOOLS%\searchclient-auth-token.defaults.json" --keystore "%TOKEN_KEYSTORE%" --password-env TOKEN_ISSUER_PASSWORD --yes >nul 2>"%TOKEN_AUTH_LOG%"
 set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
-if not "%TOKEN_COMMAND_EXIT%"=="0" goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
-"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --keystore "%TOKEN_KEYSTORE%" --export-public "%DATA_DIR%" >nul 2>&1
+if not "%TOKEN_COMMAND_EXIT%"=="0" (
+    call :UI install.local_auth_issue_failed "%TOKEN_COMMAND_EXIT%"
+    if "%TOKEN_KEYSTORE_EXISTED%"=="1" call :UI install.local_auth_existing_keystore "%TOKEN_KEYSTORE%"
+    call :UI install.local_auth_diagnostic "%TOKEN_AUTH_LOG%"
+    goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
+)
+"%INSTALLED_TOOLS%\SearchClientTokenIssuer.exe" --language "%UI_LANGUAGE%" --keystore "%TOKEN_KEYSTORE%" --export-public "%DATA_DIR%" >nul 2>"%TOKEN_AUTH_LOG%"
 set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
-if not "%TOKEN_COMMAND_EXIT%"=="0" goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
-"%INSTALLED_TOOLS%\AuthDbTool.exe" --db "%DATA_DIR%\auth_clients.sqlite" add-from-token --token "%TOKEN_PATH%" >nul 2>&1
+if not "%TOKEN_COMMAND_EXIT%"=="0" (
+    call :UI install.local_auth_export_failed "%TOKEN_COMMAND_EXIT%"
+    call :UI install.local_auth_diagnostic "%TOKEN_AUTH_LOG%"
+    goto :PROVISION_LOCAL_MACHINE_AUTH_DONE
+)
+"%INSTALLED_TOOLS%\AuthDbTool.exe" --db "%DATA_DIR%\auth_clients.sqlite" add-from-token --token "%TOKEN_PATH%" >nul 2>"%TOKEN_AUTH_LOG%"
 set "TOKEN_COMMAND_EXIT=%ERRORLEVEL%"
+if not "%TOKEN_COMMAND_EXIT%"=="0" (
+    call :UI install.local_auth_register_failed "%TOKEN_COMMAND_EXIT%"
+    call :UI install.local_auth_diagnostic "%TOKEN_AUTH_LOG%"
+)
 :PROVISION_LOCAL_MACHINE_AUTH_DONE
 set "TOKEN_ISSUER_PASSWORD="
 if not "%TOKEN_COMMAND_EXIT%"=="0" exit /b 1
+del /Q "%TOKEN_AUTH_LOG%" >nul 2>&1
 exit /b 0
 
 :RUN_LOCAL_INITIAL_UPDATE

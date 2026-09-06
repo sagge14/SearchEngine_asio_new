@@ -201,6 +201,9 @@ $authDbToolPath = Resolve-RequiredFile `
 $tokenIssuerPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'SearchClientTokenIssuer.exe') `
     'SearchClientTokenIssuer Release helper'
+$accessSetupPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngineAccessSetup.exe') `
+    'SearchEngineAccessSetup Release helper'
 $tokenIssuerDefaultsPath = Resolve-RequiredFile `
     (Join-Path $BuildDirectory 'searchclient-auth-token.defaults.json') `
     'SearchClientTokenIssuer defaults JSON'
@@ -255,6 +258,10 @@ if ($authDbToolMachine -ne $expectedMachine) {
     throw ('AuthDbTool.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $authDbToolMachine)
 }
+if ((Get-PeMachine $accessSetupPath) -ne $expectedMachine) { throw 'SearchEngineAccessSetup architecture mismatch.' }
+Assert-PeMatchesAppVersion -BinaryPath $accessSetupPath `
+    -ExpectedProductVersion $versionInfo.Version -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName -ExpectedOriginalFilename 'SearchEngineAccessSetup.exe'
 $tokenIssuerMachine = Get-PeMachine $tokenIssuerPath
 if ($tokenIssuerMachine -ne $expectedMachine) {
     throw ('SearchClientTokenIssuer.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
@@ -406,6 +413,8 @@ try {
         -Destination (Join-Path $stagingDirectory 'tools\SearchEngineArchive.exe')
     Copy-Item -LiteralPath $authDbToolPath `
         -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
+    Copy-Item -LiteralPath $accessSetupPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchEngineAccessSetup.exe')
     Copy-Item -LiteralPath $tokenIssuerPath `
         -Destination (Join-Path $stagingDirectory 'tools\SearchClientTokenIssuer.exe')
     Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
@@ -458,6 +467,7 @@ try {
     )
 
     $portableBatchFiles = @(
+        @{ Source = 'Setup-Access.bat'; Destination = 'Setup-Access.bat' },
         @{
             Source = 'Install-SearchEngineService-Windows7.bat'
             Destination = 'Install-SearchEngineService.bat'
@@ -549,11 +559,48 @@ try {
     Copy-Item -LiteralPath $VCRedistPath -Destination `
         (Join-Path $stagingDirectory ('prerequisites\' + $vcRedistName))
 
+    # User guides are copied recursively, byte-for-byte, and checksummed with
+    # the tools. Reject links and accidental data/secret payloads before copying.
+    $tutorialRoot = Join-Path $projectRoot 'tutorials'
+    if (Test-Path -LiteralPath $tutorialRoot -PathType Container) {
+        $pendingTutorials = New-Object 'Collections.Generic.Stack[IO.FileSystemInfo]'
+        $pendingTutorials.Push((Get-Item -LiteralPath $tutorialRoot))
+        while ($pendingTutorials.Count -gt 0) {
+            $item = $pendingTutorials.Pop()
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Tutorial links are not allowed: $($item.FullName)"
+            }
+            if ($item.Name -match '(?i)^searchclient-auth-(token|request)\.json$' -or
+                $item.Name -match '(?i)(^|[._-])(secrets?|credentials?)([._-]|$)' -or
+                $item.Name -match '(?i)^\.env($|\.)' -or
+                $item.Extension -match '(?i)^\.(db|db3|sqlite|sqlite3|pem|key|pfx|p12|cer|crt)$') {
+                throw "Data or secret material is not allowed in tutorials: $($item.Name)"
+            }
+            if ($item -is [IO.DirectoryInfo]) {
+                foreach ($child in $item.GetFileSystemInfos()) {
+                    $pendingTutorials.Push($child)
+                }
+                continue
+            }
+            $relative = $item.FullName.Substring($tutorialRoot.Length + 1)
+            $target = Join-Path (Join-Path $stagingDirectory 'tutorials') $relative
+            if (Test-Path -LiteralPath $target) {
+                throw "Duplicate tutorial package path: $relative"
+            }
+            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+            Copy-Item -LiteralPath $item.FullName -Destination $target
+        }
+    }
+
     $protectedFiles = @()
     foreach ($relativeRoot in @('app', 'tools', 'prerequisites')) {
         $absoluteRoot = Join-Path $stagingDirectory $relativeRoot
         $protectedFiles += Get-ChildItem -LiteralPath $absoluteRoot `
             -Recurse -File
+    }
+    $packagedTutorials = Join-Path $stagingDirectory 'tutorials'
+    if (Test-Path -LiteralPath $packagedTutorials -PathType Container) {
+        $protectedFiles += Get-ChildItem -LiteralPath $packagedTutorials -Recurse -File -Force
     }
     foreach ($name in @(
         'Install-SearchEngineService.bat',
@@ -564,6 +611,7 @@ try {
         'Uninstall-SearchEngineService.bat',
         'Register-AuthClient-FromToken.bat',
         'Issue-SearchClientToken.bat',
+        'Setup-Access.bat',
         'Verify-Package.bat',
         'Configure-SearchEngineService.bat',
         'Archive-SearchEngineService.bat'
@@ -574,11 +622,15 @@ try {
 
     $manifestEntries = @($protectedFiles | Sort-Object FullName | ForEach-Object {
         $relativePath = $_.FullName.Substring($stagingDirectory.Length + 1)
-        [ordered]@{
+        $entry = [ordered]@{
             path = $relativePath.Replace('\', '/')
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
             size = $_.Length
         }
+        if ($relativePath.StartsWith('tutorials\', [StringComparison]::OrdinalIgnoreCase)) {
+            $entry['role'] = 'tutorial'
+        }
+        $entry
     })
     $protectedData = @($manifestEntries.path | Where-Object { $_ -like 'data/*' })
     if ($protectedData.Count -gt 0) {
@@ -687,6 +739,7 @@ $cloudZipName = Get-SearchEngineCloudZipName `
 $cloudHelper = & (Join-Path $PSScriptRoot 'Find-WorkspaceReleaseRoot.ps1') `
     -Name 'Publish-ReleasePackageIfConfigured.ps1' -StartPath $projectRoot `
     -Optional
+$cloudResult = $null
 if ($null -ne $cloudHelper) {
     $cloudArgs = @{
         PackageDirectory = $OutputDirectory
@@ -699,8 +752,20 @@ if ($null -ne $cloudHelper) {
     if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
         $cloudArgs.CloudRoot = $CloudRoot
     }
-    & $cloudHelper @cloudArgs | Out-Null
+    $cloudResult = & $cloudHelper @cloudArgs
 }
 else {
     Write-Host 'Cloud publish helper not found; local package only.'
+}
+
+[pscustomobject]@{
+    Product = $productName
+    Version = $versionInfo.Version
+    FileVersion = $versionInfo.FileVersion
+    PackageDirectory = $OutputDirectory
+    PackagedExe = Join-Path $OutputDirectory 'app\SearchEngine.exe'
+    CloudPublished = ($null -ne $cloudResult -and -not [string]::IsNullOrWhiteSpace($cloudResult.ZipPath))
+    ZipPath = if ($null -ne $cloudResult) { $cloudResult.ZipPath } else { $null }
+    Sha256Path = if ($null -ne $cloudResult) { $cloudResult.Sha256Path } else { $null }
+    Sha256 = if ($null -ne $cloudResult) { $cloudResult.Sha256 } else { $null }
 }

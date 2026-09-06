@@ -164,10 +164,10 @@ function Exit-RegistrationCancelled {
 }
 
 function Get-StandardComputerTokenPath {
-    if (Test-NullOrWhiteSpace $env:ProgramData) {
+    if (Test-NullOrWhiteSpace $env:LOCALAPPDATA) {
         return $null
     }
-    return Join-Path $env:ProgramData `
+    return Join-Path $env:LOCALAPPDATA `
         'SearchEngine\searchclient-auth-token.json'
 }
 
@@ -266,7 +266,7 @@ function Select-AuthTokenSourceInteractive {
             $computerPath = Get-StandardComputerTokenPath
             if ($null -eq $computerPath) {
                 Write-Host ''
-                Write-Host 'Standard ProgramData location is unavailable.'
+                Write-Host 'Current user LocalAppData location is unavailable.'
                 return Select-TokenPathManual
             }
             if (Test-Path -LiteralPath $computerPath -PathType Leaf) {

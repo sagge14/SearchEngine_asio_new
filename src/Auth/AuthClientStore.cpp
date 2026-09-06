@@ -79,7 +79,8 @@ namespace auth
         }
 
         path_ = db_path;
-        const auto utf8 = db_path.string();
+        const auto path_bytes = db_path.u8string();
+        const std::string utf8(path_bytes.begin(), path_bytes.end());
         const int open_result = sqlite3_open_v2(
             utf8.c_str(),
             &db_,
@@ -266,7 +267,9 @@ namespace auth
         const std::string& device_type,
         const std::string& device_id,
         bool enabled,
-        const std::string& signature_meta)
+        const std::string& signature_meta,
+        bool reject_identity_conflict,
+        bool preserve_enabled)
     {
         if (client_id.empty() || client_name.empty() || device_type.empty() ||
             device_id.empty())
@@ -296,9 +299,12 @@ namespace auth
             "client_name=excluded.client_name, "
             "device_type=excluded.device_type, "
             "device_id=excluded.device_id, "
-            "enabled=excluded.enabled, "
+            "enabled=CASE WHEN ?9 THEN clients.enabled ELSE excluded.enabled END, "
             "signature_meta=excluded.signature_meta, "
-            "updated_at=excluded.updated_at;";
+            "updated_at=excluded.updated_at "
+            "WHERE NOT ?10 OR (clients.client_name=excluded.client_name "
+            "AND clients.device_type=excluded.device_type "
+            "AND clients.device_id=excluded.device_id);";
 
         if (sqlite3_prepare_v2(db_, sql, -1, &statement, nullptr) != SQLITE_OK) {
             throwSqlite(db_, "prepare upsertClient", sqlite3_errcode(db_));
@@ -313,11 +319,16 @@ namespace auth
             statement, 6, signature_meta.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(statement, 7, stamp);
         sqlite3_bind_int64(statement, 8, stamp);
+        sqlite3_bind_int(statement, 9, preserve_enabled ? 1 : 0);
+        sqlite3_bind_int(statement, 10, reject_identity_conflict ? 1 : 0);
 
         const int step = sqlite3_step(statement);
         sqlite3_finalize(statement);
         if (step != SQLITE_DONE) {
             throwSqlite(db_, "upsertClient", sqlite3_errcode(db_));
+        }
+        if (reject_identity_conflict && sqlite3_changes(db_) == 0) {
+            throw std::runtime_error("client_id conflicts with another identity; registration was not changed");
         }
     }
 
@@ -382,6 +393,20 @@ namespace auth
         }
         sqlite3_finalize(statement);
         return rows;
+    }
+
+    void AuthClientStore::beginTransaction() {
+        std::lock_guard lock(mutex_);
+        if (!db_) throw std::runtime_error("Auth DB is not open");
+        execOrThrow("BEGIN IMMEDIATE;");
+    }
+    void AuthClientStore::commitTransaction() {
+        std::lock_guard lock(mutex_);
+        execOrThrow("COMMIT;");
+    }
+    void AuthClientStore::rollbackTransaction() noexcept {
+        std::lock_guard lock(mutex_);
+        if (db_) sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
     }
 
     void AuthClientStore::setEnabled(const std::string& client_id, bool enabled)

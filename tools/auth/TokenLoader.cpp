@@ -30,21 +30,20 @@ std::string normalizeDeviceId(
 
 } // namespace
 
-TokenFields loadTokenFields(const std::string& token_path)
+TokenFields loadTokenFields(const std::filesystem::path& token_path)
 {
     std::ifstream input(token_path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("cannot open token file: " + token_path);
-    }
+    if (!input) throw std::runtime_error("cannot open token file");
+    std::string bytes(65537, '\0');
+    input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (input.bad() || input.gcount() <= 0 || input.gcount() > 65536)
+        throw std::runtime_error("token must be 1..65536 bytes");
+    bytes.resize(static_cast<std::size_t>(input.gcount()));
+    return parseTokenFields(nlohmann::json::parse(bytes));
+}
 
-    nlohmann::json document;
-    try {
-        input >> document;
-    } catch (const std::exception& ex) {
-        throw std::runtime_error(
-            std::string("token JSON parse failed: ") + ex.what());
-    }
-
+TokenFields parseTokenFields(const nlohmann::json& document)
+{
     if (!document.is_object()) {
         throw std::runtime_error("token payload must be a JSON object");
     }

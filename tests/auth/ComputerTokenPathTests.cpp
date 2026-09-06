@@ -13,14 +13,14 @@ namespace fs = std::filesystem;
 
 namespace
 {
-class ScopedProgramDataEnv
+class ScopedLocalAppDataEnv
 {
 public:
-    explicit ScopedProgramDataEnv(std::optional<std::wstring> new_value)
+    explicit ScopedLocalAppDataEnv(std::optional<std::wstring> new_value)
     {
         wchar_t* current = nullptr;
         std::size_t length = 0;
-        if (_wdupenv_s(&current, &length, L"ProgramData") == 0 &&
+        if (_wdupenv_s(&current, &length, L"LOCALAPPDATA") == 0 &&
             current != nullptr)
         {
             had_value_ = true;
@@ -29,23 +29,23 @@ public:
         }
 
         if (new_value) {
-            _wputenv_s(L"ProgramData", new_value->c_str());
+            _wputenv_s(L"LOCALAPPDATA", new_value->c_str());
         } else {
-            _wputenv_s(L"ProgramData", L"");
+            _wputenv_s(L"LOCALAPPDATA", L"");
         }
     }
 
-    ~ScopedProgramDataEnv()
+    ~ScopedLocalAppDataEnv()
     {
         if (had_value_) {
-            _wputenv_s(L"ProgramData", previous_value_.c_str());
+            _wputenv_s(L"LOCALAPPDATA", previous_value_.c_str());
         } else {
-            _wputenv_s(L"ProgramData", L"");
+            _wputenv_s(L"LOCALAPPDATA", L"");
         }
     }
 
-    ScopedProgramDataEnv(const ScopedProgramDataEnv&) = delete;
-    ScopedProgramDataEnv& operator=(const ScopedProgramDataEnv&) = delete;
+    ScopedLocalAppDataEnv(const ScopedLocalAppDataEnv&) = delete;
+    ScopedLocalAppDataEnv& operator=(const ScopedLocalAppDataEnv&) = delete;
 
 private:
     bool had_value_ = false;
@@ -61,12 +61,12 @@ fs::path UniqueTempRoot(const char* label)
 }
 } // namespace
 
-TEST(ComputerTokenPathTest, StandardPathUsesProgramDataWhenAvailable)
+TEST(ComputerTokenPathTest, StandardPathUsesLocalAppDataWhenAvailable)
 {
     const fs::path temp = UniqueTempRoot("computer-token-path-a");
     fs::create_directories(temp);
 
-    ScopedProgramDataEnv env(temp.wstring());
+    ScopedLocalAppDataEnv env(temp.wstring());
     const auto path = token_issuer::StandardComputerTokenPath();
 
     ASSERT_TRUE(path.has_value());
@@ -77,11 +77,11 @@ TEST(ComputerTokenPathTest, StandardPathUsesProgramDataWhenAvailable)
     fs::remove_all(temp);
 }
 
-TEST(ComputerTokenPathTest, StandardPathUnavailableWithoutProgramData)
+TEST(ComputerTokenPathTest, StandardPathUnavailableWithoutLocalAppData)
 {
-    ScopedProgramDataEnv env(std::nullopt);
+    ScopedLocalAppDataEnv env(std::nullopt);
 
-    EXPECT_FALSE(token_issuer::ProgramDataRoot().has_value());
+    EXPECT_FALSE(token_issuer::LocalAppDataRoot().has_value());
     EXPECT_FALSE(token_issuer::StandardComputerTokenDirectory().has_value());
     EXPECT_FALSE(token_issuer::StandardComputerTokenPath().has_value());
 }
@@ -104,6 +104,30 @@ TEST(ComputerTokenPathTest, EnsureDirectoryFailsWhenParentIsFile)
     EXPECT_FALSE(error.empty());
 
     fs::remove_all(temp);
+}
+
+TEST(ComputerTokenPathTest, RejectsRelativeUserProfile)
+{
+    ScopedLocalAppDataEnv env(L"relative-profile");
+    EXPECT_FALSE(token_issuer::StandardComputerTokenPath().has_value());
+}
+
+TEST(ComputerTokenPathTest, DifferentUserProfilesHaveSeparatePaths)
+{
+    const auto first = UniqueTempRoot("user-a") / L"\u041F";
+    const auto second = UniqueTempRoot("user-b");
+    ScopedLocalAppDataEnv env(first.wstring());
+    const auto first_path = token_issuer::StandardComputerTokenPath();
+    ASSERT_TRUE(first_path.has_value());
+    EXPECT_EQ(*first_path, first / L"SearchEngine" / token_issuer::kTokenFileName);
+    {
+        ScopedLocalAppDataEnv other(second.wstring());
+        const auto second_path = token_issuer::StandardComputerTokenPath();
+        ASSERT_TRUE(second_path.has_value());
+        EXPECT_NE(first_path, second_path);
+        EXPECT_EQ(*second_path, second / L"SearchEngine" / token_issuer::kTokenFileName);
+    }
+    EXPECT_EQ(first_path, token_issuer::StandardComputerTokenPath());
 }
 
 TEST(ComputerTokenPathTest, EnsureDirectoryCreatesWritablePath)
