@@ -572,6 +572,12 @@ $protectedSection = $packagerText.Substring(
 Assert-True ($protectedSection.Contains("'Configure-SearchEngineService.bat'")) (
     '9. Packager protectedFiles list includes Configure-SearchEngineService.bat'
 )
+Assert-True ($packagerText.Contains("Source = 'Remove-SearchEngineAuthKeys.bat'")) (
+    '9. Packager portableBatchFiles includes Remove-SearchEngineAuthKeys.bat'
+)
+Assert-True ($protectedSection.Contains("'Remove-SearchEngineAuthKeys.bat'")) (
+    '9. Packager protectedFiles list includes Remove-SearchEngineAuthKeys.bat'
+)
 
 # 9e. Zero-click local-machine installation contract.
 $localInstallBat = Join-Path $projectRoot `
@@ -684,10 +690,17 @@ Assert-True (-not $defaultSettings.config.scan_on_startup) (
 $uninstallBat = Join-Path $projectRoot `
     'deployment\SearchEngineServicePortable\Uninstall-SearchEngineService-Windows7.bat'
 $uninstallText = [IO.File]::ReadAllText($uninstallBat)
+$authKeysBat = Join-Path $projectRoot `
+    'deployment\SearchEngineServicePortable\Remove-SearchEngineAuthKeys.bat'
+Assert-True (Test-Path -LiteralPath $authKeysBat -PathType Leaf) (
+    '10. Remove-SearchEngineAuthKeys.bat template exists'
+)
+$authKeysText = [IO.File]::ReadAllText($authKeysBat)
 $localizedScripts = @(
     @{ Name = 'installer'; Text = $installText },
     @{ Name = 'uninstaller'; Text = $uninstallText },
-    @{ Name = 'configurator'; Text = $configureText }
+    @{ Name = 'configurator'; Text = $configureText },
+    @{ Name = 'auth-key cleanup'; Text = $authKeysText }
 )
 foreach ($localizedScript in $localizedScripts) {
     Assert-True ($localizedScript.Text.Contains('set "UI_LANGUAGE=')) (
@@ -733,6 +746,15 @@ Assert-True ($uninstallText.Contains('INSPECTED_archive_directory')) (
 )
 Assert-True ($uninstallText.Contains('STANDARD_INSTALL_ROOT')) (
     '10. Uninstaller also removes standard-path leftovers'
+)
+Assert-True ($uninstallText.Contains('REPORT_AUTH_LEFTOVERS')) (
+    '10. Uninstaller reports leftover issuer keys and user tokens'
+)
+Assert-True ($uninstallText.Contains('Remove-SearchEngineAuthKeys.bat')) (
+    '10. Uninstaller points leftover key cleanup to Remove-SearchEngineAuthKeys.bat'
+)
+Assert-True ($authKeysText.Contains('confirm_issuer_again')) (
+    '10. Auth-key cleanup asks again when SearchEngine services remain'
 )
 Assert-True (-not $configureText.Contains('Will update: Settings.json only')) (
     '10. Configurator has no hard-coded English confirmation after language selection'

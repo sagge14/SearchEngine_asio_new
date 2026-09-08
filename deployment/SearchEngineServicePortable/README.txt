@@ -153,6 +153,7 @@ ProgramData. Полное удаление ProgramData выполняется т
   Configure-SearchEngineService.bat
   Archive-SearchEngineService.bat
   Uninstall-SearchEngineService.bat
+  Remove-SearchEngineAuthKeys.bat
   Issue-SearchClientToken.bat
   Register-AuthClient-FromToken.bat
   sc query SearchEngineService
@@ -168,6 +169,12 @@ Configure-SearchEngineService.bat — безопасное редактиров�
 data-dir через SCM, проводит через валидацию, выполняет Stop → atomic replace →
 Start → PING/PONG. При изменении порта автоматически обновляет client-endpoint.txt
 и правило Windows Firewall. Hot reload не поддерживается. Требует Administrator.
+
+Remove-SearchEngineAuthKeys.bat удаляет оставшиеся ключи издателя в
+%ProgramData%\SearchClientTokenIssuer и клиентский токен текущего пользователя
+в %LOCALAPPDATA%\SearchEngine. Uninstall службы эти файлы не трогает и только
+перечисляет их. По умолчанию ключи оставляются; при живых службах SearchEngine
+удаление издателя требует второго подтверждения.
 
 Archive-SearchEngineService.bat сначала предлагает перенос года без службы.
 Этот режим не останавливает и не изменяет сервер: он копирует выбранные файлы и

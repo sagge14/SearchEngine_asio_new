@@ -193,6 +193,7 @@ netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 
 call :UI uninstall.success "%SERVICE_NAME%"
 if not "%BACKUP_MODE%"=="none" call :UI uninstall.backup_created
+call :REPORT_AUTH_LEFTOVERS
 >> "%UNINSTALL_LOG%" echo Completed successfully: %DATE% %TIME%
 call :UI common.log_path "%UNINSTALL_LOG%"
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
@@ -323,6 +324,7 @@ exit /b 0
 :NOT_INSTALLED
 netsh.exe advfirewall firewall delete rule name="%FIREWALL_RULE%" >nul 2>&1
 call :UI uninstall.not_installed "%SERVICE_NAME%"
+call :REPORT_AUTH_LEFTOVERS
 call :UI common.log_path "%UNINSTALL_LOG%"
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 call :WAIT_BEFORE_CLOSE
@@ -330,6 +332,7 @@ exit /b 0
 :NO_INSTALLED_SERVICES
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
 call :UI uninstall.no_services
+call :REPORT_AUTH_LEFTOVERS
 call :UI common.log_path "%UNINSTALL_LOG%"
 call :WAIT_BEFORE_CLOSE
 exit /b 0
@@ -409,6 +412,19 @@ if /I "%UI_LANGUAGE%"=="auto" (
     call :UI common.press_zero
     choice.exe /C 0 /N /M ""
 )
+exit /b 0
+
+:REPORT_AUTH_LEFTOVERS
+set "AUTH_LEFTOVER="
+if exist "%ProgramData%\SearchClientTokenIssuer\" set "AUTH_LEFTOVER=1"
+if defined LOCALAPPDATA if exist "%LOCALAPPDATA%\SearchEngine\" set "AUTH_LEFTOVER=1"
+if exist "%ProgramData%\SearchEngine\searchclient-auth-token.json" set "AUTH_LEFTOVER=1"
+if not defined AUTH_LEFTOVER exit /b 0
+call :UI uninstall.auth_leftover
+if exist "%ProgramData%\SearchClientTokenIssuer\" call :UI uninstall.auth_leftover_path "%ProgramData%\SearchClientTokenIssuer"
+if defined LOCALAPPDATA if exist "%LOCALAPPDATA%\SearchEngine\" call :UI uninstall.auth_leftover_path "%LOCALAPPDATA%\SearchEngine"
+if exist "%ProgramData%\SearchEngine\searchclient-auth-token.json" call :UI uninstall.auth_leftover_path "%ProgramData%\SearchEngine\searchclient-auth-token.json"
+call :UI uninstall.auth_cleanup_hint "Remove-SearchEngineAuthKeys.bat"
 exit /b 0
 
 :CHOICE

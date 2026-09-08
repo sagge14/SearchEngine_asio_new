@@ -468,6 +468,7 @@ try {
 
     $portableBatchFiles = @(
         @{ Source = 'Setup-Access.bat'; Destination = 'Setup-Access.bat' },
+        @{ Source = 'Remove-SearchEngineAuthKeys.bat'; Destination = 'Remove-SearchEngineAuthKeys.bat' },
         @{
             Source = 'Install-SearchEngineService-Windows7.bat'
             Destination = 'Install-SearchEngineService.bat'
@@ -612,6 +613,7 @@ try {
         'Register-AuthClient-FromToken.bat',
         'Issue-SearchClientToken.bat',
         'Setup-Access.bat',
+        'Remove-SearchEngineAuthKeys.bat',
         'Verify-Package.bat',
         'Configure-SearchEngineService.bat',
         'Archive-SearchEngineService.bat'

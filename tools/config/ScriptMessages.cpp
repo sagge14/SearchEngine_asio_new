@@ -133,6 +133,21 @@ constexpr Message kMessages[] = {
         L"\n{1} was completely removed.\n"
     },
     {
+        L"uninstall.auth_leftover",
+        L"\nКлючи авторизации не удалялись. Найдено:\n",
+        L"\nAuthorization keys were not removed. Found:\n"
+    },
+    {
+        L"uninstall.auth_leftover_path",
+        L"  {1}\n",
+        L"  {1}\n"
+    },
+    {
+        L"uninstall.auth_cleanup_hint",
+        L"Чтобы удалить их, запустите {1} из этого комплекта.\n",
+        L"To delete them, run {1} from this package.\n"
+    },
+    {
         L"uninstall.backup_created",
         L"Перед удалением создана запрошенная резервная копия.\n",
         L"The requested backup was created before deletion.\n"
@@ -228,6 +243,111 @@ constexpr Message kMessages[] = {
         L"uninstall.helper_failed",
         L"ОШИБКА: SearchEngineConfig не смог получить список установленных служб.\n",
         L"ERROR: SearchEngineConfig could not enumerate installed services.\n"
+    },
+    {
+        L"authkeys.not_admin",
+        L"ОШИБКА: Запустите Remove-SearchEngineAuthKeys.bat от имени администратора.\n",
+        L"ERROR: Run Remove-SearchEngineAuthKeys.bat as Administrator.\n"
+    },
+    {
+        L"authkeys.nothing",
+        L"Ключи издателя и локальные токены текущего пользователя не найдены.\n",
+        L"No issuer keys or current-user tokens were found.\n"
+    },
+    {
+        L"authkeys.found",
+        L"\nНайдены ключи и токены, которые uninstall службы не удаляет:\n",
+        L"\nFound keys and tokens that service uninstall does not remove:\n"
+    },
+    {
+        L"authkeys.found_path",
+        L"  {1}\n",
+        L"  {1}\n"
+    },
+    {
+        L"authkeys.services_remain",
+        L"\nПРЕДУПРЕЖДЕНИЕ: на этом компьютере ещё есть службы SearchEngine.\n"
+        L"Хранилище издателя общее. После удаления новые токены этим ключом\n"
+        L"подписать будет нельзя, а уже установленные службы останутся без него.\n",
+        L"\nWARNING: SearchEngine services are still installed on this computer.\n"
+        L"The issuer keystore is shared. After deletion this key cannot sign new\n"
+        L"tokens, and remaining services will no longer have it.\n"
+    },
+    {
+        L"authkeys.confirm_issuer",
+        L"\nХранилище издателя (закрытый ключ):\n"
+        L"  {1}\n"
+        L"  1 - Оставить (рекомендуется)\n"
+        L"  2 - Удалить\n",
+        L"\nIssuer keystore (private key):\n"
+        L"  {1}\n"
+        L"  1 - Keep (recommended)\n"
+        L"  2 - Delete\n"
+    },
+    {
+        L"authkeys.confirm_issuer_again",
+        L"\nУдаление закроет подпись токенов для оставшихся служб на этом ПК.\n"
+        L"  1 - Оставить ключи (рекомендуется)\n"
+        L"  2 - Всё равно удалить хранилище издателя\n",
+        L"\nDeletion will stop token signing for remaining services on this PC.\n"
+        L"  1 - Keep the keys (recommended)\n"
+        L"  2 - Delete the issuer keystore anyway\n"
+    },
+    {
+        L"authkeys.confirm_profile",
+        L"\nКлиентский токен и файлы доступа текущего пользователя Windows:\n"
+        L"  {1}\n"
+        L"  1 - Оставить (рекомендуется)\n"
+        L"  2 - Удалить\n",
+        L"\nClient token and access files of the current Windows user:\n"
+        L"  {1}\n"
+        L"  1 - Keep (recommended)\n"
+        L"  2 - Delete\n"
+    },
+    {
+        L"authkeys.legacy_included",
+        L"Также будет удалён старый общий токен:\n  {1}\n",
+        L"The old shared token will also be deleted:\n  {1}\n"
+    },
+    {
+        L"authkeys.deleting_issuer",
+        L"Удаление хранилища издателя...\n",
+        L"Deleting the issuer keystore...\n"
+    },
+    {
+        L"authkeys.deleting_profile",
+        L"Удаление локальных токенов текущего пользователя...\n",
+        L"Deleting the current user's local tokens...\n"
+    },
+    {
+        L"authkeys.issuer_delete_failed",
+        L"ОШИБКА: Не удалось удалить хранилище издателя:\n  {1}\n",
+        L"ERROR: The issuer keystore could not be deleted:\n  {1}\n"
+    },
+    {
+        L"authkeys.profile_delete_failed",
+        L"ОШИБКА: Не удалось удалить локальный профиль токенов:\n  {1}\n",
+        L"ERROR: The local token profile could not be deleted:\n  {1}\n"
+    },
+    {
+        L"authkeys.legacy_delete_failed",
+        L"ОШИБКА: Не удалось удалить старый общий токен:\n  {1}\n",
+        L"ERROR: The old shared token could not be deleted:\n  {1}\n"
+    },
+    {
+        L"authkeys.success",
+        L"\nВыбранные ключи и токены удалены.\n",
+        L"\nThe selected keys and tokens were deleted.\n"
+    },
+    {
+        L"authkeys.cancelled",
+        L"Удаление ключей отменено. Ничего не удалено.\n",
+        L"Key removal cancelled. Nothing was deleted.\n"
+    },
+    {
+        L"authkeys.helper_failed",
+        L"ОШИБКА: SearchEngineConfig не смог выбрать язык интерфейса.\n",
+        L"ERROR: SearchEngineConfig could not select the interface language.\n"
     },
     {
         L"configure.not_admin",

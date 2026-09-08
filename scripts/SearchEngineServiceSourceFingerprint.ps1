@@ -55,7 +55,10 @@ function Get-SearchEngineServiceSourceFingerprint {
     }
 
     $accessFiles = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'tools\access_setup') -File | ForEach-Object { $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/') })
-    $sourceFiles = @($trackedFiles + $tutorialFiles + $accessFiles + @('deployment/SearchEngineServicePortable/Setup-Access.bat') | Sort-Object -Unique)
+    $sourceFiles = @($trackedFiles + $tutorialFiles + $accessFiles + @(
+        'deployment/SearchEngineServicePortable/Setup-Access.bat',
+        'deployment/SearchEngineServicePortable/Remove-SearchEngineAuthKeys.bat'
+    ) | Sort-Object -Unique)
     if ($sourceFiles.Count -eq 0) {
         throw 'SearchEngineService source fingerprint has no source inputs.'
     }

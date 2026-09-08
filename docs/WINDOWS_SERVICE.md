@@ -334,6 +334,9 @@ client-endpoint.txt имеют малый rollback. Пользовательск
 без копии всего индекса.
 `Uninstall-SearchEngineService.bat` использует тот же выбор экспорта и после
 подтверждения полностью удаляет службу, firewall rule, приложение и data-dir.
+Ключи издателя `%ProgramData%\SearchClientTokenIssuer` и токен текущего
+пользователя `%LOCALAPPDATA%\SearchEngine` остаются; uninstall перечисляет их и
+указывает на `Remove-SearchEngineAuthKeys.bat`.
 При запуске без аргумента он перечисляет зарегистрированные
 `SearchEngineService[-instance]` и предлагает выбрать удаляемый экземпляр.
 Удаление Program Files, ProgramData и rollback-каталогов выполняется с

@@ -21,6 +21,7 @@
 |-- Start-SearchEngineService.bat       запуск и проверка PING/PONG
 |-- Restart-SearchEngineService.bat     перезапуск и проверка ответа
 |-- Uninstall-SearchEngineService.bat   резервирование и полное удаление
+|-- Remove-SearchEngineAuthKeys.bat     удаление оставшихся ключей и токенов
 |-- Issue-SearchClientToken.bat         выпуск USB/computer-токена
 |-- Register-AuthClient-FromToken.bat   регистрация токена в auth_clients.sqlite
 |-- Archive-SearchEngineService.bat     перенос года/службы и заморозка
@@ -521,6 +522,14 @@ SearchEngineService[-instance], показывает нумерованный с
 диагностический отчёт записывается в
 %TEMP%\SearchEngineService-Uninstall-last.log. Итоговое окно закрывается только
 после явного нажатия клавиши 0.
+
+Uninstall не удаляет машинное хранилище издателя
+(%ProgramData%\SearchClientTokenIssuer) и клиентский токен текущего пользователя
+(%LOCALAPPDATA%\SearchEngine). Если они остались, скрипт перечисляет пути и
+предлагает Remove-SearchEngineAuthKeys.bat из того же комплекта. Этот BAT
+спрашивает отдельно про издателя и про локальный профиль; по умолчанию ключи
+оставляются. Если на компьютере ещё есть службы SearchEngine, удаление издателя
+требует дополнительного подтверждения.
 
 8. НАСТРОЙКА НОВОГО MULTI-SERVER КЛИЕНТА
 -----------------------------------------
