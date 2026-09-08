@@ -257,6 +257,37 @@ Assert-True ($packagerText.Contains('validate-prefix-map')) (
 Assert-True ($packagerText.Contains('Portable prefix_map.json')) (
     '7. Packager missing-template error names prefix_map.json'
 )
+Assert-True ($packagerText.Contains('function Get-PeImportedDlls')) (
+    '7b. Packager parses PE import names without dumpbin'
+)
+Assert-True ($packagerText.Contains('Assert-PeImportsExpectedOpenSsl')) (
+    '7b. Packager rejects OpenSSL import/runtime mismatches before staging'
+)
+Assert-True ($packagerText.Contains("Label = 'AuthDbTool.exe'")) (
+    '7b. Packager checks AuthDbTool OpenSSL imports'
+)
+Assert-True ($packagerText.Contains("Label = 'SearchEngineAccessSetup.exe'")) (
+    '7b. Packager checks SearchEngineAccessSetup OpenSSL imports'
+)
+Assert-True ($packagerText.Contains("`$name -notmatch '(?i)arm64'")) (
+    '7b. Packager skips ARM64 OpenSSL DLLs when selecting the runtime'
+)
+$cmakeText = [IO.File]::ReadAllText((Join-Path $projectRoot 'CMakeLists.txt'))
+Assert-True ($cmakeText.Contains('searchengine_target_link_openssl(AuthDbTool)')) (
+    '7b. AuthDbTool links arch-matched OpenSSL, not cached FindOpenSSL'
+)
+Assert-True ($cmakeText.Contains('searchengine_target_link_openssl(SearchEngineAccessCore SCOPE PUBLIC)')) (
+    '7b. AccessSetup core links arch-matched OpenSSL'
+)
+Assert-True ($cmakeText.Contains('searchengine_target_link_openssl(SearchEngine SSL)')) (
+    '7b. SearchEngine uses the shared OpenSSL helper'
+)
+Assert-True ($cmakeText.Contains('searchengine_target_link_openssl(SearchClientTokenIssuer)')) (
+    '7b. TokenIssuer uses the shared OpenSSL helper'
+)
+Assert-True (-not ($cmakeText -match 'target_link_libraries\(AuthDbTool PRIVATE OpenSSL::Crypto\)')) (
+    '7b. AuthDbTool no longer links OpenSSL::Crypto directly'
+)
 Assert-True ($installText.Contains('call :UI install.attachments_menu')) (
     '7. Fresh installer has a localized GET_ATTACHMENTS choice'
 )

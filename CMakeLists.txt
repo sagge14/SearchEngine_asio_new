@@ -155,6 +155,106 @@ function(searchengine_imported_location target_name configuration output_variabl
     set(${output_variable} "${_imported_location}" PARENT_SCOPE)
 endfunction()
 
+# FindOpenSSL can cache a Release import lib from another prefix (for example
+# C:/Program Files/OpenSSL, whose libcrypto.lib is x64 COFF but names
+# libcrypto-3-arm64.dll). Prefer the architecture-specific Shining Light VC
+# MD/MDd libraries under SEARCHENGINE_OPENSSL_ROOT.
+function(searchengine_target_link_openssl target_name)
+    set(_options SSL)
+    set(_oneValueArgs SCOPE)
+    cmake_parse_arguments(_se_ossl "${_options}" "${_oneValueArgs}" "" ${ARGN})
+    if(_se_ossl_UNPARSED_ARGUMENTS)
+        message(
+                FATAL_ERROR
+                "searchengine_target_link_openssl unused arguments: "
+                "${_se_ossl_UNPARSED_ARGUMENTS}"
+        )
+    endif()
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "searchengine_target_link_openssl: unknown target ${target_name}")
+    endif()
+    if(NOT _se_ossl_SCOPE)
+        set(_se_ossl_SCOPE PRIVATE)
+    endif()
+
+    set(
+            _crypto_md
+            "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
+    )
+    set(
+            _crypto_mdd
+            "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib"
+    )
+    set(
+            _ssl_md
+            "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libssl.lib"
+    )
+    set(
+            _ssl_mdd
+            "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libssl.lib"
+    )
+    set(_have_arch_libs OFF)
+    if(
+            WIN32
+            AND SEARCHENGINE_OPENSSL_ROOT
+            AND EXISTS "${_crypto_md}"
+    )
+        if(_se_ossl_SSL)
+            if(EXISTS "${_ssl_md}")
+                set(_have_arch_libs ON)
+            endif()
+        else()
+            set(_have_arch_libs ON)
+        endif()
+    endif()
+
+    if(_have_arch_libs)
+        target_include_directories(
+                ${target_name}
+                ${_se_ossl_SCOPE}
+                "${SEARCHENGINE_OPENSSL_ROOT}/include"
+        )
+        set(_openssl_libs
+                "$<$<CONFIG:Debug>:${_crypto_mdd}>"
+                "$<$<NOT:$<CONFIG:Debug>>:${_crypto_md}>"
+        )
+        if(_se_ossl_SSL)
+            list(
+                    APPEND
+                    _openssl_libs
+                    "$<$<CONFIG:Debug>:${_ssl_mdd}>"
+                    "$<$<NOT:$<CONFIG:Debug>>:${_ssl_md}>"
+            )
+        endif()
+        target_link_libraries(${target_name} ${_se_ossl_SCOPE} ${_openssl_libs})
+        message(
+                STATUS
+                "${target_name}: OpenSSL ${SEARCHENGINE_ARCH} VC MD from ${SEARCHENGINE_OPENSSL_ROOT}"
+        )
+    else()
+        if(NOT TARGET OpenSSL::Crypto)
+            message(
+                    FATAL_ERROR
+                    "${target_name} needs OpenSSL, but OpenSSL::Crypto is missing. "
+                    "Set SEARCHENGINE_OPENSSL_ROOT to the matching Win32/Win64 prefix."
+            )
+        endif()
+        set(_openssl_targets OpenSSL::Crypto)
+        if(_se_ossl_SSL)
+            if(NOT TARGET OpenSSL::SSL)
+                message(FATAL_ERROR "${target_name} needs OpenSSL::SSL")
+            endif()
+            list(APPEND _openssl_targets OpenSSL::SSL)
+        endif()
+        target_link_libraries(${target_name} ${_se_ossl_SCOPE} ${_openssl_targets})
+        message(
+                WARNING
+                "${target_name}: falling back to FindOpenSSL imported location; "
+                "Release may import libcrypto-3-arm64.dll"
+        )
+    endif()
+endfunction()
+
 function(searchengine_validate_boost_target target_name)
     if(NOT MSVC)
         return()
@@ -531,7 +631,7 @@ endif()
 # ---------------------------------------------------------------------------
 # OpenSSL (FindOpenSSL chooses MDd/MD and x86/x64 paths per configuration)
 # ---------------------------------------------------------------------------
-if(BUILD_SEARCHENGINE OR BUILD_TOKEN_ISSUER)
+if(BUILD_SEARCHENGINE OR BUILD_TOKEN_ISSUER OR BUILD_AUTH_DB_TOOL)
     set(_default_openssl_root "")
     if(WIN32)
         if(
@@ -606,37 +706,7 @@ if(BUILD_SEARCHENGINE)
             Boost::serialization
             SearchEngine::utf8proc
     )
-    # Prefer the architecture-specific Shining Light VC import libraries.
-    # FindOpenSSL can retain a Release cache entry from another installation
-    # (for example, the ARM64 prefix in C:/Program Files/OpenSSL) even when
-    # SEARCHENGINE_OPENSSL_ROOT points at OpenSSL-Win64.
-    if(
-            WIN32
-            AND SEARCHENGINE_OPENSSL_ROOT
-            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
-            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libssl.lib"
-    )
-        target_include_directories(
-                SearchEngine
-                PRIVATE
-                "${SEARCHENGINE_OPENSSL_ROOT}/include"
-        )
-        target_link_libraries(
-                SearchEngine
-                PRIVATE
-                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib>"
-                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libssl.lib>"
-                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib>"
-                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libssl.lib>"
-        )
-    else()
-        target_link_libraries(
-                SearchEngine
-                PRIVATE
-                OpenSSL::Crypto
-                OpenSSL::SSL
-        )
-    endif()
+    searchengine_target_link_openssl(SearchEngine SSL)
     if(WIN32)
         target_link_libraries(SearchEngine PRIVATE ws2_32 advapi32)
     endif()
@@ -788,7 +858,7 @@ if(BUILD_AUTH_DB_TOOL)
                 PROPERTIES LANGUAGE C
         )
     endif()
-    target_link_libraries(AuthDbTool PRIVATE OpenSSL::Crypto)
+    searchengine_target_link_openssl(AuthDbTool)
     searchengine_configure_target(AuthDbTool)
 endif()
 
@@ -828,31 +898,7 @@ if(BUILD_TOKEN_ISSUER)
             wbemuuid
             comdlg32
     )
-    # Prefer arch-matched OpenSSL VC MD libs. Stock FindOpenSSL may cache a
-    # mismatched Release import lib (e.g. arm64) from another OpenSSL prefix.
-    if(
-            WIN32
-            AND SEARCHENGINE_OPENSSL_ROOT
-            AND EXISTS "${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib"
-    )
-        target_include_directories(
-                SearchClientTokenIssuer
-                PRIVATE
-                "${SEARCHENGINE_OPENSSL_ROOT}/include"
-        )
-        target_link_libraries(
-                SearchClientTokenIssuer
-                PRIVATE
-                "$<$<CONFIG:Debug>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MDd/libcrypto.lib>"
-                "$<$<NOT:$<CONFIG:Debug>>:${SEARCHENGINE_OPENSSL_ROOT}/lib/VC/${SEARCHENGINE_ARCH}/MD/libcrypto.lib>"
-        )
-    else()
-        target_link_libraries(
-                SearchClientTokenIssuer
-                PRIVATE
-                OpenSSL::Crypto
-        )
-    endif()
+    searchengine_target_link_openssl(SearchClientTokenIssuer)
     target_compile_definitions(
             SearchClientTokenIssuer
             PRIVATE
@@ -1157,7 +1203,8 @@ if(WIN32 AND BUILD_TOKEN_ISSUER AND BUILD_AUTH_DB_TOOL)
         "${PROJECT_SOURCE_DIR}/tools/auth"
         "${PROJECT_SOURCE_DIR}/tools/token_issuer"
         "${PROJECT_SOURCE_DIR}/src")
-    target_link_libraries(SearchEngineAccessCore PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto)
+    target_link_libraries(SearchEngineAccessCore PUBLIC nlohmann_json::nlohmann_json)
+    searchengine_target_link_openssl(SearchEngineAccessCore SCOPE PUBLIC)
     target_compile_definitions(SearchEngineAccessCore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     searchengine_configure_target(SearchEngineAccessCore)
     add_executable(SearchEngineAccessSetup

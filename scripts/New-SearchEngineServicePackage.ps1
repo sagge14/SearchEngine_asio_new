@@ -61,6 +61,12 @@ if ($Architecture -eq 'x86') {
 }
 $vcRedistArch = if ($Architecture -eq 'x64') { 'x64' } else { 'x86' }
 $vcRedistName = "vc_redist.$vcRedistArch.exe"
+$opensslDllName = if ($Architecture -eq 'x64') {
+    'libcrypto-3-x64.dll'
+} else {
+    'libcrypto-3.dll'
+}
+$opensslSslDllName = $opensslDllName.Replace('libcrypto', 'libssl')
 
 function Resolve-AbsolutePath([string]$Path, [string]$BasePath) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -153,6 +159,145 @@ function Get-PeMachine([string]$Path) {
     } finally {
         $reader.Dispose()
         $stream.Dispose()
+    }
+}
+
+function Get-PeImportedDlls([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 64 -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5A4D) {
+        throw "Not a PE executable: $Path"
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (
+        $peOffset -lt 0 -or
+        ($peOffset + 24) -gt $bytes.Length -or
+        [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550
+    ) {
+        throw "Invalid PE signature: $Path"
+    }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $peOffset + 6)
+    $optionalSize = [BitConverter]::ToUInt16($bytes, $peOffset + 20)
+    $optionalOffset = $peOffset + 24
+    if (($optionalOffset + $optionalSize) -gt $bytes.Length) {
+        throw "Truncated PE optional header: $Path"
+    }
+    $magic = [BitConverter]::ToUInt16($bytes, $optionalOffset)
+    $importDirOffset = if ($magic -eq 0x20B) {
+        $optionalOffset + 120
+    } elseif ($magic -eq 0x10B) {
+        $optionalOffset + 104
+    } else {
+        throw ("Unsupported PE optional magic 0x{0:X} in {1}" -f $magic, $Path)
+    }
+    if (($importDirOffset + 8) -gt $bytes.Length) {
+        throw "Truncated PE import directory: $Path"
+    }
+    $importRva = [BitConverter]::ToUInt32($bytes, $importDirOffset)
+    if ($importRva -eq 0) {
+        return @()
+    }
+
+    $sections = New-Object System.Collections.Generic.List[object]
+    $sectionOffset = $optionalOffset + $optionalSize
+    for ($i = 0; $i -lt $sectionCount; $i++) {
+        $entry = $sectionOffset + (40 * $i)
+        if (($entry + 40) -gt $bytes.Length) {
+            throw "Truncated PE section table: $Path"
+        }
+        $sections.Add([pscustomobject]@{
+            VirtualSize = [BitConverter]::ToUInt32($bytes, $entry + 8)
+            VirtualAddress = [BitConverter]::ToUInt32($bytes, $entry + 12)
+            SizeOfRawData = [BitConverter]::ToUInt32($bytes, $entry + 16)
+            PointerToRawData = [BitConverter]::ToUInt32($bytes, $entry + 20)
+        }) | Out-Null
+    }
+
+    function Convert-RvaToOffset([uint32]$Rva) {
+        foreach ($section in $sections) {
+            $span = [Math]::Max([uint32]$section.VirtualSize, [uint32]$section.SizeOfRawData)
+            if ($span -eq 0) {
+                continue
+            }
+            if ($Rva -ge $section.VirtualAddress -and $Rva -lt ($section.VirtualAddress + $span)) {
+                return [int64]$section.PointerToRawData + ([int64]$Rva - [int64]$section.VirtualAddress)
+            }
+        }
+        return $null
+    }
+
+    $importOffset = Convert-RvaToOffset $importRva
+    if ($null -eq $importOffset) {
+        throw "Import directory RVA 0x$($importRva.ToString('X')) is not in a section: $Path"
+    }
+
+    $names = New-Object System.Collections.Generic.List[string]
+    for ($descriptor = 0; $descriptor -lt 256; $descriptor++) {
+        $entry = [int64]$importOffset + (20 * $descriptor)
+        if (($entry + 20) -gt $bytes.Length) {
+            break
+        }
+        $nameRva = [BitConverter]::ToUInt32($bytes, [int]$entry + 12)
+        $firstThunk = [BitConverter]::ToUInt32($bytes, [int]$entry + 16)
+        $originalFirstThunk = [BitConverter]::ToUInt32($bytes, [int]$entry)
+        if ($nameRva -eq 0 -and $firstThunk -eq 0 -and $originalFirstThunk -eq 0) {
+            break
+        }
+        if ($nameRva -eq 0) {
+            continue
+        }
+        $nameOffset = Convert-RvaToOffset $nameRva
+        if ($null -eq $nameOffset -or $nameOffset -ge $bytes.Length) {
+            continue
+        }
+        $end = [int]$nameOffset
+        while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) {
+            $end++
+        }
+        if ($end -gt $nameOffset) {
+            $names.Add([Text.Encoding]::ASCII.GetString(
+                $bytes,
+                [int]$nameOffset,
+                $end - [int]$nameOffset
+            )) | Out-Null
+        }
+    }
+    return @($names)
+}
+
+function Assert-PeImportsExpectedOpenSsl {
+    param(
+        [string]$Path,
+        [string]$ExpectedCryptoDll,
+        [string]$ExpectedSslDll,
+        [string]$Label
+    )
+    $dlls = @(Get-PeImportedDlls $Path)
+    $cryptoImports = @($dlls | Where-Object {
+        $_ -like 'libcrypto-3*.dll' -or $_ -like 'libssl-3*.dll'
+    })
+    if ($cryptoImports.Count -eq 0) {
+        throw "$Label does not import OpenSSL libcrypto/libssl: $Path"
+    }
+    $arm64 = @($cryptoImports | Where-Object { $_ -match '(?i)arm64' })
+    if ($arm64.Count -gt 0) {
+        throw (
+            "$Label imports ARM64 OpenSSL ($($arm64 -join ', ')); " +
+            "expected $ExpectedCryptoDll. Relink against SEARCHENGINE_OPENSSL_ROOT " +
+            "lib/VC MD import libraries."
+        )
+    }
+    foreach ($imported in $cryptoImports) {
+        $expected = if ($imported -like 'libssl-3*') {
+            $ExpectedSslDll
+        } else {
+            $ExpectedCryptoDll
+        }
+        if (-not $imported.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+            throw (
+                "$Label imports '$imported' instead of '$expected'. " +
+                "The portable package ships $ExpectedCryptoDll next to the EXE."
+            )
+        }
     }
 }
 
@@ -266,6 +411,18 @@ $tokenIssuerMachine = Get-PeMachine $tokenIssuerPath
 if ($tokenIssuerMachine -ne $expectedMachine) {
     throw ('SearchClientTokenIssuer.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
         -f $expectedMachine, $tokenIssuerMachine)
+}
+foreach ($opensslBinary in @(
+    @{ Path = $binaryPath; Label = 'SearchEngine.exe' },
+    @{ Path = $authDbToolPath; Label = 'AuthDbTool.exe' },
+    @{ Path = $tokenIssuerPath; Label = 'SearchClientTokenIssuer.exe' },
+    @{ Path = $accessSetupPath; Label = 'SearchEngineAccessSetup.exe' }
+)) {
+    Assert-PeImportsExpectedOpenSsl `
+        -Path $opensslBinary.Path `
+        -ExpectedCryptoDll $opensslDllName `
+        -ExpectedSslDll $opensslSslDllName `
+        -Label $opensslBinary.Label
 }
 
 $OutputDirectory = Resolve-AbsolutePath $OutputDirectory $projectRoot
@@ -420,15 +577,10 @@ try {
     Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
         -Destination (Join-Path $stagingDirectory `
             'tools\searchclient-auth-token.defaults.json')
-    # OpenSSL runtime DLL: SearchEngine.exe (auth verify) and TokenIssuer both
-    # import libcrypto dynamically. Ship it next to each EXE — the service runs
-    # from install\bin, tools stay in install\tools, and Windows does not search
-    # across those folders.
-    $opensslDllName = if ($Architecture -eq 'x64') {
-        'libcrypto-3-x64.dll'
-    } else {
-        'libcrypto-3.dll'
-    }
+    # OpenSSL runtime DLL: SearchEngine.exe (auth verify), AuthDbTool,
+    # AccessSetup and TokenIssuer all import libcrypto dynamically. Ship it next
+    # to each EXE — the service runs from install\bin, tools stay in
+    # install\tools, and Windows does not search across those folders.
     $opensslDllCandidates = @(
         (Join-Path $BuildDirectory $opensslDllName),
         (Join-Path ${env:ProgramFiles} "OpenSSL-Win64\bin\$opensslDllName"),
@@ -438,11 +590,21 @@ try {
     )
     $opensslDll = $opensslDllCandidates |
         Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Where-Object {
+            $name = [IO.Path]::GetFileName($_)
+            $name -notmatch '(?i)arm64' -and (Get-PeMachine $_) -eq $expectedMachine
+        } |
         Select-Object -First 1
     if (-not $opensslDll) {
         throw "OpenSSL DLL '$opensslDllName' was not found for SearchEngine/TokenIssuer packaging."
     }
     $opensslFileName = [IO.Path]::GetFileName($opensslDll)
+    if (
+        -not $opensslFileName.Equals($opensslDllName, [StringComparison]::OrdinalIgnoreCase) -or
+        $opensslFileName -match '(?i)arm64'
+    ) {
+        throw "Refusing to package OpenSSL DLL '$opensslFileName'; expected '$opensslDllName'."
+    }
     Copy-Item -LiteralPath $opensslDll `
         -Destination (Join-Path $stagingDirectory ("app\" + $opensslFileName))
     Copy-Item -LiteralPath $opensslDll `
