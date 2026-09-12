@@ -41,6 +41,10 @@ logs/
 
 # IDE agent plans
 .cursor/
+.codex-remote-attachments/
+
+# User prompt handoff; not product source
+docs/prompts/
 
 # Generated Win32 version resources (rebuilt from app-version*.json)
 cmake/generated/

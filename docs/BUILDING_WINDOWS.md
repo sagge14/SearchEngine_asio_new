@@ -175,8 +175,9 @@ Fresh template по умолчанию хранит каталог докуме�
 (`enable_prm_short_content_autodetect=false`) и не сканирует при каждом старте
 (`scan_on_startup=false`). Portable-пакет также включает
 `Local-Machine-Install.bat`: fresh-only установку без вопросов с instance id
-текущего года, автоматическим свободным портом, provisioning локального токена
-и синхронным `SearchEngine.exe --initial-update` до запуска службы.
+текущего года, проверкой/тихой установкой VC++ Runtime до helper, автоматическим
+свободным портом, provisioning локального токена и синхронным
+`SearchEngine.exe --initial-update` до запуска службы.
 
 Локальный пакет и ZIP на Drive:
 

@@ -272,6 +272,21 @@ Assert-True ($packagerText.Contains("Label = 'SearchEngineAccessSetup.exe'")) (
 Assert-True ($packagerText.Contains("`$name -notmatch '(?i)arm64'")) (
     '7b. Packager skips ARM64 OpenSSL DLLs when selecting the runtime'
 )
+Assert-True ($packagerText.Contains('function Copy-SideBySideRuntimeDlls')) (
+    '7c. Packager copies VC++ CRT DLLs next to app and tools executables'
+)
+Assert-True ($packagerText.Contains('Get-UcrtDirectory')) (
+    '7c. Packager ships Universal CRT with the x86/Windows 7 package'
+)
+Assert-True ($packagerText.Contains("(Split-Path -Leaf `$parent) -ieq 'MSVC'")) (
+    '7c. Packager finds CRT in MSVC version folders, not only beside vc_redist.exe'
+)
+Assert-True ($packagerText.Contains('$ExpectedMachine -eq 0x8664')) (
+    '7c. vcruntime140_1.dll is required for x64 CRT only'
+)
+Assert-True ($packagerText.Contains("Where-Object { `$_.Name -match '^\d+\.\d+' }")) (
+    '7c. Packager prefers versioned Windows Kits UCRT folders'
+)
 $cmakeText = [IO.File]::ReadAllText((Join-Path $projectRoot 'CMakeLists.txt'))
 Assert-True ($cmakeText.Contains('searchengine_target_link_openssl(AuthDbTool)')) (
     '7b. AuthDbTool links arch-matched OpenSSL, not cached FindOpenSSL'
@@ -653,10 +668,10 @@ Assert-True ($installText.Contains('configure-local-machine')) (
 Assert-True ($installText.Contains('TOKEN_ISSUER_PASSWORD=12345678')) (
     '9e. Requested local issuer password is fixed to 12345678'
 )
-Assert-True ($installText.Contains('--device-type computer --name operator --id local-machine')) (
-    '9e. Installer issues the operator local-machine computer token'
+Assert-True ($installText.Contains('--device-type computer --name operator --id "PC-%LOCAL_COMPUTER_UUID%"')) (
+    '9e. Installer issues the operator computer token bound to this PC UUID'
 )
-Assert-True ($installText.Contains('--yes >nul 2>&1')) (
+Assert-True ($installText.Contains('--yes >nul 2>"%TOKEN_AUTH_LOG%"')) (
     '9e. Installer suppresses the issuer token preview'
 )
 Assert-True ($installText.Contains('--export-public "%DATA_DIR%"')) (
@@ -689,6 +704,66 @@ Assert-True ($installText.Contains('goto :LOCAL_MACHINE_LEFTOVERS')) (
 Assert-True ($installText.Contains(':CLEAN_LOCAL_MACHINE_FAILURE')) (
     '9e. Files created by a failed fresh local install have a cleanup path'
 )
+Assert-True ($installText.Contains('call :ENSURE_VC_RUNTIME')) (
+    '9e. Installer has a dedicated VC++ Runtime ensure step'
+)
+$ensurePos = $installText.IndexOf('call :ENSURE_VC_RUNTIME')
+$choosePos = $installText.IndexOf('"%HELPER%" choose-instance')
+$localInstancePos = $installText.IndexOf("`n:LOCAL_MACHINE_INSTANCE")
+Assert-True (
+    $ensurePos -ge 0 -and $choosePos -gt $ensurePos -and
+    $localInstancePos -gt $ensurePos
+) '9e. VC++ Runtime is ensured before SearchEngineConfig.exe instance selection'
+$skipRedistAssignments = [regex]::Matches(
+    $installText,
+    [regex]::Escape('set "SKIP_VC_REDIST=1"')
+).Count
+Assert-True ($skipRedistAssignments -eq 1) (
+    '9e. Only the explicit /SkipVcRedist flag sets SKIP_VC_REDIST=1'
+)
+$localInstanceEnd = $installText.IndexOf("`n:SELECT_LANGUAGE_ONLY")
+Assert-True ($localInstancePos -ge 0 -and $localInstanceEnd -gt $localInstancePos) (
+    '9e. Local-machine instance block bounds were found'
+)
+$localInstanceSlice = $installText.Substring(
+    $localInstancePos,
+    $localInstanceEnd - $localInstancePos
+)
+Assert-True (-not $localInstanceSlice.Contains('SKIP_VC_REDIST')) (
+    '9e. /LocalMachine does not skip VC++ Runtime setup'
+)
+$ensureBlockStart = $installText.IndexOf("`n:ENSURE_VC_RUNTIME")
+$probeBlockStart = $installText.IndexOf("`n:PROBE_VC_RUNTIME")
+Assert-True ($ensureBlockStart -ge 0 -and $probeBlockStart -gt $ensureBlockStart) (
+    '9e. VC++ Runtime ensure subroutine is present before the CRT probe'
+)
+$ensureSlice = $installText.Substring(
+    $ensureBlockStart,
+    $probeBlockStart - $ensureBlockStart
+)
+Assert-True (-not $ensureSlice.ToLowerInvariant().Contains('choice')) (
+    '9e. VC++ Runtime ensure path never asks a choice'
+)
+Assert-True ($ensureSlice.Contains('/install /quiet /norestart')) (
+    '9e. Missing VC++ Runtime is installed quietly from the packaged redist'
+)
+Assert-True ($ensureSlice.Contains('goto :ENSURE_VC_AFTER_INSTALL')) (
+    '9e. vc_redist.exe exit codes are always followed by a helper load probe'
+)
+Assert-True ($ensureSlice.Contains(
+    'Continuing with the packaged runtime files beside the program'
+)) '9e. Failed system Runtime setup can continue with app-local CRT'
+Assert-True ($installText.Contains('set "HELPER_DIR=%%~dpI"')) (
+    '9e. CRT probe prefers DLLs beside SearchEngineConfig.exe'
+)
+$probeDllPos = $installText.IndexOf('vcruntime140.dll', $probeBlockStart)
+$probeHelperPos = $installText.IndexOf(
+    '"%HELPER%" system-info >nul 2>&1',
+    $probeBlockStart
+)
+Assert-True (
+    $probeDllPos -ge 0 -and $probeHelperPos -gt $probeDllPos
+) '9e. CRT file probe runs before launching SearchEngineConfig.exe'
 $authPosition = $installText.IndexOf('call :PROVISION_LOCAL_MACHINE_AUTH')
 $updatePosition = $installText.IndexOf('call :RUN_LOCAL_INITIAL_UPDATE')
 $startPosition = $installText.IndexOf('sc.exe start "%SERVICE_NAME%"')

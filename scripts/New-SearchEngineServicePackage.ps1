@@ -110,6 +110,120 @@ function Find-VCRedist([string]$FileName, [string]$VersionRange) {
     return $candidate.FullName
 }
 
+function Get-VCRuntimeCrtDirectory([string]$VCRedistExePath, [string]$Arch, [string]$Toolset) {
+    $crtFolderName = 'Microsoft.VC' + $Toolset.TrimStart('v') + '.CRT'
+    $exeDir = Split-Path -Parent $VCRedistExePath
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+
+    function Add-CrtCandidate([string]$Directory) {
+        if ([string]::IsNullOrWhiteSpace($Directory)) {
+            return
+        }
+        $marker = Join-Path $Directory 'vcruntime140.dll'
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            if (-not $candidatePaths.Contains($Directory)) {
+                $candidatePaths.Add($Directory)
+            }
+        }
+    }
+
+    # Desktop CRT is {MSVC}\{version}\{arch}\Microsoft.VC*.CRT. vc_redist.exe
+    # often lives in the v143/v142 alias folder that has no CRT subfolder.
+    Add-CrtCandidate (Join-Path $exeDir (Join-Path $Arch $crtFolderName))
+    $leaf = Split-Path -Leaf $exeDir
+    $msvcRoot = $exeDir
+    if ($leaf -match '^v\d+$' -or $leaf -match '^\d+\.\d+') {
+        $parent = Split-Path -Parent $exeDir
+        if ((Split-Path -Leaf $parent) -ieq 'MSVC') {
+            $msvcRoot = $parent
+        }
+    }
+    if (Test-Path -LiteralPath $msvcRoot -PathType Container) {
+        Get-ChildItem -LiteralPath $msvcRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Add-CrtCandidate (
+                    Join-Path $_.FullName (Join-Path $Arch $crtFolderName)
+                )
+            }
+    }
+    if ($candidatePaths.Count -eq 0) {
+        throw "VC++ CRT folder $crtFolderName ($Arch) was not found near $VCRedistExePath"
+    }
+    return ($candidatePaths | Sort-Object -Descending | Select-Object -First 1)
+}
+
+function Get-UcrtDirectory([string]$Arch) {
+    $kitsRedist = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Redist'
+    if (-not (Test-Path -LiteralPath $kitsRedist -PathType Container)) {
+        throw "Windows Kits UCRT redist was not found: $kitsRedist"
+    }
+    $versioned = @(
+        Get-ChildItem -LiteralPath $kitsRedist -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+\.\d+' } |
+            Sort-Object Name -Descending |
+            ForEach-Object {
+                $path = Join-Path $_.FullName (Join-Path 'ucrt\DLLs' $Arch)
+                if (Test-Path -LiteralPath (Join-Path $path 'ucrtbase.dll') -PathType Leaf) {
+                    $path
+                }
+            }
+    )
+    if ($versioned.Count -gt 0) {
+        return $versioned[0]
+    }
+    $legacy = Join-Path $kitsRedist (Join-Path 'ucrt\DLLs' $Arch)
+    if (Test-Path -LiteralPath (Join-Path $legacy 'ucrtbase.dll') -PathType Leaf) {
+        return $legacy
+    }
+    throw "Universal CRT $Arch DLLs were not found under $kitsRedist"
+}
+
+function Copy-SideBySideRuntimeDlls {
+    param(
+        [string]$SourceDirectory,
+        [string]$StagingDirectory,
+        [string]$Label,
+        [int]$ExpectedMachine
+    )
+    $dlls = @(Get-ChildItem -LiteralPath $SourceDirectory -File -Filter '*.dll')
+    if ($dlls.Count -eq 0) {
+        throw "$Label contains no DLLs: $SourceDirectory"
+    }
+    foreach ($required in @('vcruntime140.dll', 'msvcp140.dll', 'ucrtbase.dll')) {
+        if ($Label -like 'VC++ CRT*' -and $required -eq 'ucrtbase.dll') {
+            continue
+        }
+        if ($Label -like 'Universal CRT*' -and $required -ne 'ucrtbase.dll') {
+            continue
+        }
+        $present = @($dlls | Where-Object {
+            $_.Name.Equals($required, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($present.Count -eq 0) {
+            throw "$Label is missing $required in $SourceDirectory"
+        }
+    }
+    # vcruntime140_1.dll exists for x64 (VS 2019 16.8+). x86 CRT folders
+    # keep exception helpers inside vcruntime140.dll and omit this file.
+    if ($Label -like 'VC++ CRT*' -and $ExpectedMachine -eq 0x8664) {
+        $hasEhDll = @($dlls | Where-Object {
+            $_.Name.Equals('vcruntime140_1.dll', [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($hasEhDll.Count -eq 0) {
+            throw "$Label is missing vcruntime140_1.dll in $SourceDirectory"
+        }
+    }
+    foreach ($dll in $dlls) {
+        if ((Get-PeMachine $dll.FullName) -ne $ExpectedMachine) {
+            throw "$Label DLL architecture mismatch: $($dll.FullName)"
+        }
+        foreach ($side in @('app', 'tools')) {
+            Copy-Item -LiteralPath $dll.FullName -Destination `
+                (Join-Path $StagingDirectory (Join-Path $side $dll.Name))
+        }
+    }
+}
+
 function Assert-Oem866Table([byte[]]$Bytes) {
     $splitAt = -1
     for ($i = 0; $i -lt ($Bytes.Length - 1); $i++) {
@@ -609,6 +723,23 @@ try {
         -Destination (Join-Path $stagingDirectory ("app\" + $opensslFileName))
     Copy-Item -LiteralPath $opensslDll `
         -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
+    # App-local VC++ CRT (and UCRT on x86/Win7) next to each EXE. Windows loads
+    # these from the EXE directory first, so Local-Machine-Install can still
+    # start SearchEngineConfig/TokenIssuer when vc_redist.exe cannot run.
+    $crtDirectory = Get-VCRuntimeCrtDirectory $VCRedistPath $vcRedistArch $expectedToolset
+    Copy-SideBySideRuntimeDlls `
+        -SourceDirectory $crtDirectory `
+        -StagingDirectory $stagingDirectory `
+        -Label "VC++ CRT $expectedToolset $vcRedistArch" `
+        -ExpectedMachine $expectedMachine
+    if ($vcRedistArch -eq 'x86') {
+        $ucrtDirectory = Get-UcrtDirectory $vcRedistArch
+        Copy-SideBySideRuntimeDlls `
+            -SourceDirectory $ucrtDirectory `
+            -StagingDirectory $stagingDirectory `
+            -Label "Universal CRT $vcRedistArch" `
+            -ExpectedMachine $expectedMachine
+    }
     Copy-Item -LiteralPath $registerAuthScriptPath `
         -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
     Copy-Item -LiteralPath $IgnorePath `

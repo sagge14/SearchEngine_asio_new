@@ -285,20 +285,26 @@ SCM `RUNNING`.
 Он не читает stdin, не вызывает `choice`, `set /p` или `pause` и сам выполняет
 весь сценарий:
 
-1. Берёт текущий системный год и задаёт instance id равным этому году. Поэтому
+1. Проверяет права администратора и Microsoft Visual C++ Runtime. Если
+   системных `vcruntime140.dll` / `msvcp140.dll` / `vcruntime140_1.dll` нет,
+   тихо ставит комплектный `vc_redist`. Если этот установщик на старой
+   Windows не запускается, helper и служба используют DLL из комплекта рядом
+   с EXE, и локальный operator-токен всё равно выпускается. `/LocalMachine`
+   сам `/SkipVcRedist` не подставляет.
+2. Берёт текущий системный год и задаёт instance id равным этому году. Поэтому
    имя службы всегда имеет вид `SearchEngineService-YYYY`.
-2. Выбирает первый свободный TCP-порт, начиная с годового порта шаблона,
+3. Выбирает первый свободный TCP-порт, начиная с годового порта шаблона,
    рассчитывает рекомендуемые потоки и создаёт fresh `Settings.json` с SQLite,
    отключённым PRM short-content update и `scan_on_startup=false`.
-3. Выпускает привязанный к SMBIOS computer-токен
+4. Выпускает привязанный к SMBIOS computer-токен
    `client_id=local-machine`, `client_name=operator` в
    `%LOCALAPPDATA%\SearchEngine\searchclient-auth-token.json`, экспортирует
    `issuer-public.pem` и регистрирует токен enabled в `auth_clients.sqlite`.
-4. Запускает официальный одноразовый режим
+5. Запускает официальный одноразовый режим
    `SearchEngine.exe --initial-update --data-dir <data-dir>`. Этот режим не
    поднимает TCP listener, watcher или scheduler, синхронно вызывает production
    update pipeline и возвращается только после сохранения индекса.
-5. Запускает службу и проверяет `RUNNING` + PING/PONG.
+6. Запускает службу и проверяет `RUNNING` + PING/PONG.
 
 Пароль machine-wide keystore `%ProgramData%\SearchClientTokenIssuer\keys` в
 этом упрощённом сценарии фиксирован как `12345678` и передаётся issuer через

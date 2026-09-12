@@ -9,6 +9,7 @@ set "SKIP_VC_REDIST=0"
 set "INSTANCE_FROM_ARGS=0"
 set "LOCAL_MACHINE_INSTALL=0"
 set "LOCAL_INITIAL_UPDATE_EXIT=0"
+set "CRT_READY=0"
 set "UI_LANGUAGE=auto"
 set "BAD_ARG="
 
@@ -66,6 +67,15 @@ if "%VALIDATE_ONLY%"=="1" (
     set "UI_LANGUAGE=en"
     goto :INSTANCE_READY
 )
+
+REM Runtime must be present before SearchEngineConfig.exe. Probe files first so
+REM a missing CRT does not show a Windows DLL dialog. /LocalMachine never skips
+REM this step; only an explicit /SkipVcRedist flag does.
+fsutil.exe dirty query %SystemDrive% >nul 2>&1
+if errorlevel 1 goto :NOT_ADMIN
+call :ENSURE_VC_RUNTIME
+if errorlevel 1 goto :FAILED
+
 if "%LOCAL_MACHINE_INSTALL%"=="1" goto :LOCAL_MACHINE_INSTANCE
 if "%INSTANCE_FROM_ARGS%"=="1" goto :SELECT_LANGUAGE_ONLY
 "%HELPER%" choose-instance --default "%SERVICE_INSTANCE%" --output "%INSTANCE_TEMP%"
@@ -81,7 +91,6 @@ goto :INSTANCE_READY
 :LOCAL_MACHINE_INSTANCE
 if "%INSTANCE_FROM_ARGS%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
 set "UI_LANGUAGE=ru"
-set "SKIP_VC_REDIST=1"
 "%HELPER%" system-info > "%INSTANCE_TEMP%"
 if errorlevel 1 goto :HELPER_FAILED
 for /f "usebackq tokens=1,* delims==" %%A in ("%INSTANCE_TEMP%") do set "LOCAL_%%A=%%B"
@@ -247,47 +256,6 @@ if "%PRM_AUTODETECT%"=="1" call :UI install.config_prm_on
 if "%PRM_AUTODETECT%"=="0" call :UI install.config_prm_off
 call :UI install.config_catalog "%DOCUMENT_CATALOG_STORAGE%"
 
-call :UI install.step_runtime
-if "%SKIP_VC_REDIST%"=="1" goto :REDIST_SKIP_FLAG
-set "CRT_PROBE_OK=0"
-call :PROBE_VC_RUNTIME
-if not errorlevel 1 set "CRT_PROBE_OK=1"
-if "%CRT_PROBE_OK%"=="1" goto :REDIST_ASK_WHEN_PRESENT
-call :UI install.runtime_missing "%TARGET_ARCH%"
-call :CHOICE 12
-if errorlevel 2 goto :REDIST_SKIP_CHOICE
-goto :REDIST_INSTALL
-
-:REDIST_ASK_WHEN_PRESENT
-call :UI install.runtime_present
-call :CHOICE 12
-if errorlevel 2 goto :REDIST_INSTALL
-goto :REDIST_SKIP_CHOICE
-
-:REDIST_INSTALL
-call :UI install.runtime_installing
-start "" /wait "%VC_REDIST%" /install /quiet /norestart
-set "REDIST_EXIT=%ERRORLEVEL%"
-if "%REDIST_EXIT%"=="0" goto :REDIST_OK
-if "%REDIST_EXIT%"=="1638" goto :REDIST_OK
-if "%REDIST_EXIT%"=="3010" goto :REDIST_RESTART
-call :UI install.runtime_failed "%REDIST_EXIT%"
-call :CHOICE 12
-if errorlevel 2 goto :FAILED
-goto :REDIST_OK
-
-:REDIST_SKIP_FLAG
-call :UI install.runtime_skip_flag
-goto :REDIST_OK
-
-:REDIST_SKIP_CHOICE
-call :UI install.runtime_skip_choice
-goto :REDIST_OK
-
-:REDIST_RESTART
-call :UI install.runtime_restart
-
-:REDIST_OK
 if "%REINSTALL%"=="0" goto :CHECK_NEW_PORT
 call :UI install.step_stop
 call :STOP_SERVICE
@@ -504,29 +472,89 @@ call :CHOICE 12
 if errorlevel 2 exit /b 1
 exit /b 0
 
-:PROBE_VC_RUNTIME
-REM Prefer loading the packaged helper: same /MD CRT as SearchEngine.exe.
-REM File probes alone are unreliable under 32-bit cmd (System32 -> SysWOW64).
-"%HELPER%" system-info >nul 2>&1
-if not errorlevel 1 exit /b 0
+:ENSURE_VC_RUNTIME
+echo([1/8] Ensuring Microsoft Visual C++ Runtime...
+if "%SKIP_VC_REDIST%"=="1" goto :ENSURE_VC_SKIP_FLAG
+call :PROBE_SYSTEM_VC_FILES
+if errorlevel 1 goto :ENSURE_VC_INSTALL
+call :PROBE_VC_RUNTIME
+if not errorlevel 1 goto :ENSURE_VC_PRESENT
+goto :ENSURE_VC_INSTALL
 
-if /I "%TARGET_ARCH%"=="x64" goto :PROBE_VC_X64
-REM x86 and x86-modern: 32-bit CRT lives in SysWOW64 on 64-bit Windows.
+:ENSURE_VC_PRESENT
+echo(Visual C++ Runtime files were found on this computer.
+set "CRT_READY=1"
+exit /b 0
+
+:ENSURE_VC_SKIP_FLAG
+call :PROBE_VC_RUNTIME
+if errorlevel 1 goto :ENSURE_VC_SKIP_MISSING
+echo(Skipping Visual C++ Runtime setup because /SkipVcRedist was specified.
+set "CRT_READY=1"
+exit /b 0
+
+:ENSURE_VC_SKIP_MISSING
+echo(ERROR: /SkipVcRedist was specified, but Visual C++ Runtime was not detected.
+echo(Install the packaged redistributable or rerun without /SkipVcRedist.
+exit /b 1
+
+:ENSURE_VC_INSTALL
+echo(Visual C++ Runtime files were not detected in the Windows system directory.
+echo(Installing Microsoft Visual C++ Runtime...
+start "" /wait "%VC_REDIST%" /install /quiet /norestart
+set "REDIST_EXIT=%ERRORLEVEL%"
+goto :ENSURE_VC_AFTER_INSTALL
+
+:ENSURE_VC_AFTER_INSTALL
+call :PROBE_VC_RUNTIME
+if not errorlevel 1 goto :ENSURE_VC_INSTALLED_OK
+if "%REDIST_EXIT%"=="3010" goto :ENSURE_VC_REBOOT_REQUIRED
+echo(ERROR: Visual C++ Runtime files are still missing after setup.
+echo(SearchEngineConfig.exe cannot start. Install Windows 7 SP1, KB2999226 and
+echo(KB3033929, then rerun this installer.
+exit /b 1
+
+:ENSURE_VC_INSTALLED_OK
+set "CRT_READY=1"
+if "%REDIST_EXIT%"=="0" exit /b 0
+if "%REDIST_EXIT%"=="1638" exit /b 0
+if "%REDIST_EXIT%"=="3010" echo(WARNING: A Windows restart is recommended. Continuing with the packaged runtime files beside the program.
+if not "%REDIST_EXIT%"=="3010" echo(WARNING: Visual C++ Runtime setup failed with exit code %REDIST_EXIT%. Continuing with the packaged runtime files beside the program.
+exit /b 0
+
+:ENSURE_VC_REBOOT_REQUIRED
+echo(ERROR: Visual C++ Runtime requires a Windows restart before SearchEngineConfig.exe can start.
+echo(Restart the computer and run this installer again.
+exit /b 1
+
+:PROBE_SYSTEM_VC_FILES
+if /I "%TARGET_ARCH%"=="x64" goto :PROBE_SYSTEM_VC_X64
 set "CRT_DIR=%SystemRoot%\System32"
 if not "%ProgramFiles(x86)%"=="" set "CRT_DIR=%SystemRoot%\SysWOW64"
-goto :PROBE_VC_CHECK
+goto :PROBE_SYSTEM_VC_CHECK
 
-:PROBE_VC_X64
-REM Real 64-bit System32. Sysnative is required when this BAT runs in WOW64
-REM (for example from 32-bit Far Manager); native 64-bit cmd has no Sysnative.
+:PROBE_SYSTEM_VC_X64
 set "CRT_DIR=%SystemRoot%\System32"
 if exist "%SystemRoot%\Sysnative\" set "CRT_DIR=%SystemRoot%\Sysnative"
-goto :PROBE_VC_CHECK
 
-:PROBE_VC_CHECK
+:PROBE_SYSTEM_VC_CHECK
 if not exist "%CRT_DIR%\vcruntime140.dll" exit /b 1
 if not exist "%CRT_DIR%\msvcp140.dll" exit /b 1
 if not exist "%CRT_DIR%\vcruntime140_1.dll" exit /b 1
+exit /b 0
+
+:PROBE_VC_RUNTIME
+REM Prefer CRT DLLs beside the helper so a failed vc_redist.exe still lets
+REM Local-Machine-Install start. Do not launch the helper until those files
+REM exist somewhere, or Windows shows a blocking missing-DLL dialog.
+for %%I in ("%HELPER%") do set "HELPER_DIR=%%~dpI"
+if exist "%HELPER_DIR%vcruntime140.dll" if exist "%HELPER_DIR%msvcp140.dll" if exist "%HELPER_DIR%vcruntime140_1.dll" goto :PROBE_VC_HELPER_LOAD
+call :PROBE_SYSTEM_VC_FILES
+if errorlevel 1 exit /b 1
+
+:PROBE_VC_HELPER_LOAD
+"%HELPER%" system-info >nul 2>&1
+if errorlevel 1 exit /b 1
 exit /b 0
 
 :STOP_SERVICE
@@ -885,19 +913,28 @@ call :UI install.local_leftovers "%INSTALL_ROOT%" "%DATA_DIR%"
 goto :FAILED
 
 :NOT_ADMIN
+if "%CRT_READY%"=="1" goto :NOT_ADMIN_UI
+echo ERROR: Run this installer as Administrator.
+goto :FAILED
+:NOT_ADMIN_UI
 call :UI install.not_admin
 goto :FAILED
 :PACKAGE_MISSING
 if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
-if exist "%HELPER%" (
-    call :UI install.package_missing
-) else (
-    echo ERROR: The portable package is incomplete. Copy the entire folder again.
-)
+if not "%CRT_READY%"=="1" goto :PACKAGE_MISSING_ASCII
+if not exist "%HELPER%" goto :PACKAGE_MISSING_ASCII
+call :UI install.package_missing
+goto :FAILED
+:PACKAGE_MISSING_ASCII
+echo ERROR: The portable package is incomplete. Copy the entire folder again.
 goto :FAILED
 :PACKAGE_DAMAGED
 if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
+if not "%CRT_READY%"=="1" goto :PACKAGE_DAMAGED_ASCII
 call :UI install.package_damaged
+goto :FAILED
+:PACKAGE_DAMAGED_ASCII
+echo ERROR: Package verification failed. Copy the entire folder again.
 goto :FAILED
 :HELPER_FAILED
 if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
@@ -921,14 +958,15 @@ del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
-if exist "%HELPER%" (
-    call :UI install.failed
-    call :PAUSE_UI
-) else (
-    echo.
-    echo Installation failed. Read the error above.
-    if not "%LOCAL_MACHINE_INSTALL%"=="1" pause
-)
+if not "%CRT_READY%"=="1" goto :FAILED_ASCII
+if not exist "%HELPER%" goto :FAILED_ASCII
+call :UI install.failed
+call :PAUSE_UI
+exit /b 1
+:FAILED_ASCII
+echo.
+echo Installation failed. Read the error above.
+if not "%LOCAL_MACHINE_INSTALL%"=="1" pause
 exit /b 1
 :CANCELLED
 del /Q "%INSTANCE_TEMP%" >nul 2>&1
