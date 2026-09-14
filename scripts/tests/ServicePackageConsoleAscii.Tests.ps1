@@ -756,6 +756,9 @@ Assert-True ($ensureSlice.Contains(
 Assert-True ($installText.Contains('set "HELPER_DIR=%%~dpI"')) (
     '9e. CRT probe prefers DLLs beside SearchEngineConfig.exe'
 )
+Assert-True ($installText.Contains(
+    'if /I "%TARGET_ARCH%"=="x64" if not exist "%HELPER_DIR%vcruntime140_1.dll"'
+)) '9e. vcruntime140_1.dll is probed beside the helper only for x64'
 $probeDllPos = $installText.IndexOf('vcruntime140.dll', $probeBlockStart)
 $probeHelperPos = $installText.IndexOf(
     '"%HELPER%" system-info >nul 2>&1',

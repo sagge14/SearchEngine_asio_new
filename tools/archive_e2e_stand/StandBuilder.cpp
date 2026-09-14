@@ -295,6 +295,26 @@ void copyDirectoryTree(const fs::path& source, const fs::path& destination)
     }
 }
 
+void copyRuntimeDlls(const fs::path& source, const fs::path& destination)
+{
+    if (!fs::is_directory(source))
+        return;
+    fs::create_directories(destination);
+    for (fs::directory_iterator it(source), end; it != end; ++it) {
+        if (!it->is_regular_file())
+            continue;
+        std::wstring extension = it->path().extension().wstring();
+        for (wchar_t& ch : extension)
+            ch = static_cast<wchar_t>(towlower(ch));
+        if (extension != L".dll")
+            continue;
+        fs::copy_file(
+            it->path(),
+            destination / it->path().filename(),
+            fs::copy_options::overwrite_existing);
+    }
+}
+
 std::uint32_t crc32(const std::vector<std::uint8_t>& bytes)
 {
     std::uint32_t crc = 0xffffffffU;
@@ -1218,10 +1238,11 @@ void writeWorkstationDeploymentScript(
         << "setlocal EnableExtensions DisableDelayedExpansion\r\n"
         << "for %%I in (\"%~dp0.\") do set \"STAND_ROOT=%%~fI\"\r\n"
         << "set \"PREPARER=%STAND_ROOT%\\tools\\SearchEngineArchiveE2EStand.exe\"\r\n"
+        << "set \"HELPER=%STAND_ROOT%\\installer\\tools\\SearchEngineConfig.exe\"\r\n"
         << "set \"REDIST=%STAND_ROOT%\\installer\\prerequisites\\vc_redist.x86.exe\"\r\n"
         << "if not exist \"%PREPARER%\" goto :package_missing\r\n"
+        << "if not exist \"%HELPER%\" goto :package_missing\r\n"
         << "if not exist \"%REDIST%\" goto :package_missing\r\n"
-        << "if not exist \"%STAND_ROOT%\\installer\\tools\\SearchEngineConfig.exe\" goto :package_missing\r\n"
         << "if not exist \"%STAND_ROOT%\\installer\\Verify-Package.bat\" goto :package_missing\r\n"
         << "call \"%STAND_ROOT%\\installer\\Verify-Package.bat\" /quiet\r\n"
         << "if errorlevel 1 goto :package_damaged\r\n"
@@ -1229,6 +1250,49 @@ void writeWorkstationDeploymentScript(
         << "if errorlevel 1 goto :not_admin\r\n"
         << "sc.exe query \"" << service << "\" >nul 2>&1\r\n"
         << "if not errorlevel 1 goto :service_exists\r\n"
+        << "echo(Ensuring Microsoft Visual C++ Runtime...\r\n"
+        << "set \"CRT_DIR=%SystemRoot%\\System32\"\r\n"
+        << "if not \"%ProgramFiles(x86)%\"==\"\" "
+           "set \"CRT_DIR=%SystemRoot%\\SysWOW64\"\r\n"
+        << "if exist \"%CRT_DIR%\\vcruntime140.dll\" "
+           "if exist \"%CRT_DIR%\\msvcp140.dll\" goto :crt_system\r\n"
+        << "goto :crt_install\r\n"
+        << ":crt_system\r\n"
+        << "echo(Visual C++ Runtime files were found on this computer.\r\n"
+        << "goto :ask_drive\r\n"
+        << ":crt_install\r\n"
+        << "echo(Visual C++ Runtime files were not detected in the Windows "
+           "system directory.\r\n"
+        << "echo(Installing Microsoft Visual C++ Runtime...\r\n"
+        << "start \"\" /wait \"%REDIST%\" /install /quiet /norestart\r\n"
+        << "set \"REDIST_EXIT=%ERRORLEVEL%\"\r\n"
+        << "if exist \"%STAND_ROOT%\\installer\\tools\\vcruntime140.dll\" "
+           "if exist \"%STAND_ROOT%\\installer\\tools\\msvcp140.dll\" "
+           "goto :crt_after_ok\r\n"
+        << "if exist \"%STAND_ROOT%\\server\\program\\vcruntime140.dll\" "
+           "if exist \"%STAND_ROOT%\\server\\program\\msvcp140.dll\" "
+           "goto :crt_after_ok\r\n"
+        << "if exist \"%STAND_ROOT%\\tools\\vcruntime140.dll\" "
+           "if exist \"%STAND_ROOT%\\tools\\msvcp140.dll\" "
+           "goto :crt_after_ok\r\n"
+        << "if \"%REDIST_EXIT%\"==\"0\" goto :ask_drive\r\n"
+        << "if \"%REDIST_EXIT%\"==\"1638\" goto :ask_drive\r\n"
+        << "if \"%REDIST_EXIT%\"==\"3010\" goto :crt_reboot\r\n"
+        << "echo(ERROR: Visual C++ Runtime setup failed: %REDIST_EXIT%\r\n"
+        << "echo(SearchEngineConfig.exe cannot start. Install Windows 7 SP1, "
+           "KB2999226 and KB3033929, then rerun this script.\r\n"
+        << "goto :failed\r\n"
+        << ":crt_after_ok\r\n"
+        << "if \"%REDIST_EXIT%\"==\"0\" goto :ask_drive\r\n"
+        << "if \"%REDIST_EXIT%\"==\"1638\" goto :ask_drive\r\n"
+        << "echo(Warning: Visual C++ Runtime setup returned %REDIST_EXIT%. "
+           "Continuing with packaged DLL files beside the program.\r\n"
+        << "goto :ask_drive\r\n"
+        << ":crt_reboot\r\n"
+        << "echo(ERROR: Visual C++ Runtime setup requires a reboot before "
+           "the stand helper can start.\r\n"
+        << "goto :failed\r\n"
+        << ":ask_drive\r\n"
         << "set \"DATA_DRIVE=\"\r\n"
         << "set /P \"DATA_DRIVE=Data volume letter (example D:): \"\r\n"
         << "if \"%DATA_DRIVE:~1,1%\"==\"\" set \"DATA_DRIVE=%DATA_DRIVE%:\"\r\n"
@@ -1239,15 +1303,6 @@ void writeWorkstationDeploymentScript(
         << "if not \"%ProgramFiles(x86)%\"==\"\" set \"PROGRAM_ROOT=%ProgramFiles(x86)%\"\r\n"
         << "set \"INSTALL_ROOT=%PROGRAM_ROOT%\\" << service << "\"\r\n"
         << "set \"DATA_ROOT=%ProgramData%\\" << service << "\"\r\n"
-        << "echo Installing or updating Microsoft Visual C++ Runtime...\r\n"
-        << "start \"\" /wait \"%REDIST%\" /install /quiet /norestart\r\n"
-        << "set \"REDIST_EXIT=%ERRORLEVEL%\"\r\n"
-        << "if \"%REDIST_EXIT%\"==\"0\" goto :redist_ok\r\n"
-        << "if \"%REDIST_EXIT%\"==\"1638\" goto :redist_ok\r\n"
-        << "if \"%REDIST_EXIT%\"==\"3010\" goto :redist_ok\r\n"
-        << "echo ERROR: Visual C++ Runtime setup failed: %REDIST_EXIT%\r\n"
-        << "goto :failed\r\n"
-        << ":redist_ok\r\n"
         << "\"%PREPARER%\" deploy-workstation-stand --root \"%STAND_ROOT%\" --data-volume-root \"%DATA_DRIVE%\\.\" --program-files-root \"%PROGRAM_ROOT%\" --program-data-root \"%ProgramData%\"\r\n"
         << "if errorlevel 1 goto :failed\r\n"
         << "> \"%DATA_ROOT%\\client-endpoint.txt\" echo server_id=default\r\n"
@@ -1311,7 +1366,11 @@ void writeWorkstationReadme(
          << "========================================\r\n\r\n"
          << "Существующий Activate-Archived-Stand.bat не изменён.\r\n"
          << "Для раскладки как на рабочей машине запустите от администратора\r\n"
-         << "Deploy-Workstation-Stand.bat и укажите букву отдельного тома.\r\n\r\n"
+         << "Deploy-Workstation-Stand.bat и укажите букву отдельного тома.\r\n"
+         << "Скрипт сначала ищет VC++ Runtime рядом с программой и только при\r\n"
+         << "его отсутствии ставит комплектный vc_redist. Если системный\r\n"
+         << "установщик на старой Windows не запускается, используются DLL\r\n"
+         << "из комплекта, и локальная раскладка продолжается.\r\n\r\n"
          << "Служба: " << encoding::wstring_to_utf8(serviceName) << "\r\n"
          << "Программа: %ProgramFiles(x86)%\\<служба>\\bin и tools\r\n"
          << "Настройки: %ProgramData%\\<служба>\r\n"
@@ -2744,6 +2803,7 @@ StandSummary generateServiceArchiveStand(
             options.preparerTemplate,
             staging / L"tools" / L"SearchEngineArchiveE2EStand.exe",
             fs::copy_options::none);
+        copyRuntimeDlls(options.programTemplate, staging / L"tools");
         if (!options.installerTemplate.empty()) {
             copyDirectoryTree(
                 options.installerTemplate,

@@ -540,7 +540,8 @@ if exist "%SystemRoot%\Sysnative\" set "CRT_DIR=%SystemRoot%\Sysnative"
 :PROBE_SYSTEM_VC_CHECK
 if not exist "%CRT_DIR%\vcruntime140.dll" exit /b 1
 if not exist "%CRT_DIR%\msvcp140.dll" exit /b 1
-if not exist "%CRT_DIR%\vcruntime140_1.dll" exit /b 1
+REM vcruntime140_1.dll exists only in x64 CRT folders.
+if /I "%TARGET_ARCH%"=="x64" if not exist "%CRT_DIR%\vcruntime140_1.dll" exit /b 1
 exit /b 0
 
 :PROBE_VC_RUNTIME
@@ -548,7 +549,12 @@ REM Prefer CRT DLLs beside the helper so a failed vc_redist.exe still lets
 REM Local-Machine-Install start. Do not launch the helper until those files
 REM exist somewhere, or Windows shows a blocking missing-DLL dialog.
 for %%I in ("%HELPER%") do set "HELPER_DIR=%%~dpI"
-if exist "%HELPER_DIR%vcruntime140.dll" if exist "%HELPER_DIR%msvcp140.dll" if exist "%HELPER_DIR%vcruntime140_1.dll" goto :PROBE_VC_HELPER_LOAD
+if not exist "%HELPER_DIR%vcruntime140.dll" goto :PROBE_VC_SYSTEM
+if not exist "%HELPER_DIR%msvcp140.dll" goto :PROBE_VC_SYSTEM
+if /I "%TARGET_ARCH%"=="x64" if not exist "%HELPER_DIR%vcruntime140_1.dll" goto :PROBE_VC_SYSTEM
+goto :PROBE_VC_HELPER_LOAD
+
+:PROBE_VC_SYSTEM
 call :PROBE_SYSTEM_VC_FILES
 if errorlevel 1 exit /b 1
 

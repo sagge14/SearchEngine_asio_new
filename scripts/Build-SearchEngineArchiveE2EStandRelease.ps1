@@ -267,7 +267,7 @@ function Find-LatestServicePackage([string[]]$SearchRoots) {
                 $packages.Add([pscustomobject]@{
                     Directory = $packageDirectory
                     Version = $version
-                    ArchitectureRank = if ($architecture -eq 'x86-modern') {
+                    ArchitectureRank = if ($architecture -eq 'x86') {
                         1
                     } else {
                         0

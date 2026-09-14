@@ -632,6 +632,8 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
         options.programTemplate / L"SearchEngine.exe",
         "synthetic executable");
     writeFile(options.programTemplate / L"runtime.dll", "synthetic runtime");
+    writeFile(options.programTemplate / L"vcruntime140.dll", "synthetic crt");
+    writeFile(options.programTemplate / L"msvcp140.dll", "synthetic crt");
     options.preparerTemplate = temporary.path() / L"preparer-template.exe";
     writeFile(options.preparerTemplate, "synthetic portable preparer");
     options.installerTemplate = temporary.path() / L"portable-package";
@@ -657,6 +659,10 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
     ASSERT_TRUE(fs::is_regular_file(
         options.stand.root / L"installer" /
             L"Install-SearchEngineService.bat"));
+    ASSERT_TRUE(fs::is_regular_file(
+        options.stand.root / L"tools" / L"vcruntime140.dll"));
+    ASSERT_TRUE(fs::is_regular_file(
+        options.stand.root / L"tools" / L"msvcp140.dll"));
     const std::string deployScript = readTextFile(
         options.stand.root / L"Deploy-Workstation-Stand.bat");
     EXPECT_NE(
@@ -664,6 +670,15 @@ TEST(ArchiveE2EStand, DeploysWorkstationLayoutUnderDisposableRoots)
         std::string::npos);
     EXPECT_NE(
         deployScript.find("deploy-workstation-stand"),
+        std::string::npos);
+    EXPECT_NE(
+        deployScript.find("Ensuring Microsoft Visual C++ Runtime"),
+        std::string::npos);
+    EXPECT_NE(
+        deployScript.find("Continuing with packaged DLL files beside the program"),
+        std::string::npos);
+    EXPECT_EQ(
+        deployScript.find("if \"%REDIST_EXIT%\"==\"3010\" goto :redist_ok"),
         std::string::npos);
     EXPECT_NE(
         deployScript.find("--data-volume-root \"%DATA_DRIVE%\\.\""),

@@ -158,6 +158,9 @@ Assert-True ($releaseText -match (
     'Sort-Object[\s\S]*?Version[\s\S]*?Descending\s*=\s*\$true'
 )) 'release discovers the highest built service package version'
 Assert-True ($releaseText -match (
+    'ArchitectureRank\s*=\s*if \(\$architecture -eq ''x86''\)'
+)) 'same-version stand release prefers the Windows 7 x86 package over x86-modern'
+Assert-True ($releaseText -match (
     'IsNullOrWhiteSpace\(\$ServicePackageDirectory\)[\s\S]*?' +
     '\$ServicePackageDirectory\s*=\s*\$latestServicePackage\.Directory'
 )) 'release selects the latest installer when no package path is supplied'
