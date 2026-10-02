@@ -342,6 +342,7 @@ $cloudZipName = Get-SearchEngineCloudZipName `
 $cloudHelper = & (Join-Path $PSScriptRoot 'Find-WorkspaceReleaseRoot.ps1') `
     -Name 'Publish-ReleasePackageIfConfigured.ps1' -StartPath $projectRoot `
     -Optional
+$cloudResult = $null
 if ($null -ne $cloudHelper) {
     $cloudArgs = @{
         PackageDirectory = $OutputDirectory
@@ -354,8 +355,21 @@ if ($null -ne $cloudHelper) {
     if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
         $cloudArgs.CloudRoot = $CloudRoot
     }
-    & $cloudHelper @cloudArgs | Out-Null
+    $cloudResult = & $cloudHelper @cloudArgs
 }
 else {
     Write-Host 'Cloud publish helper not found; local package only.'
+}
+
+[pscustomobject]@{
+    Product = $productName
+    Architecture = $Architecture
+    Version = $versionInfo.Version
+    FileVersion = $versionInfo.FileVersion
+    PackageDirectory = $OutputDirectory
+    PackagedExe = Join-Path $OutputDirectory 'app\BackupRestore.exe'
+    CloudPublished = ($null -ne $cloudResult -and -not [string]::IsNullOrWhiteSpace($cloudResult.ZipPath))
+    ZipPath = if ($null -ne $cloudResult) { $cloudResult.ZipPath } else { $null }
+    Sha256Path = if ($null -ne $cloudResult) { $cloudResult.Sha256Path } else { $null }
+    Sha256 = if ($null -ne $cloudResult) { $cloudResult.Sha256 } else { $null }
 }
