@@ -29,6 +29,7 @@ endif()
 
 project(SearchEngine LANGUAGES C CXX)
 
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/BuildParallelism.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Win32VersionInfo.cmake")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -109,6 +110,7 @@ function(searchengine_configure_target target_name)
                 ${target_name}
                 PRIVATE
                 /utf-8
+                /FS
                 $<$<CONFIG:Debug>:/Od>
                 $<$<CONFIG:Debug>:/Ob0>
                 $<$<CONFIG:RelWithDebInfo>:/Zo>
@@ -131,6 +133,7 @@ function(searchengine_configure_target target_name)
     set_target_properties(
             ${target_name}
             PROPERTIES
+            COMPILE_PDB_NAME "${target_name}_compile"
             COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols/$<CONFIG>"
             PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols/$<CONFIG>"
     )
@@ -711,11 +714,9 @@ if(BUILD_SEARCHENGINE)
         target_link_libraries(SearchEngine PRIVATE ws2_32 advapi32)
     endif()
     searchengine_configure_target(SearchEngine)
-    target_compile_options(
-            SearchEngine
-            PRIVATE
-            $<$<CXX_COMPILER_ID:MSVC>:/MP>
-    )
+    if(MSVC AND NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+        target_compile_options(SearchEngine PRIVATE /MP)
+    endif()
     searchengine_target_win32_versioninfo(
             SearchEngine
             PRODUCT_NAME "SearchEngineService"

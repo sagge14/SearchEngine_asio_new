@@ -93,32 +93,43 @@
   ],
   "buildPresets": [
     {
+      "name": "windows-parallel",
+      "hidden": true,
+      "nativeToolOptions": ["/m"]
+    },
+    {
       "name": "windows-x64-debug",
+      "inherits": "windows-parallel",
       "configurePreset": "windows-x64",
       "configuration": "Debug"
     },
     {
       "name": "windows-x64-release",
+      "inherits": "windows-parallel",
       "configurePreset": "windows-x64",
       "configuration": "Release"
     },
     {
       "name": "windows-x86-debug",
+      "inherits": "windows-parallel",
       "configurePreset": "windows-x86",
       "configuration": "Debug"
     },
     {
       "name": "windows-x86-release",
+      "inherits": "windows-parallel",
       "configurePreset": "windows-x86",
       "configuration": "Release"
     },
     {
       "name": "windows7-x86-release",
+      "inherits": "windows-parallel",
       "configurePreset": "windows7-x86",
       "configuration": "Release"
     },
     {
       "name": "windows7-x86-archive-e2e-stand-release",
+      "inherits": "windows-parallel",
       "configurePreset": "windows7-x86-archive-e2e-stand",
       "configuration": "Release"
     }

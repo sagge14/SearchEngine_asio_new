@@ -79,6 +79,22 @@ cmake --build --preset windows-x64-debug
 Не используйте один build-каталог для разных архитектур или генераторов.
 Presets размещают их раздельно в `out/build/`.
 
+### Параллельная компиляция
+
+Windows build presets включают MSBuild `/m`. Для всех CMake-целей Visual
+Studio используется MultiToolTask с общим лимитом процессов компилятора:
+`max(1, floor(0.9 × N))`, где `N` — число доступных процессоров при configure.
+Например, для 32 логических потоков лимит равен 28. Лимит пересчитывается
+при configure; `/m` не умножает его на число одновременно собираемых проектов.
+
+Для ручного ограничения укажите `-DSEARCHENGINE_BUILD_JOBS=12` при configure.
+Значение `0` возвращает автоматический расчёт. Изменение затрагивает все
+Windows presets, включая VS 2019 для Win7 x86. Каждый target получает свой
+компиляторный PDB `<target>_compile.pdb`; записи внутри него синхронизируются
+через `/FS`.
+
+Механизм общего лимита описан в [документации Microsoft](https://devblogs.microsoft.com/cppblog/improved-parallelism-in-msbuild/).
+
 ## App-версия и release-пакеты
 
 Канон версии продукта — `app-version.json` (SearchEngineService) и
