@@ -257,14 +257,14 @@ int main(int argc, char** argv) {
             watchDirs.push_back(encoding::wstring_to_utf8(d.wstring()));
         }
 
-        std::vector<std::string> ext = {"zag"};
+        const file_extension_contract::Selection fileTypes{{"zag"}, false};
 
         // Runtime threads for watcher + periodic flush.
         // 0 => auto size based on CPU.
         ContextRuntime runtime(0);
         runtime.start();
 
-        FileEventDispatcher dispatcher(watchDirs, ext, {}, runtime.scheduler());
+        FileEventDispatcher dispatcher(watchDirs, fileTypes, {}, runtime.scheduler());
 
         dispatcher.registerCommand(
             FileEvent::Added,

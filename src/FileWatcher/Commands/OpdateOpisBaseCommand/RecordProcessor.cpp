@@ -173,7 +173,8 @@ void RecordProcessor::run() const {
 
         std::string sql_query;
         try {
-            sql_query = std::vformat(upsert_sql, std::make_format_args(getDstTable(), values));
+            const std::string dstTable = getDstTable();
+            sql_query = std::vformat(upsert_sql, std::make_format_args(dstTable, values));
         //    std::cerr << "[run] SQL: " << sql_query << std::endl;
         } catch (const std::exception& ex) {
             LogFile::getRecord().write(std::string("[run] SQL format error for #") + std::to_string(num_) + " : " + ex.what());

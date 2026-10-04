@@ -1120,6 +1120,8 @@ if(BUILD_ZAGEDITOR)
             src/FileWatcher/FileEventDispatcher.cpp
             src/scheduler/AbstractScheduledTask.cpp
             src/ContextRuntime/ContextRuntime.cpp
+            src/MyUtils/FileExtensionContract.cpp
+            src/MyUtils/PathExclusion.cpp
             src/MyUtils/LogFile.cpp
             src/MyUtils/Encoding.cpp
     )
