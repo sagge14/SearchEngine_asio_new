@@ -48,6 +48,19 @@ $configurePreset = 'windows7-x86-archive-e2e-stand'
 $buildPreset = 'windows7-x86-archive-e2e-stand-release'
 $packageLeaf = "$ServiceName-$Year"
 
+if (-not $SkipCloudPublish) {
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = $env:WORKSPACE_RELEASE_CLOUD_ROOT
+    }
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = [Environment]::GetEnvironmentVariable('WORKSPACE_RELEASE_CLOUD_ROOT', 'User')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CloudRoot) -and
+        -not (Test-Path -LiteralPath $CloudRoot -PathType Container)) {
+        throw "Configured release cloud root is unavailable: $CloudRoot"
+    }
+}
+
 function Resolve-AbsolutePath([string]$Path, [string]$BasePath) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         throw 'An empty path is not allowed.'
@@ -535,6 +548,7 @@ try {
         -StartPath $projectRoot `
         -Optional
     $cloudPackageRoot = $null
+    $cloudResult = $null
     try {
         if ($null -ne $cloudHelper) {
             $cloudPackageDirectory = $OutputDirectory
@@ -575,16 +589,30 @@ try {
             if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
                 $cloudArguments.CloudRoot = $CloudRoot
             }
-            & $cloudHelper @cloudArguments | Out-Null
+            $cloudResult = & $cloudHelper @cloudArguments
         }
         else {
+            if (-not $SkipCloudPublish -and -not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+                throw 'Configured stand publication helper was not found.'
+            }
             Write-Host 'Cloud publish helper not found; local stand release only.'
         }
     }
+
     finally {
         if ($null -ne $cloudPackageRoot -and
             (Test-Path -LiteralPath $cloudPackageRoot -PathType Container)) {
             Remove-Item -LiteralPath $cloudPackageRoot -Recurse -Force
+        }
+    }
+
+    $cloudPublished = $null -ne $cloudResult -and -not [string]::IsNullOrWhiteSpace($cloudResult.ZipPath)
+    if (-not $SkipCloudPublish -and -not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+        if (-not $cloudPublished) { throw 'Configured stand cloud publication did not complete.' }
+        foreach ($path in @($cloudResult.ZipPath, $cloudResult.Sha256Path)) {
+            if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                throw "Required published stand artifact is missing: $path"
+            }
         }
     }
 
@@ -598,6 +626,17 @@ try {
     Write-Host "Size: $([Math]::Round($releaseSize / 1MB, 1)) MB"
 
     [pscustomobject]@{
+        Product = $productName
+        FileVersion = $versionInfo.FileVersion
+        Architecture = [string]$servicePackageManifest.architecture
+        PackageDirectory = $OutputDirectory
+        PackagedExe = Join-Path $OutputDirectory 'tools\SearchEngineArchiveE2EStand.exe'
+        BuiltExe = $helperPath
+        ServicePackageVersion = [string]$servicePackageManifest.applicationVersion
+        CloudPublished = $cloudPublished
+        ZipPath = if ($cloudPublished) { $cloudResult.ZipPath } else { $null }
+        Sha256Path = if ($cloudPublished) { $cloudResult.Sha256Path } else { $null }
+        Sha256 = if ($cloudPublished) { $cloudResult.Sha256 } else { $null }
         OutputDirectory = $OutputDirectory
         Version = $versionInfo.Version
         ReleaseId = $CloudReleaseId
