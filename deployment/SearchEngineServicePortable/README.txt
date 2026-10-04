@@ -150,6 +150,17 @@ ProgramData. Полное удаление ProgramData выполняется т
 
 Управление:
 
+Без аргумента Stop, Start и Restart предлагают выбрать установленную службу.
+Для конкретного экземпляра передайте его идентификатор, например:
+  Stop-SearchEngineService.bat 2026
+Явный аргумент не вызывает выбор и никогда не заменяется другим экземпляром.
+Пути Settings.json и логов читаются из регистрации службы, включая архивные
+и нестандартные data-dir. Stop не требует валидного Settings.json.
+Stop и Restart ждут штатной остановки до 1800 секунд без принудительного
+завершения процесса. Start и Restart проверяют PING/PONG на установленном порту.
+Используйте полную папку нового пакета: батники требуют совместимый
+tools\SearchEngineConfig.exe и общий Resolve-ServiceInstance.cmd.
+
   Stop-SearchEngineService.bat
   Start-SearchEngineService.bat
   Restart-SearchEngineService.bat

@@ -14,6 +14,9 @@ struct Message final {
 };
 
 constexpr Message kMessages[] = {
+    { L"control.no_services", L"Установленные службы SearchEngine не найдены.\n", L"No installed SearchEngine services were found.\n" },
+    { L"control.cancelled", L"Операция отменена.\n", L"Operation cancelled.\n" },
+    { L"control.resolve_failed", L"ОШИБКА: Не удалось выбрать или прочитать установленную службу. Подробности указаны выше.\n", L"ERROR: Could not select or inspect the installed service. See the diagnostic above.\n" },
     {
         L"common.select",
         L"Ваш выбор: ",

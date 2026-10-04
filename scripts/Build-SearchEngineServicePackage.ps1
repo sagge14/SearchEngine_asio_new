@@ -104,6 +104,14 @@ foreach ($build in $builds) {
                 )
             }
         }
+
+        # Read-only native API checks must pass before this architecture is published.
+        & cmake "-DCONFIG_EXE=$projectRoot/out/build/$($build.Configure)/Release/SearchEngineConfig.exe" `
+            "-DTEST_ROOT=$projectRoot/out/build/$($build.Configure)/config-service-control-release-test" `
+            -P (Join-Path $projectRoot 'tests/config/SearchEngineConfigServiceControl.cmake')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Service-control native checks failed for $($build.Architecture)."
+        }
     } finally {
         Pop-Location
     }

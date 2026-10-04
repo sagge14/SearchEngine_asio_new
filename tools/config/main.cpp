@@ -367,6 +367,120 @@ private:
     SC_HANDLE handle_{};
 };
 
+[[noreturn]] void serviceApiError(const char* operation, DWORD error,
+    const std::wstring& serviceName)
+{
+    const char* reason = error == ERROR_SERVICE_DOES_NOT_EXIST
+        ? "service is not installed" : error == ERROR_ACCESS_DENIED
+        ? "access denied; run as Administrator" : "Windows service operation failed";
+    throw std::runtime_error(std::string(operation) + ": " + reason +
+        "; service=" + utf8(serviceName) + "; Win32=" + std::to_string(error));
+}
+
+int serviceControlCommand(const std::vector<std::wstring>& args)
+{
+    std::wstring instance = option(args, L"--instance").value_or(L"default");
+    if (!isValidInstanceId(instance))
+        throw std::runtime_error("invalid service instance id");
+    const std::wstring name = _wcsicmp(instance.c_str(), L"default") == 0
+        ? L"SearchEngineService" : L"SearchEngineService-" + instance;
+    const std::wstring action = requiredOption(args, L"--action");
+    if (action != L"stop" && action != L"start" && action != L"status")
+        throw std::runtime_error("service-control --action must be stop, start, or status");
+    const int timeout = parseInt(option(args, L"--timeout-seconds").value_or(L"1800"),
+        "timeout-seconds");
+    if (timeout < 1 || timeout > 86400)
+        throw std::runtime_error("timeout-seconds must be inside 1..86400");
+    struct Handle {
+        SC_HANDLE value;
+        ~Handle() { if (value) CloseServiceHandle(value); }
+    } manager{OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT)};
+    if (!manager.value) serviceApiError("OpenSCManager", GetLastError(), name);
+    const DWORD access = SERVICE_QUERY_STATUS | (action == L"stop" ? SERVICE_STOP :
+        action == L"start" ? SERVICE_START : 0);
+    Handle service{OpenServiceW(manager.value, name.c_str(), access)};
+    if (!service.value) serviceApiError("OpenService", GetLastError(), name);
+    const auto query = [&]() {
+        SERVICE_STATUS_PROCESS status{};
+        DWORD bytes = 0;
+        if (!QueryServiceStatusEx(service.value, SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<BYTE*>(&status), sizeof(status), &bytes))
+            serviceApiError("QueryServiceStatusEx", GetLastError(), name);
+        return status;
+    };
+    const ULONGLONG started = GetTickCount64();
+    ULONGLONG lastProgress = started;
+    const auto wait = [&]() {
+        const ULONGLONG now = GetTickCount64();
+        if (now - started >= static_cast<ULONGLONG>(timeout) * 1000) {
+            const auto status = query();
+            throw std::runtime_error("service " + utf8(name) + " did not reach " +
+                (action == L"stop" ? "STOPPED" : "RUNNING") + " within " +
+                std::to_string(timeout) + " seconds; state=" +
+                std::to_string(status.dwCurrentState) + "; PID=" +
+                std::to_string(status.dwProcessId) + "; service Win32=" +
+                std::to_string(status.dwWin32ExitCode));
+        }
+        if (now - lastProgress >= 30000) {
+            std::cout << "Still waiting for " << utf8(name) << ": " <<
+                (now - started) / 1000 << "s / " << timeout << "s\n" << std::flush;
+            lastProgress = now;
+        }
+        Sleep(1000);
+    };
+    auto status = query();
+    if (action == L"status") {
+        std::cout << "state=" << status.dwCurrentState << "\npid=" <<
+            status.dwProcessId << "\nwin32_exit_code=" << status.dwWin32ExitCode << '\n';
+        return 0;
+    }
+    // Finish an in-progress transition before sending another control request.
+    while (status.dwCurrentState == SERVICE_START_PENDING ||
+           status.dwCurrentState == SERVICE_STOP_PENDING) {
+        wait();
+        status = query();
+    }
+    const DWORD target = action == L"stop" ? SERVICE_STOPPED : SERVICE_RUNNING;
+    if (status.dwCurrentState == target) {
+        std::cout << utf8(name) << " is already " <<
+            (action == L"stop" ? "STOPPED" : "RUNNING") << ".\n";
+        return 0;
+    }
+    std::cout << (action == L"stop" ? "Stopping " : "Starting ") << utf8(name)
+        << " (timeout " << timeout << "s)...\n" << std::flush;
+    if (action == L"stop") {
+        SERVICE_STATUS controlStatus{};
+        if (!ControlService(service.value, SERVICE_CONTROL_STOP, &controlStatus)) {
+            const DWORD error = GetLastError();
+            status = query();
+            if (status.dwCurrentState != SERVICE_STOPPED &&
+                status.dwCurrentState != SERVICE_STOP_PENDING)
+                serviceApiError("ControlService STOP", error, name);
+        }
+    } else {
+        if (status.dwCurrentState != SERVICE_STOPPED)
+            throw std::runtime_error("cannot start " + utf8(name) +
+                "; unexpected state=" + std::to_string(status.dwCurrentState));
+        if (!StartServiceW(service.value, 0, nullptr)) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_SERVICE_ALREADY_RUNNING)
+                serviceApiError("StartService", error, name);
+        }
+    }
+    for (;;) {
+        status = query();
+        if (status.dwCurrentState == target) break;
+        if (action == L"start" && status.dwCurrentState == SERVICE_STOPPED)
+            throw std::runtime_error("service stopped during start; service=" + utf8(name) +
+                "; Win32=" + std::to_string(status.dwWin32ExitCode) +
+                "; service_exit_code=" + std::to_string(status.dwServiceSpecificExitCode));
+        wait();
+    }
+    std::cout << utf8(name) << " is " <<
+        (action == L"stop" ? "STOPPED" : "RUNNING") << ".\n";
+    return 0;
+}
+
 struct InstalledSearchEngineService {
     std::wstring instance;
     std::wstring serviceName;
@@ -500,11 +614,12 @@ static fs::path managedInstallRoot(const fs::path& executable)
 
 int inspectInstalledCommand(const std::vector<std::wstring>& args)
 {
-    const std::wstring instanceId = option(args, L"--instance").value_or(L"default");
+    std::wstring instanceId = option(args, L"--instance").value_or(L"default");
     if (!isValidInstanceId(instanceId)) {
         std::cerr << "ERROR: invalid instance id '" << utf8(instanceId) << "'\n";
         return 1;
     }
+    if (_wcsicmp(instanceId.c_str(), L"default") == 0) instanceId = L"default";
     const std::wstring serviceName =
         (instanceId == L"default")
             ? L"SearchEngineService"
@@ -515,9 +630,7 @@ int inspectInstalledCommand(const std::vector<std::wstring>& args)
         manager.get(), serviceName.c_str(),
         SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS);
     if (!hSvc) {
-        throw std::runtime_error(
-            "service not found or insufficient permissions: " +
-            utf8(serviceName));
+        serviceApiError("OpenService", GetLastError(), serviceName);
     }
     struct SvcGuard { SC_HANDLE h; ~SvcGuard(){ CloseServiceHandle(h); } } guard{hSvc};
 
@@ -619,9 +732,10 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
         return value;
     }();
     if (purpose != L"uninstall" && purpose != L"register-auth" &&
-        purpose != L"configure") {
+        purpose != L"configure" && purpose != L"stop" && purpose != L"start" &&
+        purpose != L"restart") {
         throw std::runtime_error(
-            "choose-installed-instance --purpose must be uninstall, register-auth, or configure");
+            "choose-installed-instance --purpose must be uninstall, register-auth, configure, stop, start, or restart");
     }
 
     const UiLanguage language = chooseLanguage();
@@ -636,13 +750,19 @@ int chooseInstalledInstanceCommand(const std::vector<std::wstring>& args)
     }
 
     const wchar_t* promptRu =
-        purpose == L"register-auth"
+        purpose == L"stop" ? L"\nВыберите службу SearchEngine для остановки:\n"
+        : purpose == L"start" ? L"\nВыберите службу SearchEngine для запуска:\n"
+        : purpose == L"restart" ? L"\nВыберите службу SearchEngine для перезапуска:\n"
+        : purpose == L"register-auth"
             ? L"\nВыберите службу SearchEngine для регистрации auth-клиента:\n"
         : purpose == L"configure"
             ? L"\nВыберите службу SearchEngine для изменения конфигурации:\n"
             : L"\nВыберите службу SearchEngine для полного удаления:\n";
     const wchar_t* promptEn =
-        purpose == L"register-auth"
+        purpose == L"stop" ? L"\nSelect the SearchEngine service to stop:\n"
+        : purpose == L"start" ? L"\nSelect the SearchEngine service to start:\n"
+        : purpose == L"restart" ? L"\nSelect the SearchEngine service to restart:\n"
+        : purpose == L"register-auth"
             ? L"\nSelect the SearchEngine service to register the auth client:\n"
         : purpose == L"configure"
             ? L"\nSelect the SearchEngine service to configure:\n"
@@ -2555,10 +2675,12 @@ void printUsage()
         << "  choose-language --output FILE\n"
         << "  choose-instance --default ID --output FILE\n"
         << "  choose-installed-instance --output FILE\n"
-        << "            [--purpose uninstall|register-auth|configure]\n"
+        << "            [--purpose uninstall|register-auth|configure|stop|start|restart]\n"
         << "  script-message --language ru|en --id ID [--arg1 VALUE ...]\n"
         << "  validate-script-messages\n"
         << "  inspect-installed [--instance ID]\n"
+        << "  service-control --action stop|start|status [--instance ID]\n"
+        << "            [--timeout-seconds N]\n"
         << "  check-port --port N\n"
         << "  health --port N [--timeout-ms N]\n"
         << "  backup --install-root DIR --data-dir DIR --destination DIR\n"
@@ -2633,6 +2755,9 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"inspect-installed") {
             return inspectInstalledCommand(args);
+        }
+        if (command == L"service-control") {
+            return serviceControlCommand(args);
         }
         if (command == L"check-port") {
             return checkPortCommand(args);

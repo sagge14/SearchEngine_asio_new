@@ -760,6 +760,7 @@ try {
     )
 
     $portableBatchFiles = @(
+        @{ Source = 'Resolve-ServiceInstance.cmd'; Destination = 'Resolve-ServiceInstance.cmd' },
         @{ Source = 'Setup-Access.bat'; Destination = 'Setup-Access.bat' },
         @{ Source = 'Remove-SearchEngineAuthKeys.bat'; Destination = 'Remove-SearchEngineAuthKeys.bat' },
         @{
@@ -898,6 +899,7 @@ try {
     }
     foreach ($name in @(
         'Install-SearchEngineService.bat',
+        'Resolve-ServiceInstance.cmd',
         'Local-Machine-Install.bat',
         'Stop-SearchEngineService.bat',
         'Start-SearchEngineService.bat',

@@ -294,7 +294,8 @@ copy /Y "%PACKAGE_ROOT%README.txt" "%INSTALL_ROOT%\README.txt" >nul
 if errorlevel 1 goto :COPY_FAILED
 copy /Y "%PACKAGE_ROOT%INSTALLATION_GUIDE_RU.txt" "%INSTALL_ROOT%\INSTALLATION_GUIDE_RU.txt" >nul
 if errorlevel 1 goto :COPY_FAILED
-copy /Y "%PACKAGE_ROOT%ServiceInstance.cmd" "%INSTALL_ROOT%\ServiceInstance.cmd" >nul
+> "%INSTALL_ROOT%\ServiceInstance.cmd" echo @rem Installed instance id; portable management scripts use the installed-service picker.
+>> "%INSTALL_ROOT%\ServiceInstance.cmd" echo set "SERVICE_INSTANCE=%SERVICE_INSTANCE%"
 if errorlevel 1 goto :COPY_FAILED
 
 set "GET_ATTACHMENTS_USED=0"

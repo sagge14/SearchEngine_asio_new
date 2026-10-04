@@ -1510,6 +1510,13 @@ endif()
 if(TARGET SearchEngineConfig)
     enable_testing()
     add_test(
+            NAME SearchEngineConfigServiceControl_test
+            COMMAND "${CMAKE_COMMAND}"
+            "-DCONFIG_EXE=$<TARGET_FILE:SearchEngineConfig>"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/config-service-control-test"
+            -P "${PROJECT_SOURCE_DIR}/tests/config/SearchEngineConfigServiceControl.cmake"
+    )
+    add_test(
             NAME SearchEngineConfigLocalMachine_test
             COMMAND
             "${CMAKE_COMMAND}"
@@ -1591,6 +1598,12 @@ if(TARGET SearchEngineConfig)
             NAMES pwsh.exe pwsh powershell.exe powershell
     )
     if(SEARCHENGINE_POWERSHELL_EXECUTABLE)
+        add_test(
+                NAME ServiceControlBatch_test
+                COMMAND "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
+                -NoProfile -ExecutionPolicy Bypass -File
+                "${PROJECT_SOURCE_DIR}/scripts/tests/ServiceControlBatch.Tests.ps1"
+        )
         add_test(
                 NAME YearBasedReleaseSettings_test
                 COMMAND
