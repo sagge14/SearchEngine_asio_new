@@ -60,7 +60,7 @@ a Save dialog. `--create-request` also accepts an optional `--id`; signing keeps
 the identity in the request. `--yes` skips confirmation/overwrite prompts;
 `--password-env NAME` supplies the signing password for automation.
 
-User instructions in Russian: [offline enrollment](../../tutorials/REMOTE_PC_TOKEN.md).
+User instructions in Russian: [offline enrollment](../../tutorials/REMOTE_PC_TOKEN.html).
 
 ## Crypto / signature
 

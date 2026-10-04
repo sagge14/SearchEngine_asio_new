@@ -69,7 +69,8 @@ TCP-порт, правило брандмауэра, каталоги устан
    default.
 3. Проверьте в data\Settings.json каталоги config.index_roots,
    config.excluded_subtrees, prm_base_dir, prd_base_dir, tlg_send_root,
-   razn_output_dir, opis_base_dir и f12_base_dir. Старые имена config.dirs и
+   razn_output_dir, opis_base_dir и f12_base_dir. Кратко, зачем нужно каждое
+   поле: tutorials\SERVER_SETTINGS.html. Старые имена config.dirs и
    config.exclude_dirs читаются только как compatibility aliases при миграции;
    в новом шаблоне используйте canonical-имена. data\Settings.json — шаблон
    релиза (template/default values), не production-конфиг установленной службы.
