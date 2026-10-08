@@ -1,4 +1,5 @@
 #include "CryptoStub.hpp"
+#include "AuthorityRecovery.hpp"
 #include "TokenAscii.hpp"
 #include "TokenDefaults.hpp"
 #include "TokenDocument.hpp"
@@ -246,7 +247,7 @@ void PrintUsage()
     if (russian_ui) {
         WriteOut(
             L"SearchClientTokenIssuer — выпуск токенов доступа USB и ПК\n"
-            L"Без параметров: выбор языка, затем меню из четырёх операций.\n"
+            L"Без параметров: выбор языка, затем меню из пяти операций.\n"
             L"Имя и идентификатор обязательны; вводите латиницей.\n"
             L"Издатель и примечание необязательны. Пустой пароль запрещён.\n\n"
             L"Параметры:\n"
@@ -261,6 +262,10 @@ void PrintUsage()
             L"  --init-keystore [--keystore PATH] [--password-env NAME]\n"
             L"  --export-public PATH [--keystore PATH]\n"
             L"  --show-computer-id\n\n"
+            L"  --reissue-usb [--keystore PATH] [--password-env NAME]\n"
+            L"  --reissue-token FILE --drive E: [--output FILE] [--yes]\n"
+            L"  --reissue-authority FILE --authority-output FILE [--keystore PATH]\n"
+            L"    [--password-env NAME] [--yes]\n\n"
             L"Без --output заявка и подписанный ответ сохраняются через окно выбора файла.\n"
             L"Коды завершения: 0 — успех, 1 — ошибка, 2 — отмена, 3 — нет накопителя.\n");
         return;
@@ -275,12 +280,18 @@ void PrintUsage()
         L"    Computer save: 1 current user profile, 2 manual Save dialog\n"
         L"    3 - Create unsigned computer request (no signing key needed)\n"
         L"    4 - Sign a request received from another computer\n"
+        L"    5 - Reissue an existing USB token (same identity/binding)\n"
         L"\n"
         L"  SearchClientTokenIssuer --init-keystore [--keystore path] "
         L"[--password-env NAME]\n"
         L"  SearchClientTokenIssuer --export-public <file-or-dir> "
         L"[--keystore path]\n"
         L"  SearchClientTokenIssuer --show-computer-id\n"
+        L"  SearchClientTokenIssuer --reissue-usb [--keystore PATH] [--password-env NAME]\n"
+        L"  SearchClientTokenIssuer --reissue-token FILE --drive E: [--output FILE]\n"
+        L"    [--keystore PATH] [--password-env NAME] [--yes]\n"
+        L"  SearchClientTokenIssuer --reissue-authority FILE --authority-output FILE\n"
+        L"    [--keystore PATH] [--password-env NAME] [--yes]\n"
         L"  SearchClientTokenIssuer --create-request [--name NAME] [--id ID]\n"
         L"    [--output <file-or-directory>] [--yes]\n"
         L"  SearchClientTokenIssuer --sign-request <request.json>\n"
@@ -1173,6 +1184,7 @@ int RunInteractiveComputer(
     }
 }
 
+int RunReissueUsb(const std::vector<std::wstring>& args, const token_issuer::KeystorePaths& keys);
 int RunInteractive(
     const std::vector<std::wstring>& args,
     const nlohmann::json& defaults,
@@ -1185,7 +1197,8 @@ int RunInteractive(
              L"  2 - Issue signed token for this computer\n"
              L"  3 - Create unsigned token for this computer (request)\n"
              L"  4 - Sign a received computer request\n"
-             L"  0 - Cancel\n", L"\nОперации с токенами:\n  1 - Выпустить подписанный токен USB\n  2 - Выпустить подписанный токен этого компьютера\n  3 - Создать неподписанную заявку этого компьютера\n  4 - Подписать полученную заявку компьютера\n  0 - Отмена\n"));
+             L"  5 - Reissue an existing USB token\n"
+             L"  0 - Cancel\n", L"\nОперации с токенами:\n  1 - Выпустить подписанный токен USB\n  2 - Выпустить подписанный токен этого компьютера\n  3 - Создать неподписанную заявку этого компьютера\n  4 - Подписать полученную заявку компьютера\n  5 - Перевыпустить существующий токен USB\n  0 - Отмена\n"));
     for (;;) {
         WriteOut(Ui(L"Select operation: ", L"Выберите операцию: "));
         const std::string answer = token_issuer::TrimCopy(Utf8(ReadLine()));
@@ -1196,6 +1209,7 @@ int RunInteractive(
             const auto private_pem = EnsureKeystore(keystore, args);
             return RunInteractiveUsb(args, std::move(fields), private_pem, keystore);
         }
+        if (answer == "5") return RunReissueUsb(args,keystore);
         if (answer == "2") {
             const auto private_pem = EnsureKeystore(keystore, args);
             return RunInteractiveComputer(
@@ -1365,6 +1379,64 @@ int RunNonInteractive(
         args, std::move(fields), private_pem, keystore);
 }
 
+int RunReissueUsb(const std::vector<std::wstring>& args, const token_issuer::KeystorePaths& keys)
+{
+    fs::path source;
+    std::string drive;
+    if (const auto path = Option(args, L"--reissue-token")) {
+        source = *path;
+        const auto supplied = Option(args, L"--drive");
+        if (!supplied) throw std::runtime_error("USB reissue requires --drive");
+        drive = token_issuer::NormalizeDriveLetter(Utf8(*supplied));
+    } else {
+        const auto volumes = token_issuer::ListEligibleRemovableVolumes();
+        if (volumes.empty()) return kExitNoVolume;
+        WriteOut(Ui(L"Select USB token to reissue (0 - cancel):\n", L"Выберите флешку для перевыпуска токена (0 — отмена):\n"));
+        for (std::size_t i=0;i<volumes.size();++i)
+            WriteOut(std::to_wstring(i+1)+L" — "+Wide(volumes[i].drive_letter)+L"\n");
+        const auto answer = token_issuer::TrimCopy(Utf8(ReadLine()));
+        std::size_t consumed{}; const int n=std::stoi(answer,&consumed);
+        if (consumed!=answer.size() || n<0 || static_cast<std::size_t>(n)>volumes.size()) throw std::runtime_error("Invalid volume selection");
+        if (n==0) return kExitCancelled;
+        drive=volumes[n-1].drive_letter; source=fs::path(Wide(drive+"\\"))/token_issuer::kTokenFileName;
+    }
+    const auto token=token_issuer::ReadRecoveryDocument(source);
+    const auto fields=auth_db::parseTokenFields(token);
+    if (fields.device_type!="usb") throw std::runtime_error("USB reissue requires a USB token");
+    const auto serial=token_issuer::GetSerialForDriveLetter(drive);
+    if (serial.empty() || serial=="(UNKNOWN)" ||
+        fields.device_id!=auth::NormalizeUsbDeviceId(serial))
+        throw std::runtime_error("Token belongs to another device or USB serial is unavailable");
+    WriteOut(Ui(L"Keeping client ID/name and USB binding: ", L"Сохраняются идентификатор, имя и привязка USB: "));
+    WriteOut(Wide(fields.client_id)+L" / "+Wide(fields.client_name)+L"\n");
+    if (!HasFlag(args,L"--yes") && !PromptYesNo(Ui(L"Reissue this token with the current issuer key?", L"Перевыпустить токен текущим ключом издателя?"), false)) return kExitCancelled;
+    const auto password=ResolvePassword(args,false);
+    const auto private_key=token_issuer::UnlockPrivateKey(keys,password);
+    const auto replacement=token_issuer::ResignToken(token,private_key);
+    const fs::path destination=Option(args,L"--output") ? fs::path(*Option(args,L"--output")) : fs::path(Wide(drive+"\\"))/token_issuer::kTokenFileName;
+    if (destination.empty() || fs::weakly_canonical(destination).lexically_relative(fs::weakly_canonical(keys.root)).empty())
+        throw std::runtime_error("Invalid token destination");
+    const auto relative=fs::weakly_canonical(destination).lexically_relative(fs::weakly_canonical(keys.root));
+    if (relative.empty() || *relative.begin()!=L"..") throw std::runtime_error("Token destination must be outside issuer keys");
+    token_issuer::WriteRecoveryDocument(destination,replacement);
+    WriteOut(Ui(L"Token reissued: ", L"Токен перевыпущен: ")); WriteOut(destination.wstring()+L"\n");
+    return kExitOk;
+}
+
+int RunRecoverAuthority(const std::vector<std::wstring>& args, const token_issuer::KeystorePaths& keys)
+{
+    const auto input=Option(args,L"--reissue-authority"), output=Option(args,L"--authority-output");
+    if (!input || !output) throw std::runtime_error("Authority recovery requires input and --authority-output");
+    if (!HasFlag(args,L"--yes") && !PromptYesNo(Ui(L"Replace issuer keys permanently, without old-key backups?", L"Заменить ключи издателя без сохранения старых ключей?"),false)) return kExitCancelled;
+    const bool resume=fs::exists(token_issuer::AuthorityRecoveryPending(keys)/"ready.json");
+    if (resume) WriteOut(Ui(L"Continuing the prepared new key; enter its password.\n", L"Продолжается подготовленный перевыпуск. Введите пароль уже созданного нового ключа.\n"));
+    const auto password=ResolvePassword(args,!resume);
+    const auto state=resume?nlohmann::json::object():token_issuer::ReadRecoveryDocument(*input);
+    token_issuer::RecoverAuthority(keys,fs::path(*output),state,password);
+    WriteOut(Ui(L"New keys and tokens prepared. Servers have not been switched.\n", L"Новые ключи и токены подготовлены. Серверы ещё не переключены.\n"));
+    return kExitOk;
+}
+
 int RunShowComputerId()
 {
     const std::string uuid = token_issuer::RequireComputerDeviceId();
@@ -1373,6 +1445,22 @@ int RunShowComputerId()
     return kExitOk;
 }
 
+void ValidateRecoveryArguments(const std::vector<std::wstring>& args)
+{
+    const bool authority=HasFlag(args,L"--reissue-authority"), usb=HasFlag(args,L"--reissue-usb"), token=HasFlag(args,L"--reissue-token");
+    if (int(authority)+int(usb)+int(token)!=1) throw std::runtime_error("Choose one recovery operation");
+    for (std::size_t i=0;i<args.size();++i) {
+        const auto& arg=args[i];
+        if (arg==L"--yes" || (usb && arg==L"--reissue-usb")) continue;
+        const bool value=arg==L"--keystore" || arg==L"--password-env" ||
+            (authority && (arg==L"--reissue-authority" || arg==L"--authority-output")) ||
+            (token && (arg==L"--reissue-token" || arg==L"--drive" || arg==L"--output"));
+        if (!value || i+1>=args.size() || args[i+1].empty() || args[i+1].starts_with(L"--"))
+            throw std::runtime_error("Invalid recovery argument");
+        if (std::count(args.begin(),args.end(),arg)!=1) throw std::runtime_error("Duplicate recovery argument");
+        ++i;
+    }
+}
 int Run(const std::vector<std::wstring>& args)
 {
     try {
@@ -1381,6 +1469,8 @@ int Run(const std::vector<std::wstring>& args)
             PrintUsage();
             return kExitOk;
         }
+        if (HasFlag(args,L"--reissue-authority") || HasFlag(args,L"--reissue-usb") || HasFlag(args,L"--reissue-token"))
+            ValidateRecoveryArguments(args);
 
         const bool create_request = HasFlag(args, L"--create-request");
         const bool sign_request = HasFlag(args, L"--sign-request");
@@ -1413,6 +1503,9 @@ int Run(const std::vector<std::wstring>& args)
 
         const auto keystore =
             token_issuer::ResolveKeystorePaths(keystore_root);
+
+        if (HasFlag(args,L"--reissue-authority")) return RunRecoverAuthority(args,keystore);
+        if (HasFlag(args,L"--reissue-usb") || HasFlag(args,L"--reissue-token")) return RunReissueUsb(args,keystore);
 
         if (sign_request) {
             return RunSignRequest(args, keystore);
@@ -1509,6 +1602,7 @@ int wmain(int argc, wchar_t* argv[])
         const bool command = HasFlag(args, L"--help") || HasFlag(args, L"-h") ||
             HasFlag(args, L"--create-request") || HasFlag(args, L"--sign-request") ||
             HasFlag(args, L"--init-keystore") || HasFlag(args, L"--export-public") ||
+            HasFlag(args, L"--reissue-authority") || HasFlag(args, L"--reissue-usb") || HasFlag(args, L"--reissue-token") ||
             HasFlag(args, L"--show-computer-id") || HasFlag(args, L"--drive") ||
             HasFlag(args, L"--name") || HasFlag(args, L"--id") ||
             HasFlag(args, L"--device-type") || HasFlag(args, L"--output");

@@ -4,6 +4,7 @@
 #include "ComputerTokenPath.hpp"
 #include "ComputerIdentity.hpp"
 #include "CryptoStub.hpp"
+#include "AuthorityRecovery.hpp"
 #include "Auth/AuthClientStore.h"
 #include "Auth/IssuerPublicKeyPath.h"
 #include "Auth/DeviceIdentity.h"
@@ -73,27 +74,13 @@ bool AuthorityKeyConflict() {
     if (!token_issuer::KeystoreExists(paths)) return true;
     return !access_setup::AuthorityUsesPublicKey(state, ReadBytes(paths.public_key));
 }
-void ReissueAuthorityKeys() {
-    RequireAdminNow();
-    const auto keys = token_issuer::DefaultKeystoreRoot();
-    const auto retiredState = access_setup::RetireToBackup(StatePath());
-    const auto retiredKeys = access_setup::RetireToBackup(keys);
-    RunIssuer({L"--init-keystore", L"--keystore", keys.wstring()});
-    Say(L"Ключи перевыпущены. Старая система отложена, её токены больше не действуют.\n");
-    if (!retiredState.empty()) Say(L"Прежняя главная система: " + retiredState.wstring() + L"\n");
-    if (!retiredKeys.empty()) Say(L"Прежние ключи: " + retiredKeys.wstring() + L"\n");
-}
 bool ResolveAuthorityKeyConflict(bool required) {
     if (!AuthorityKeyConflict()) return false;
     Say(L"\nСохранённая главная система подписана другим ключом, чем текущее хранилище.\n"
         L"Хранилище: " + token_issuer::DefaultKeystoreRoot().wstring() + L"\n"
-        L"Старые токены и ответы больше не подойдут. Второй ПК нужно провести заново.\n");
-    if (!Yes(L"Перевыпустить ключи и начать новую систему?")) {
-        if (required) throw Cancelled{};
-        return false;
-    }
-    ReissueAuthorityKeys();
-    return true;
+        L"Для восстановления используйте пункт 6. Старые ключи в копии не сохраняются.\n");
+    if (required) throw Cancelled{};
+    return false;
 }
 std::string ReadBytes(const fs::path& path) {
     std::ifstream f(path, std::ios::binary); if (!f) throw std::runtime_error("Cannot read selected file");
@@ -246,6 +233,8 @@ void InstallLocalToken(const Json& token) {
 }
 void ConfigureAuthority() {
     (void)ResolveAuthorityKeyConflict(true);
+    if (fs::exists(StatePath()) && access_setup::ReadDocument(StatePath()).value("reissue_prepared",false))
+        throw std::runtime_error("Recovery prepared; use menu 7 to switch servers");
     const auto role = ChooseRole(); const auto services = HasServer(role) ? SelectServices() : std::vector<Service>{}; RequireAdmin(services);
     const auto keys = token_issuer::DefaultKeystoreRoot();
     Say(L"Главный ПК будет подписывать токены. Закрытый ключ останется здесь.\nХранилище: " + keys.wstring() + L"\n");
@@ -324,7 +313,9 @@ void ProcessRequest() {
     const auto output = ChooseFile(true, L"Сохранить ответ на флешку", L"access-answer.json");
     CheckTransferOutput(output);
     if (fs::exists(output) && fs::equivalent(input, output)) throw std::runtime_error("Answer must be separate from the request");
-    InstallServers(services, pem, tokens); state["tokens"] = tokens; access_setup::WriteDocument(StatePath(), state);
+    if (!state.value("reissue_prepared",false)) InstallServers(services, pem, tokens);
+    else Say(L"Подготовлен новый токен. Местные серверы пока не переключены; для этого используйте пункт 7.\n");
+    state["tokens"] = tokens; access_setup::WriteDocument(StatePath(), state);
     access_setup::WriteDocument(output, package);
     Say(L"Ответ сохранён. Передайте этот один файл второму ПК.\nЕсли в системе уже есть другие второстепенные серверы, примените этот же ответ и на них для добавления нового клиента.\n");
 }
@@ -336,10 +327,16 @@ void ApplyAnswer() {
         if (!fs::exists(PendingRequest())) throw std::runtime_error("Reply does not match the saved request of this computer");
         access_setup::ValidateReplyForComputer(package, access_setup::ReadDocument(PendingRequest()), uuid);
     } else Say(L"Ответ выпущен для другого ПК. Здесь будут обновлены только разрешения серверов; локальный токен клиента останется прежним.\n");
-    const auto services = HasServer(role) ? SelectServices() : std::vector<Service>{}; RequireAdmin(services);
+    bool switchNow = HasServer(role);
+    if (switchNow && !Yes(L"Установить ключ ответа на местные серверы сейчас? При смене издателя старые токены перестанут проходить вход.\nВыберите 0, чтобы пока установить только токен этого ПК; ответ можно применить ещё раз позже.")) {
+        switchNow=false;
+        if (!target || !HasClient(role)) throw Cancelled{};
+    }
+    const auto services = switchNow ? SelectServices() : std::vector<Service>{}; RequireAdmin(services);
     const auto pem = package.at("public_key").get<std::string>();
     Say(L"Открытый ключ главного ПК: " + Wide(access_setup::PublicKeyFingerprint(pem)) + L"\n");
-    if (!Yes(L"Файл получен от вашего главного ПК? Применить его ключ и разрешения? Работающие выбранные серверы будут перезапущены.")) throw Cancelled{};
+    if (!Yes(services.empty()?L"Файл получен от вашего главного ПК? Установить новый токен этого ПК?":
+        L"Файл получен от вашего главного ПК? Применить его ключ и разрешения? Работающие выбранные серверы будут перезапущены.")) throw Cancelled{};
     Preflight(services, package.at("tokens"));
     Json own = nullptr;
     if (target && HasClient(role)) {
@@ -349,6 +346,83 @@ void ApplyAnswer() {
     }
     InstallServers(services, pem, package.at("tokens")); if (!own.is_null()) InstallLocalToken(own);
     Say(L"Доступ настроен. Закрытый ключ не переносился. В SearchClient выберите токен ПК и нажмите «Подключение».\n");
+}
+void PrepareAuthorityReissue() {
+    RequireAdminNow();
+    const auto keys=token_issuer::ResolveKeystorePaths(token_issuer::DefaultKeystoreRoot());
+    const auto input=Profile()/"access-reissue-input.json";
+    const bool resume=fs::exists(token_issuer::AuthorityRecoveryPending(keys)/"ready.json");
+    if (!resume) {
+        Json state;
+        if (fs::exists(StatePath())) {
+            state=access_setup::ReadDocument(StatePath());
+            if (state.at("computer_uuid")!=token_issuer::RequireComputerDeviceId()) throw std::runtime_error("Authority state belongs to another computer");
+            if (state.value("reissue_prepared",false)) {
+                Say(L"Перевыпуск уже подготовлен. Используйте пункты 3 и 8 для токенов, пункт 7 для серверов.\n"); return;
+            }
+        } else {
+            const auto role=ChooseRole(); const auto services=HasServer(role)?SelectServices():std::vector<Service>{};
+            Json names=Json::array(); for (const auto& service:services) names.push_back(Utf8(service.name));
+            state={{"computer_uuid",token_issuer::RequireComputerDeviceId()},{"role",role},
+                {"services",names},{"tokens",Json::array()},{"public_key_fingerprint",""}};
+        }
+        auto tokens=state.at("tokens");
+        for (const auto& service:StateServices(state)) {
+            auth::AuthClientStore store; store.open(service.data/"auth_clients.sqlite");
+            for (const auto& row:store.listClients()) {
+                // The existing permission database is the administrator's identity source.
+                Json token={{"format","searchclient-auth-token"},{"format_version",1},
+                    {"client_id",row.client_id},{"client_name",row.client_name},{"device_type",row.device_type},{"device_id",row.device_id},
+                    {"signature",{{"alg","RS256"},{"encoding","base64"},{"value","AA=="}}}};
+                access_setup::AddToken(tokens,token);
+            }
+        }
+        if (fs::exists(LocalToken())) access_setup::AddToken(tokens,access_setup::ReadDocument(LocalToken()));
+        state["tokens"]=tokens;
+        Say(L"Новый ключ будет создан для "+std::to_wstring(tokens.size())+L" устройств из каталога и разрешений местных серверов.\n"
+            L"Идентификаторы и привязки сохраняются. Базы разрешений и документов не очищаются.\n"
+            L"Старые ключи заменяются без резервных копий. Серверы на этом шаге не переключаются.\n");
+        if (!Yes(L"Подготовить перевыпуск?")) throw Cancelled{};
+        // Older services may use the shared issuer public.pem as a fallback.
+        // Pin their ACTIVE verification key before replacing that shared keystore.
+        // This is the normal service trust file, not a retired-key backup.
+        const auto fallback=auth::DefaultTokenIssuerPublicPemPath();
+        for (const auto& service:Services()) {
+            const auto active=service.data/"issuer-public.pem";
+            if (!fs::exists(active) && fs::is_regular_file(fallback)) {
+                const auto oldPem=ReadBytes(fallback); access_setup::PublicKeyFingerprint(oldPem);
+                access_setup::WriteBytes(active,oldPem);
+                Say(L"Действующий ключ проверки закреплён в папке данных службы: "+service.name+L"\n");
+            }
+        }
+        access_setup::WriteDocument(input,state);
+    } else Say(L"Найден незавершённый перевыпуск. Продолжится тот же новый ключ; нужен его новый пароль.\n");
+    RunIssuer({L"--reissue-authority",input.wstring(),L"--authority-output",StatePath().wstring(),L"--keystore",keys.root.wstring(),L"--yes"});
+    fs::remove(input);
+    Say(L"Подготовка завершена. Замените токены ПК через пункты 2, 3, 4; флешек — пунктом 8.\n"
+        L"Затем переключите местные серверы пунктом 7, удалённые — применением нового ответа (пункт 4).\n");
+}
+void ActivateReissuedAuthority() {
+    RequireAdminNow(); (void)ResolveAuthorityKeyConflict(true);
+    auto state=access_setup::ReadDocument(StatePath());
+    const auto pem=ReadBytes(token_issuer::ResolveKeystorePaths(token_issuer::DefaultKeystoreRoot()).public_key);
+    const auto services=SelectServices();
+    Say(L"Ключ издателя: "+Wide(access_setup::PublicKeyFingerprint(pem))+L"\n"
+        L"После переключения выбранных серверов прежние токены не пройдут новую авторизацию.\n"
+        L"Работающие службы будут перезапущены. Разрешения и отключённые записи сохраняются.\n");
+    if (!Yes(L"Новые токены подготовлены? Переключить выбранные серверы?")) throw Cancelled{};
+    InstallServers(services,pem,state.at("tokens"));
+    bool all=true;
+    for (const auto& service:StateServices(state))
+        if (access_setup::PublicKeyFingerprint(ReadBytes(auth::ResolveIssuerPublicPemPath(service.data/"auth_clients.sqlite")))!=access_setup::PublicKeyFingerprint(pem)) all=false;
+    if (all) { state["reissue_prepared"]=false; access_setup::WriteDocument(StatePath(),state); }
+    Say(all?L"Все местные серверы главной системы переключены. Проверьте удалённые серверы и вход каждого клиента.\n":
+        L"Выбранные серверы переключены. Для оставшихся повторите пункт 7.\n");
+}
+void ReissueUsb() {
+    RequireAdminNow(); (void)ResolveAuthorityKeyConflict(true);
+    RunIssuer({L"--reissue-usb",L"--keystore",token_issuer::DefaultKeystoreRoot().wstring()});
+    Say(L"Токен флешки заменён с сохранением идентификатора. Если устройство отсутствовало в каталоге главного ПК, зарегистрируйте новый токен через Register-AuthClient-FromToken.bat после переключения серверов.\n");
 }
 void CheckLocal() {
     const auto services = SelectServices();
@@ -379,12 +453,13 @@ void CheckLocal() {
     if (!all) throw std::runtime_error("Local access check failed");
 }
 std::wstring Explain(const std::string& error) {
+    if (error.find("Recovery prepared")!=std::string::npos) return L"Перевыпуск уже подготовлен. Для переключения местных серверов выберите пункт 7.";
     if (error.find("conflict") != std::string::npos) return L"Идентификатор уже занят другим компьютером или именем. Чужая запись не заменена.";
     if (error.find("administrator") != std::string::npos) return L"Для настройки серверов закройте мастер и запустите Setup-Access.bat от имени администратора под той же учётной записью Windows.";
     if (error.find("saved request") != std::string::npos) return L"Ответ не соответствует сохранённой заявке этого ПК. Выберите ответ именно на его заявку.";
     if (error.find("issuer did not") != std::string::npos) return L"Операция с токеном не завершена. Причина показана выше.";
     if (error.find("Configure this") != std::string::npos) return L"Сначала выполните пункт 1 — настройку главного ПК.";
-    if (error.find("key changed") != std::string::npos) return L"Ключ главного ПК изменился. Запустите мастер снова: он предложит перевыпустить ключи и начать новую систему.";
+    if (error.find("key changed") != std::string::npos) return L"Ключ главного ПК изменился. Используйте пункт 6 для подготовки перевыпуска с сохранением устройств.";
     if (error.find("No installed") != std::string::npos) return L"Установленные серверы SearchEngine с рабочей папкой данных не найдены. Для ПК без сервера выберите роль «Только клиент».";
     if (error.find("another computer") != std::string::npos) return L"Данные принадлежат другому компьютеру.";
     if (error.find("separate") != std::string::npos) return L"Сохраните заявку или ответ отдельным файлом на флешке. Рабочие токены, ключи и настройки заменять нельзя.";
@@ -406,13 +481,14 @@ int wmain(int argc, wchar_t** argv) {
             access_setup::ValidatePackage(access_setup::ReadDocument(argv[2])); Say(L"access-package-ok\n");
         } else {
             Say(L"НАСТРОЙКА ОБЩЕГО ДОСТУПА SEARCHENGINE\n\nПрофиль Windows: " + Profile().wstring() + L"\n");
-            if (ResolveAuthorityKeyConflict(false))
-                Say(L"Теперь выберите пункт 1 — настройку главного ПК с новыми ключами.\n");
-            Say(L"\n1 — Сделать этот ПК главным\n2 — Подготовить заявку этого ПК\n3 — Обработать заявку на главном ПК\n4 — Применить ответ главного ПК\n5 — Проверить локальные разрешения\n0 — Выход\nВыбор: ");
+            (void)ResolveAuthorityKeyConflict(false);
+            Say(L"\n1 — Сделать этот ПК главным\n2 — Подготовить заявку этого ПК\n3 — Обработать заявку на главном ПК\n4 — Применить ответ главного ПК\n5 — Проверить локальные разрешения\n6 — Утрачен пароль: подготовить перевыпуск ключей\n7 — Переключить местные серверы на ключ главного ПК\n8 — Перевыпустить существующий токен флешки\n0 — Выход\nВыбор: ");
             const auto choice = Line();
             if (choice == L"1") ConfigureAuthority(); else if (choice == L"2") PrepareRequest();
             else if (choice == L"3") ProcessRequest(); else if (choice == L"4") ApplyAnswer();
-            else if (choice == L"5") CheckLocal(); else if (choice != L"0") throw std::runtime_error("Invalid menu selection");
+            else if (choice == L"5") CheckLocal(); else if (choice == L"6") PrepareAuthorityReissue();
+            else if (choice == L"7") ActivateReissuedAuthority(); else if (choice == L"8") ReissueUsb();
+            else if (choice != L"0") throw std::runtime_error("Invalid menu selection");
         }
     } catch (const Cancelled&) { Say(L"Операция отменена.\n"); code = 2; }
       catch (const std::exception& error) { Say(Explain(error.what()) + L"\n"); code = 1; }

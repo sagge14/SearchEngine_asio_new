@@ -14,15 +14,35 @@
   th, td { border: 1px solid #d0d7de; padding: 0.45rem 0.6rem; text-align: left; vertical-align: top; }
   th { background: #eef5fb; }
   .note { background: #e8f4fd; border-left: 4px solid #3498db; padding: 0.75rem 1rem; margin: 0.9rem 0; }
+/* Keep field names readable; narrow screens scroll the table. */
+.table-scroll { max-width: 100%; overflow-x: auto; }
+table th:first-child, table td:first-child {
+  width: 22%;
+  min-width: 12rem;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+table th:first-child code, table td:first-child code {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+@media print {
+  table th:first-child, table td:first-child { min-width: 0; }
+  table th:first-child code, table td:first-child code { overflow-wrap: anywhere; }
+}
 </style>
 </head>
 <body>
 <nav>
-  <a href="SERVER_SETTINGS.html">Настройки сервера</a>
-  <a href="ACCESS_SETUP.html">Общий доступ</a>
-  <a href="REMOTE_PC_TOKEN.html">ПК-токен</a>
+  <a href="00_Батники_серверного_пакета.html">Все батники</a>
+  <a href="Настройки_сервера.html">Настройки сервера</a>
+  <a href="Общий_доступ_к_серверам.html">Общий доступ</a>
+  <a href="Токен_удалённого_ПК.html">ПК-токен</a>
+  <a href="Заморозка_и_архивация_сервера.html">Заморозка</a>
+  <a href="Разморозка_сервера.html">Разморозка</a>
 </nav>
 <h1>Настройки сервера</h1>
+<p>Чтобы увидеть работающие службы, их годы и порты, запустите <code>List-SearchEngineServices.bat</code>. <a href="Запущенные_службы_и_порты.html">Короткая инструкция</a>.</p>
 <p>Файл называется <code>Settings.json</code>. Все поля лежат в разделе <code>config</code>.</p>
 <p>В комплекте <code>data\Settings.json</code> — шаблон. Его можно поправить до установки. После установки рабочий файл находится в каталоге данных службы. Меняет поведение только он. Установленный файл удобнее править через <code>Configure-SearchEngineService.bat</code>: скрипт проверяет JSON, перезапускает службу и при ошибке возвращает прежний файл. Правка вручную тоже читается только после перезапуска службы.</p>
 <div class="note">Не удаляйте незнакомые поля. Если обязательного поля не хватает, служба может не запуститься. Если не хватает необязательного, при старте оно будет дописано значением по умолчанию.</div>
@@ -31,7 +51,7 @@
 
 <h2>Рабочие настройки</h2>
 <p>Их меняют, когда нужно указать год, порт, папки, типы файлов или базы.</p>
-<table>
+<div class="table-scroll"><table>
   <tr><th>Поле</th><th>Зачем</th></tr>
   <tr><td><code>year</code></td><td>Год баз. Сервер открывает помесячные файлы <code>MM-ГОД.db3</code>, опись <code>ГОД.db</code> и маршруты <code>ГОД.db</code>. Смена года не переносит файлы на диске.</td></tr>
   <tr><td><code>asio_port</code></td><td>Порт, на котором сервер принимает клиентов. Тот же номер нужен в клиенте. У двух служб на одном компьютере порты должны различаться.</td></tr>
@@ -55,14 +75,14 @@
   <tr><td><code>razn_output_dir</code></td><td>Куда складывать файлы разноски.</td></tr>
   <tr><td><code>hide_console_window</code></td><td>Спрятать консольное окно при ручном запуске программы. На службу Windows не влияет.</td></tr>
   <tr><td><code>enable_prm_short_content_autodetect</code></td><td>При появлении нового входящего файла дописывать краткое содержание в базу PRM. Имеет смысл только в режиме <code>active</code> и при заданном <code>prm_base_dir</code>.</td></tr>
-</table>
+</table></div>
 <p>Год и список папок решают разные задачи. <code>year</code> выбирает базы. <code>index_roots</code> выбирает файлы телеграмм.</p>
 <p>Режим <code>archive</code> вместе с годом используют для комплекта, который не должен пополняться. Вместе с ним ставьте <code>document_catalog_storage</code> в <code>sqlite</code>.</p>
 <p>Отсутствие каталога описи, F12, разноски или отправки не мешает запуску поиска. Ошибка появится, когда вызовут соответствующую команду.</p>
 
 <h2>Тонкая настройка</h2>
 <p>Эти поля меняют скорость, нагрузку на диск и память. На обычной машине оставьте значения из шаблона.</p>
-<table>
+<div class="table-scroll"><table>
   <tr><th>Поле</th><th>Зачем</th></tr>
   <tr><td><code>thread_count</code></td><td>Сколько потоков отдать расчётам. <code>0</code> — по числу ядер. <code>1</code> ставить нельзя.</td></tr>
   <tr><td><code>max_parallel_readers</code></td><td>Сколько файлов читать с диска одновременно. <code>0</code> — без ограничения. Для обычного жёсткого диска часто достаточно <code>1</code>.</td></tr>
@@ -76,7 +96,7 @@
   <tr><td><code>sqlite_mirror_max_pending_ops</code></td><td>Записать изменения сразу, если очередь стала длиннее этого числа. <code>0</code> — писать только по таймеру.</td></tr>
   <tr><td><code>sqlite_load_threads</code></td><td>Сколькими соединениями читать индекс при старте службы. <code>1</code> — строго по очереди.</td></tr>
   <tr><td><code>sqlite_precount_postings</code></td><td>Перед загрузкой индекса заранее посчитать вхождения, чтобы выделить память пачкой. Включайте только если замерили, что так старт быстрее.</td></tr>
-</table>
+</table></div>
 <p>Поля <code>batch_*</code> относятся к первой сборке пустого индекса при стратегии <code>batch</code>. На ежедневный поиск они не влияют.</p>
 </body>
 </html>

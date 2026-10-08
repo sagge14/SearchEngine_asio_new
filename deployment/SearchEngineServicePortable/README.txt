@@ -4,7 +4,8 @@ SearchEngineService {{ARCHITECTURE}} — переносимый комплект
 Архитектура: {{ARCHITECTURE}}
 Минимальная система: {{MINIMUM_WINDOWS}}
 
-На целевом компьютере PowerShell не требуется. Установка, переустановка,
+Для просмотра списка служб, регистрации токена и проверки файлов используется
+Windows PowerShell, входящий в Windows. Установка, переустановка,
 остановка, запуск, перезапуск и полное удаление выполняются BAT-файлами.
 Нативный помощник tools\SearchEngineConfig.exe имеет ту же архитектуру, что
 SearchEngine.exe. В tools\ также лежат AuthDbTool.exe (регистрация клиентов),
@@ -14,6 +15,9 @@ Register-AuthClientFromToken.ps1. Выпуск токена: Issue-SearchClientT
 Register-AuthClient-FromToken.bat.
 Перенос года или установленной службы в архив выполняет
 Archive-SearchEngineService.bat (tools\SearchEngineArchive.exe).
+
+Назначение всех 14 батников и их основные меню:
+  tutorials\00_Батники_серверного_пакета.html
 
 Быстрая локальная установка без вопросов:
 
@@ -70,7 +74,7 @@ TCP-порт, правило брандмауэра, каталоги устан
 3. Проверьте в data\Settings.json каталоги config.index_roots,
    config.excluded_subtrees, prm_base_dir, prd_base_dir, tlg_send_root,
    razn_output_dir, opis_base_dir и f12_base_dir. Кратко, зачем нужно каждое
-   поле: tutorials\SERVER_SETTINGS.html. Старые имена config.dirs и
+   поле: tutorials\Настройки_сервера.html. Старые имена config.dirs и
    config.exclude_dirs читаются только как compatibility aliases при миграции;
    в новом шаблоне используйте canonical-имена. data\Settings.json — шаблон
    релиза (template/default values), не production-конфиг установленной службы.
@@ -261,3 +265,6 @@ program/data внутри него.
 только после нажатия 0.
 
 Подробности: INSTALLATION_GUIDE_RU.txt
+
+Утрачен пароль ключа издателя: Tutorials\Утрачен_пароль_ключа_издателя.html
+Setup-Access.bat: 6 — подготовить перевыпуск без копий старых ключей; 7 — переключить местные серверы; 8 — перевыпустить токен существующей флешки.

@@ -1546,6 +1546,80 @@ void removeServiceRuntimeCleanupDirectories(
     }
 }
 
+void removeArchivedSourceEmptyDirectories(
+    const std::vector<PathMapping>& mappings,
+    const ProgressCallback& progress)
+{
+    std::set<fs::path> candidateDirectories;
+    for (const auto& mapping : mappings) {
+        if (mapping.source.empty() || mapping.target.empty() ||
+            !mapping.source.is_absolute() || !mapping.target.is_absolute() ||
+            isDriveRoot(mapping.source) || isDriveRoot(mapping.target) ||
+            pathsOverlap(mapping.source, mapping.target))
+        {
+            throw std::runtime_error("unsafe empty-directory cleanup mapping");
+        }
+        if (!fs::is_directory(mapping.target) || isReparsePoint(mapping.target)) {
+            throw std::runtime_error(
+                "archived cleanup root is not a normal directory: " +
+                utf8(mapping.target));
+        }
+        if (!fs::exists(mapping.source))
+            continue;
+        if (!fs::is_directory(mapping.source) || isReparsePoint(mapping.source)) {
+            throw std::runtime_error(
+                "source cleanup root is not a normal directory: " +
+                utf8(mapping.source));
+        }
+        candidateDirectories.insert(mapping.source);
+        for (fs::recursive_directory_iterator it(mapping.source), end;
+             it != end; ++it)
+        {
+            if (!it->is_directory())
+                continue;
+            const fs::path archivedDirectory = mapping.target /
+                it->path().lexically_relative(mapping.source);
+            if (!fs::is_directory(archivedDirectory)) {
+                // Includes OUT, other TLG years and excluded monthly roots.
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (isReparsePoint(it->path()) || isReparsePoint(archivedDirectory)) {
+                it.disable_recursion_pending();
+                throw std::runtime_error(
+                    "empty-directory cleanup encountered a reparse point: " +
+                    utf8(it->path()));
+            }
+            candidateDirectories.insert(it->path());
+        }
+    }
+    std::vector<fs::path> orderedDirectories(
+        candidateDirectories.begin(), candidateDirectories.end());
+    std::sort(
+        orderedDirectories.begin(), orderedDirectories.end(),
+        [](const fs::path& left, const fs::path& right) {
+            return left.wstring().size() > right.wstring().size();
+        });
+    for (const auto& directory : orderedDirectories) {
+        if (samePath(directory, fs::path(L"D:\\TLG")) || !fs::exists(directory))
+            continue;
+        if (isReparsePoint(directory) || !fs::is_directory(directory)) {
+            throw std::runtime_error(
+                "source cleanup directory changed: " + utf8(directory));
+        }
+        if (!fs::is_empty(directory))
+            continue;
+        if (progress)
+            progress(L"Удаление пустого исходного каталога: " + directory.wstring());
+        std::error_code error;
+        if (!fs::remove(directory, error) || error) {
+            throw std::runtime_error(
+                "cannot remove empty source directory: " + utf8(directory) +
+                (error ? "; " + error.message() : std::string()));
+        }
+    }
+}
+
 ServiceRestorePlan planServiceRestore(
     const fs::path& archiveDirectory,
     const fs::path& restoreRoot)
@@ -2696,33 +2770,7 @@ ServiceArchiveResult cleanupServiceArchiveSources(
             deletedFiles.push_back(source);
         }
 
-        std::set<fs::path> candidateDirectories;
-        for (const auto& file : deletedFiles) {
-            fs::path current = file.parent_path();
-            for (const auto& mapping : mappings) {
-                if (!isPathEqualOrBelow(current, mapping.source))
-                    continue;
-                while (isPathEqualOrBelow(current, mapping.source)) {
-                    if (!samePath(current, fs::path(L"D:\\TLG")))
-                        candidateDirectories.insert(current);
-                    if (samePath(current, mapping.source))
-                        break;
-                    current = current.parent_path();
-                }
-                break;
-            }
-        }
-        std::vector<fs::path> orderedDirectories(
-            candidateDirectories.begin(), candidateDirectories.end());
-        std::sort(
-            orderedDirectories.begin(), orderedDirectories.end(),
-            [](const fs::path& left, const fs::path& right) {
-                return left.wstring().size() > right.wstring().size();
-            });
-        for (const auto& directory : orderedDirectories) {
-            std::error_code error;
-            fs::remove(directory, error); // Empty directories only.
-        }
+        removeArchivedSourceEmptyDirectories(mappings, progress);
 
         removeServiceRuntimeCleanupDirectories(
             runtimeCleanupDirectories, progress);

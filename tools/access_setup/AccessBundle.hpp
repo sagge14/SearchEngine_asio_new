@@ -16,5 +16,4 @@ bool VerifyToken(const Json& token, const std::string& pem);
 void AddToken(Json& tokens, const Json& token);
 Json MakePackage(const Json& request, const std::string& public_key, const Json& tokens);
 bool AuthorityUsesPublicKey(const Json& state, const std::string& pem);
-std::filesystem::path RetireToBackup(const std::filesystem::path& path);
 }

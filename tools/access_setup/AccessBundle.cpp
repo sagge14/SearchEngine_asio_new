@@ -150,7 +150,6 @@ void InstallTrust(const std::filesystem::path& data, const std::string& pem, con
     try {
         for (const auto& token : tokens) { const auto f = auth_db::parseTokenFields(token);
             store.upsertClient(f.client_id, f.client_name, f.device_type, f.device_id, true, f.signature_meta, true, true); }
-        if (existed && original != pem) WriteBytes(data / "issuer-public.before-access.pem", original);
         WriteBytes(key, pem); published = true;
         store.commitTransaction();
     } catch (...) {
@@ -166,21 +165,6 @@ bool AuthorityUsesPublicKey(const Json& state, const std::string& pem) {
     Require(state.is_object() && state.contains("public_key_fingerprint") &&
             state.at("public_key_fingerprint").is_string(), "Invalid authority state");
     return state.at("public_key_fingerprint").get<std::string>() == PublicKeyFingerprint(pem);
-}
-std::filesystem::path RetireToBackup(const std::filesystem::path& path) {
-    Require(!path.empty() && path.has_filename(), "Backup path is required");
-    if (!std::filesystem::exists(path)) return {};
-    auto backup = path;
-    backup += L".before-reissue";
-    if (std::filesystem::exists(backup)) {
-        backup += L"-";
-        backup += std::to_wstring(GetTickCount64());
-    }
-    std::error_code error;
-    std::filesystem::rename(path, backup, error);
-    Require(!error && std::filesystem::exists(backup) && !std::filesystem::exists(path),
-            "Cannot retire existing access files");
-    return backup;
 }
 Json MakePackage(const Json& request, const std::string& public_key, const Json& tokens) {
     Require(tokens.is_array(), "Invalid client directory");

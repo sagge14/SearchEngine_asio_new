@@ -2398,8 +2398,10 @@ void validateWorkstationDestinationRoots(
             isContained(destination, layout.standRoot))
         {
             throw std::runtime_error(
-                "workstation destination overlaps the archive stand: " +
-                utf8(destination));
+                "workstation destination overlaps the archive stand; "
+                "merging is not allowed.\n  Destination: " +
+                utf8(destination) + "\n  Archive stand: " +
+                utf8(layout.standRoot));
         }
         for (std::size_t other = index + 1;
              other < destinations.size(); ++other)
@@ -2408,8 +2410,10 @@ void validateWorkstationDestinationRoots(
                 isContained(destinations[other], destination))
             {
                 throw std::runtime_error(
-                    "workstation destination roots overlap: " +
-                    utf8(destination));
+                    "workstation destination roots overlap; "
+                    "merging is not allowed.\n  First destination: " +
+                    utf8(destination) + "\n  Second destination: " +
+                    utf8(destinations[other]));
             }
         }
         const WorkstationDirectoryInspection inspection =
@@ -2744,7 +2748,9 @@ StandSummary generateServiceArchiveStand(
         isContained(logicalRoot, restoreRoot))
     {
         throw std::invalid_argument(
-            "restore root must be outside the archive stand");
+            "restore root must be outside the archive stand; "
+            "merging is not allowed.\n  Archive stand: " + utf8(logicalRoot) +
+            "\n  Restore root: " + utf8(restoreRoot));
     }
     if (fs::exists(physicalRoot))
         throw std::invalid_argument("stand root already exists");
@@ -2919,7 +2925,11 @@ StandSummary prepareServiceArchiveStand(const fs::path& root)
     if (isContained(newRestoreRoot, newArchiveRoot) ||
         isContained(newArchiveRoot, newRestoreRoot))
     {
-        throw std::runtime_error("portable restore root overlaps archive stand");
+        throw std::runtime_error(
+            "portable restore root overlaps archive stand; "
+            "merging is not allowed.\n  Archive stand: " + utf8(newArchiveRoot) +
+            "\n  Restore root: " + utf8(newRestoreRoot) +
+            "\nChoose separate folders; neither may contain the other.");
     }
 
     json archive = readJson(physicalRoot / kArchiveManifestName);

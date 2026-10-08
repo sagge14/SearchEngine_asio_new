@@ -806,6 +806,10 @@ try {
         @{
             Source = 'Archive-SearchEngineService.bat'
             Destination = 'Archive-SearchEngineService.bat'
+        },
+        @{
+            Source = 'List-SearchEngineServices.bat'
+            Destination = 'List-SearchEngineServices.bat'
         }
     )
     foreach ($batchFile in $portableBatchFiles) {
@@ -911,7 +915,8 @@ try {
         'Remove-SearchEngineAuthKeys.bat',
         'Verify-Package.bat',
         'Configure-SearchEngineService.bat',
-        'Archive-SearchEngineService.bat'
+        'Archive-SearchEngineService.bat',
+        'List-SearchEngineServices.bat'
     )) {
         $protectedFiles += Get-Item -LiteralPath `
             (Join-Path $stagingDirectory $name)
@@ -942,7 +947,7 @@ try {
     [IO.File]::WriteAllLines(
         (Join-Path $stagingDirectory 'package-checksums.sha256'),
         $checksumLines,
-        [Text.Encoding]::ASCII
+        (New-Object Text.UTF8Encoding($false))
     )
     $sourceFingerprint = Get-SearchEngineServiceSourceFingerprint `
         -ProjectRoot $projectRoot

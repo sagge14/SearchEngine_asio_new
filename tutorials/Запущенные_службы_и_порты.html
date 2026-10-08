@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Запущенные службы SearchEngine: годы и порты</title>
+<style>
+body { font-family: "Segoe UI", Calibri, sans-serif; line-height: 1.5; max-width: 920px; margin: 2rem auto; padding: 0 1.2rem; color: #1f1f1f; background: #fafafa; }
+h2 { border-bottom: 2px solid #3498db; padding-bottom: .2rem; }
+code { font-family: Consolas, monospace; overflow-wrap: anywhere; }
+li { margin: .4rem 0; }
+/* Keep field names readable; narrow screens scroll the table. */
+.table-scroll { max-width: 100%; overflow-x: auto; }
+table th:first-child, table td:first-child {
+  width: 22%;
+  min-width: 12rem;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+table th:first-child code, table td:first-child code {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+@media print {
+  table th:first-child, table td:first-child { min-width: 0; }
+  table th:first-child code, table td:first-child code { overflow-wrap: anywhere; }
+}
+</style>
+</head>
+<body>
+<nav><a href="00_Батники_серверного_пакета.html">Все батники</a> · <a href="Настройки_сервера.html">Настройки сервера</a> · <a href="Заморозка_и_архивация_сервера.html">Заморозка</a></nav>
+<h1>Запущенные службы SearchEngine: годы и порты</h1>
+<p><code>List-SearchEngineServices.bat</code> показывает работающие службы поиска на компьютере, где он запущен. Данные берутся из Windows и рабочих настроек каждой службы, включая архивные экземпляры.</p>
+<h2>Как пользоваться</h2>
+<ol>
+<li>Откройте папку серверного комплекта и запустите <code>List-SearchEngineServices.bat</code>. Рядом должна находиться папка <code>tools</code> с соответствующей версией <code>SearchEngineConfig.exe</code>.</li>
+<li>Выберите язык, как в остальных батниках комплекта.</li>
+<li>Посмотрите блок каждой службы: имя, год, порт в настройках, открытые TCP-порты, номер процесса (PID) и путь к рабочему <code>Settings.json</code>. Каждый параметр показан с новой строки.</li>
+<li>Нажмите любую клавишу, чтобы закрыть окно. Чтобы обновить список, запустите батник повторно.</li>
+</ol>
+<h2>Что означают значения</h2>
+<ul>
+<li><strong>Год</strong> и <strong>порт в настройках</strong> прочитаны из <code>Settings.json</code> в каталоге данных зарегистрированной службы. Год не угадывается по её имени, порт не вычисляется по году.</li>
+<li><strong>Открытые TCP-порты</strong> — фактически слушающие порты процесса этой службы по данным Windows. Учитываются IPv4 и IPv6; одинаковый номер выводится один раз.</li>
+<li><strong>«-»</strong> означает, что у процесса не обнаружен слушающий TCP-порт. Служба могла ещё не открыть порт либо изменить состояние во время проверки.</li>
+<li><strong>«?»</strong> означает недоступные данные. Сообщение поясняет, какие сведения прочитать не удалось; остальные службы всё равно показываются.</li>
+</ul>
+<p>Если настройки менялись после запуска, сохранённый порт может отличаться от открытого. Для подключения проверяйте фактически открытый порт. Год из файла тоже является сохранённой настройкой, а не ответом работающего сервера.</p>
+<p>Остановленные службы, обычные консольные запуски программы и серверы других компьютеров в список не входят. Батник не запускает, не останавливает и не перенастраивает службы. Если работающих служб нет, он прямо сообщает об этом.</p>
+<h2>Пример для видео</h2>
+<p>На учебном компьютере с уже работающими службами 2025 и 2026 годов запустите батник. Покажите оба блока, их годы, фактические порты и разные пути настроек. Затем объясните, какой адрес компьютера и порт нужно указать в клиенте для каждого источника.</p>
+</body>
+</html>

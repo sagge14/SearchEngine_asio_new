@@ -2,6 +2,7 @@
 #include "TokenDocument.hpp"
 #include "TokenLoader.hpp"
 #include "CryptoStub.hpp"
+#include "AuthorityRecovery.hpp"
 #include "Auth/AuthClientStore.h"
 #include "Auth/IdentitySigning.h"
 #include "Auth/RsaIdentitySignatureVerifier.h"
@@ -99,13 +100,56 @@ int main() {
         const auto fingerprint=access_setup::PublicKeyFingerprint(public_key);
         Check(access_setup::AuthorityUsesPublicKey({{"public_key_fingerprint",fingerprint}},public_key),"matching authority key is accepted");
         Check(!access_setup::AuthorityUsesPublicKey({{"public_key_fingerprint",fingerprint+"00"}},public_key),"changed authority key is detected");
-        const auto retire=root/"keys-to-retire";fs::create_directories(retire);
-        access_setup::WriteBytes(retire/"public.pem",public_key);
-        const auto backup=access_setup::RetireToBackup(retire);
-        Check(!fs::exists(retire)&&fs::exists(backup/"public.pem"),"old keystore is retired to a backup path");
-        access_setup::WriteBytes(retire,"replaced");
-        const auto second=access_setup::RetireToBackup(retire);
-        Check(!fs::exists(retire)&&second!=backup&&fs::exists(second),"a second reissue keeps the first backup");
+        auto usb=Identity("USB-1",a.device_id.c_str());usb.device_type="usb";usb.device_id="USB-HARDWARE-123";
+        const auto oldUsb=Token(usb,private_key);
+        const auto statePath=root/L"профиль администратора"/"access-authority.json";
+        Json state={{"computer_uuid",a.device_id},{"role","client_server"},{"services",Json::array({"A","B"})},
+            {"public_key_fingerprint",fingerprint},{"tokens",Json::array({ta,tb,oldUsb})}};
+        access_setup::WriteDocument(statePath,state);
+        const auto oldEncrypted=Bytes(keys.private_enc);
+        auto badState=state;badState["tokens"].push_back(ta);
+        Reject([&]{token_issuer::RecoverAuthority(keys,statePath,badState,"new-password");},"invalid recovery directory rejected before changing old keys");
+        Check(Bytes(keys.private_enc)==oldEncrypted,"invalid preparation preserves active keys");
+        const auto foreign=token_issuer::AuthorityRecoveryPending(keys);fs::create_directories(foreign);
+        access_setup::WriteBytes(foreign/"unrelated.txt","do not delete");
+        Reject([&]{token_issuer::RecoverAuthority(keys,statePath,state,"new-password");},"recovery refuses to delete an unrelated pending directory");
+        Check(Bytes(foreign/"unrelated.txt")=="do not delete" && Bytes(keys.private_enc)==oldEncrypted,"unrelated files and original keys remain intact");
+        fs::remove_all(foreign);
+        token_issuer::RecoverAuthority(keys,statePath,state,"new-password");
+        const auto next=access_setup::ReadDocument(statePath);const auto newPublic=Bytes(keys.public_key);
+        Check(newPublic!=public_key && next["reissue_prepared"]==true,"recovery prepares a new key and keeps activation separate");
+        Check(Bytes(root/"B"/"issuer-public.pem")==public_key,"preparation does not switch existing servers");
+        Reject([&]{token_issuer::UnlockPrivateKey(keys,"disposable-access-test-password");},"old password no longer unlocks replaced keys");
+        token_issuer::UnlockPrivateKey(keys,"new-password");Check(true,"new password unlocks replaced keys");
+        for(const auto& t:next["tokens"]) Check(access_setup::VerifyToken(t,newPublic),"every recovered PC/USB token verifies with the new key");
+        Check(!access_setup::VerifyToken(ta,newPublic),"old token signature is rejected by new public key");
+        Check(next["tokens"][2]["client_id"]==oldUsb["client_id"] && next["tokens"][2]["device_id"]==oldUsb["device_id"],"USB identity and binding preserved");
+        access_setup::InstallTrust(root/"B",newPublic,next["tokens"]);
+        {auth::AuthClientStore store;store.open(root/"B"/"auth_clients.sqlite");
+         Check(!store.getClient(b.client_id)->enabled,"key replacement preserves explicitly disabled permission");
+         Check(store.getClient(c.client_id).has_value(),"key replacement retains unrelated permission rows");
+         Authenticate(store,root/"B"/"issuer-public.pem",next["tokens"][0]);}
+        Check(!fs::exists(root/"B"/"issuer-public.before-access.pem"),"server activation makes no old-public-key backup");
+        Check(!fs::exists(token_issuer::AuthorityRecoveryPending(keys)),"completed recovery removes new-key staging");
+        Check(!fs::exists(fs::path(keys.root.wstring()+L".before-reissue")),"recovery makes no old-keystore backup");
+        // Simulate a power interruption between publication of new public/private files.
+        const auto pending=token_issuer::AuthorityRecoveryPending(keys);
+        const auto staged=token_issuer::ResolveKeystorePaths(pending/"keys");
+        token_issuer::GenerateKeyPair(staged,"resumable-password");const auto stagedPrivate=token_issuer::UnlockPrivateKey(staged,"resumable-password");
+        const auto stagedPublic=Bytes(staged.public_key);auto stagedState=next;
+        for(auto& t:stagedState["tokens"])t=token_issuer::ResignToken(t,stagedPrivate);
+        stagedState["public_key_fingerprint"]=access_setup::PublicKeyFingerprint(stagedPublic);
+        access_setup::WriteDocument(pending/"state.json",stagedState);
+        const auto targetText=fs::weakly_canonical(statePath).u8string();
+        access_setup::WriteDocument(pending/"ready.json",{{"state_path",std::string(targetText.begin(),targetText.end())}});
+        access_setup::WriteBytes(keys.public_key,stagedPublic);
+        Reject([&]{token_issuer::RecoverAuthority(keys,statePath,Json{},"wrong-new-password");},"resume requires the prepared new key password");
+        Check(fs::exists(pending/"ready.json"),"failed resume preserves only new-key staging for retry");
+        Reject([&]{token_issuer::RecoverAuthority(keys,root/"wrong-state.json",Json{},"resumable-password");},"pending recovery cannot target another state file");
+        token_issuer::RecoverAuthority(keys,statePath,Json{},"resumable-password");
+        Check(Bytes(keys.public_key)==stagedPublic,"resume publishes the same staged key without generating another");
+        const auto resumed=access_setup::ReadDocument(statePath);
+        Check(access_setup::VerifyToken(resumed["tokens"][0],stagedPublic),"resumed catalogue agrees with completed key replacement");
         fs::remove_all(root);std::cout<<"Access setup: "<<checks<<" checks passed\n";return 0;
     } catch(const std::exception& e){std::cerr<<e.what()<<'\n';fs::remove_all(root);return 1;}
 }

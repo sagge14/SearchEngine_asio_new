@@ -150,6 +150,13 @@ void removeServiceRuntimeCleanupDirectories(
     const std::vector<fs::path>& roots,
     const ProgressCallback& progress = {});
 
+/// Removes empty source directories represented in the published archive,
+/// deepest first. Unarchived directories, files and the shared D:\TLG root
+/// are preserved. No reparse points are followed; deletion failures throw.
+void removeArchivedSourceEmptyDirectories(
+    const std::vector<PathMapping>& mappings,
+    const ProgressCallback& progress = {});
+
 [[nodiscard]] ServiceRestorePlan planServiceRestore(
     const fs::path& archiveDirectory,
     const fs::path& restoreRoot);

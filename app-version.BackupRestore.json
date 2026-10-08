@@ -1,7 +1,7 @@
 ﻿{
-  "formatVersion": 1,
-  "major": 0,
-  "minor": 1,
-  "patch": 3,
-  "productName": "BackupRestore"
+    "formatVersion":  1,
+    "major":  0,
+    "minor":  1,
+    "patch":  5,
+    "productName":  "BackupRestore"
 }

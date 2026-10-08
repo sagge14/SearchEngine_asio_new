@@ -323,6 +323,105 @@ TEST(ServiceArchiveCleanup, PreflightsEveryRootBeforeDeletingAnything)
     EXPECT_TRUE(fs::is_regular_file(validRoot / L"keep.txt"));
     EXPECT_TRUE(fs::is_regular_file(invalidRoot));
 }
+
+TEST(ServiceArchiveCleanup, RemovesOriginallyEmptyDaysAndMonthsAndAllowsRetry)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path source = temporary.path() / L"source";
+    const fs::path archive = temporary.path() / L"archive";
+    const std::vector<searchengine_archive::PathMapping> mappings{
+        {source / L"АВГУСТ", archive / L"АВГУСТ"},
+        {source / L"СЕНТЯБРЬ", archive / L"СЕНТЯБРЬ"}};
+    for (const auto& mapping : mappings) {
+        const fs::path day = mapping.source.filename() == L"АВГУСТ"
+            ? L"31" : L"18";
+        fs::create_directories(mapping.source / day / L"empty-child");
+        fs::create_directories(mapping.target / day / L"empty-child");
+    }
+
+    searchengine_archive::removeArchivedSourceEmptyDirectories(mappings);
+
+    EXPECT_FALSE(fs::exists(source / L"АВГУСТ"));
+    EXPECT_FALSE(fs::exists(source / L"СЕНТЯБРЬ"));
+    EXPECT_TRUE(fs::is_directory(archive / L"АВГУСТ" / L"31" / L"empty-child"));
+    EXPECT_TRUE(fs::is_directory(archive / L"СЕНТЯБРЬ" / L"18" / L"empty-child"));
+    EXPECT_NO_THROW(
+        searchengine_archive::removeArchivedSourceEmptyDirectories(mappings));
+}
+
+TEST(ServiceArchiveCleanup, PreservesUnarchivedDirectoriesAndRemainingFiles)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path source = temporary.path() / L"source";
+    const fs::path archive = temporary.path() / L"archive";
+    fs::create_directories(source / L"2026" / L"empty-day");
+    fs::create_directories(archive / L"2026" / L"empty-day");
+    for (const wchar_t* excluded : {L"OUT", L"2025", L"METH_BASES"})
+        fs::create_directories(source / excluded / L"empty-child");
+    writeTextFile(source / L"2026" / L"new.txt", "keep source content");
+    writeTextFile(archive / L"2026" / L"archived.txt", "keep archive content");
+
+    searchengine_archive::removeArchivedSourceEmptyDirectories({{source, archive}});
+
+    EXPECT_FALSE(fs::exists(source / L"2026" / L"empty-day"));
+    EXPECT_TRUE(fs::is_regular_file(source / L"2026" / L"new.txt"));
+    EXPECT_TRUE(fs::is_regular_file(archive / L"2026" / L"archived.txt"));
+    EXPECT_TRUE(fs::is_directory(archive / L"2026" / L"empty-day"));
+    for (const wchar_t* excluded : {L"OUT", L"2025", L"METH_BASES"})
+        EXPECT_TRUE(fs::is_directory(source / excluded / L"empty-child"));
+}
+
+TEST(ServiceArchiveCleanup, PreflightsEmptyDirectoryMappingsBeforeRemoval)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path source = temporary.path() / L"source";
+    const fs::path archive = temporary.path() / L"archive";
+    fs::create_directories(source / L"empty-day");
+    fs::create_directories(archive / L"empty-day");
+    const fs::path invalidArchive = temporary.path() / L"missing-archive";
+
+    EXPECT_THROW(
+        searchengine_archive::removeArchivedSourceEmptyDirectories(
+            {{source, archive}, {temporary.path() / L"other", invalidArchive}}),
+        std::runtime_error);
+    EXPECT_TRUE(fs::is_directory(source / L"empty-day"));
+    EXPECT_THROW(
+        searchengine_archive::removeArchivedSourceEmptyDirectories({{source, source}}),
+        std::runtime_error);
+    EXPECT_THROW(
+        searchengine_archive::removeArchivedSourceEmptyDirectories(
+            {{fs::path(L"D:\\"), archive}}),
+        std::runtime_error);
+}
+
+TEST(ServiceArchiveCleanup, ReportsLockedEmptyDirectoryAndSucceedsAfterUnlock)
+{
+    ServiceArchiveTemporaryDirectory temporary;
+    const fs::path source = temporary.path() / L"source";
+    const fs::path archive = temporary.path() / L"archive";
+    fs::create_directories(source / L"31");
+    fs::create_directories(archive / L"31");
+    const HANDLE directoryHandle = CreateFileW(
+        (source / L"31").c_str(), FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    ASSERT_NE(directoryHandle, INVALID_HANDLE_VALUE);
+    std::string failure;
+    try {
+        searchengine_archive::removeArchivedSourceEmptyDirectories({{source, archive}});
+    } catch (const std::exception& error) {
+        failure = error.what();
+    }
+    CloseHandle(directoryHandle);
+
+    EXPECT_NE(failure.find("cannot remove empty source directory"), std::string::npos);
+    EXPECT_NE(failure.find(utf8(source / L"31")), std::string::npos);
+    EXPECT_TRUE(fs::is_directory(source / L"31"));
+    EXPECT_NO_THROW(
+        searchengine_archive::removeArchivedSourceEmptyDirectories({{source, archive}}));
+    EXPECT_FALSE(fs::exists(source));
+    EXPECT_TRUE(fs::is_directory(archive / L"31"));
+}
 #endif
 
 TEST(ServiceArchiveCleanup, PreservesDecemberWithArchivedTelegramPaths)

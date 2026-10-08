@@ -39,12 +39,13 @@ function Get-SearchEngineServiceSourceFingerprint {
         throw 'Cannot enumerate SearchEngineService source fingerprint inputs.'
     }
     $trackedFiles = @($trackedFiles | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_)
+        -not [string]::IsNullOrWhiteSpace([string]$_) -and
+        -not ([string]$_).Replace('\', '/').StartsWith('tutorials/', [StringComparison]::OrdinalIgnoreCase)
     })
 
     # Tutorials are copied into the portable package even for a dirty candidate
     # build. Include every actual tutorial file in the fingerprint, including
-    # untracked files, so a stand cannot reuse a package with stale instructions.
+    # untracked and renamed files. The actual Tutorials tree is authoritative.
     $tutorialRoot = Join-Path $ProjectRoot 'tutorials'
     $tutorialFiles = @()
     if (Test-Path -LiteralPath $tutorialRoot -PathType Container) {
@@ -56,9 +57,12 @@ function Get-SearchEngineServiceSourceFingerprint {
 
     $accessFiles = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'tools\access_setup') -File | ForEach-Object { $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/') })
     $sourceFiles = @($trackedFiles + $tutorialFiles + $accessFiles + @(
+        'tools/token_issuer/AuthorityRecovery.cpp',
+        'tools/token_issuer/AuthorityRecovery.hpp',
         'deployment/SearchEngineServicePortable/Resolve-ServiceInstance.cmd',
         'deployment/SearchEngineServicePortable/Setup-Access.bat',
-        'deployment/SearchEngineServicePortable/Remove-SearchEngineAuthKeys.bat'
+        'deployment/SearchEngineServicePortable/Remove-SearchEngineAuthKeys.bat',
+        'deployment/SearchEngineServicePortable/List-SearchEngineServices.bat'
     ) | Sort-Object -Unique)
     if ($sourceFiles.Count -eq 0) {
         throw 'SearchEngineService source fingerprint has no source inputs.'

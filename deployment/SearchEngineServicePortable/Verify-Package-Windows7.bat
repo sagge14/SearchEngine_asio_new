@@ -3,56 +3,21 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 set "PACKAGE_ROOT=%~dp0"
 set "CHECKSUM_FILE=%PACKAGE_ROOT%package-checksums.sha256"
+set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 if not exist "%CHECKSUM_FILE%" (
     echo ERROR: package-checksums.sha256 is missing.
     exit /b 1
 )
-
-where.exe certutil.exe >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: certutil.exe is not available.
+if not exist "%POWERSHELL%" (
+    echo ERROR: Windows PowerShell is missing.
     exit /b 1
 )
 
-set "VERIFY_FAILED="
-for /f "usebackq tokens=1,*" %%H in ("%CHECKSUM_FILE%") do call :VERIFY_FILE "%%I" "%%H"
-if defined VERIFY_FAILED exit /b 1
-
-for /R "%PACKAGE_ROOT%" %%F in (searchclient-auth-token.json) do if exist "%%~fF" (
-    echo ERROR: auth token must be stored in the current user's LocalAppData, not in the portable package.
-    exit /b 1
-)
-for /R "%PACKAGE_ROOT%" %%F in (searchclient-auth-request.json) do if exist "%%~fF" (
-    echo ERROR: unsigned auth request must not be stored in the portable package.
-    exit /b 1
-)
+rem UTF-8 paths are read directly by PowerShell, including Cyrillic HTML names.
+rem Hashing uses .NET so this check also works with Windows PowerShell 2.0.
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $root=[IO.Path]::GetFullPath($env:PACKAGE_ROOT).TrimEnd([char]92)+[char]92; $count=0; $hash=[Security.Cryptography.SHA256]::Create(); try { foreach ($line in [IO.File]::ReadAllLines($env:CHECKSUM_FILE,[Text.Encoding]::UTF8)) { if ($line.Trim().Length -eq 0) { continue }; if ($line -notmatch '^([0-9A-Fa-f]{64})  (.+)$') { throw 'Invalid checksum record.' }; $expected=$Matches[1]; $relative=$Matches[2].Replace('/','\'); if ($relative.StartsWith('data\',[StringComparison]::OrdinalIgnoreCase)) { continue }; if ([IO.Path]::IsPathRooted($relative)) { throw 'Unsafe checksum path.' }; $file=[IO.Path]::GetFullPath([IO.Path]::Combine($root,$relative)); if (-not $file.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)) { throw 'Checksum path escapes the package.' }; if (-not [IO.File]::Exists($file)) { throw ('Package file is missing: '+$relative) }; $stream=[IO.File]::OpenRead($file); try { $actual=[BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-','') } finally { $stream.Dispose() }; if (-not $actual.Equals($expected,[StringComparison]::OrdinalIgnoreCase)) { throw ('Package file is damaged: '+$relative) }; $count++ }; if ($count -eq 0) { throw 'No protected package files were listed.' } } finally { $hash.Dispose() }; if ([IO.Directory]::GetFiles($root,'searchclient-auth-token.json',[IO.SearchOption]::AllDirectories).Length -ne 0) { throw 'auth token must be stored in the current user LocalAppData, not in the portable package.' }; if ([IO.Directory]::GetFiles($root,'searchclient-auth-request.json',[IO.SearchOption]::AllDirectories).Length -ne 0) { throw 'unsigned auth request must not be stored in the portable package.' } } catch { Write-Host ('ERROR: '+$_.Exception.Message); exit 1 }; exit 0"
+if errorlevel 1 exit /b 1
 
 if /I not "%~1"=="/quiet" echo Package verification completed successfully.
-exit /b 0
-
-:VERIFY_FILE
-set "RELATIVE_FILE=%~1"
-set "EXPECTED_HASH=%~2"
-set "ACTUAL_HASH="
-
-rem Package data is a mutable template (Settings.json, OEM866.INI, ignore.txt).
-rem Older checksum files may still list those paths; skip the whole data\ tree.
-set "RELATIVE_FILE=%RELATIVE_FILE:/=\%"
-set "RELATIVE_PREFIX=%RELATIVE_FILE:~0,5%"
-if /I "%RELATIVE_PREFIX%"=="data\" exit /b 0
-
-if not exist "%PACKAGE_ROOT%%RELATIVE_FILE%" (
-    echo ERROR: Package file is missing: %RELATIVE_FILE%
-    set "VERIFY_FAILED=1"
-    exit /b 1
-)
-
-for /f "delims=" %%A in ('certutil.exe -hashfile "%PACKAGE_ROOT%%RELATIVE_FILE%" SHA256 2^>nul ^| findstr.exe /V ":"') do set "ACTUAL_HASH=%%A"
-set "ACTUAL_HASH=%ACTUAL_HASH: =%"
-if /I not "%ACTUAL_HASH%"=="%EXPECTED_HASH%" (
-    echo ERROR: Package file is damaged: %RELATIVE_FILE%
-    set "VERIFY_FAILED=1"
-    exit /b 1
-)
 exit /b 0

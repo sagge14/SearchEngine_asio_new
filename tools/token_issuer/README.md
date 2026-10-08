@@ -60,7 +60,7 @@ a Save dialog. `--create-request` also accepts an optional `--id`; signing keeps
 the identity in the request. `--yes` skips confirmation/overwrite prompts;
 `--password-env NAME` supplies the signing password for automation.
 
-User instructions in Russian: [offline enrollment](../../tutorials/REMOTE_PC_TOKEN.html).
+User instructions in Russian: [offline enrollment](../../tutorials/Токен_удалённого_ПК.html).
 
 ## Crypto / signature
 
@@ -109,6 +109,19 @@ Non-interactive:
 ```
 
 When `-TokenPath` or BAT `/token <path>` is supplied, the source menu is skipped.
+
+## Lost issuer password
+
+Use Setup-Access menu 6 to prepare new issuer keys and re-sign the existing authority catalogue. No old private/public key backup is created. Permission databases are kept; activation is a separate menu 7 step. USB reissue is menu 8 in Setup-Access or menu 5 in Issue-SearchClientToken. It checks the connected hardware serial and retains the four identity fields.
+
+CLI (use disposable paths for testing):
+
+```powershell
+.\SearchClientTokenIssuer.exe --reissue-authority <catalogue.json> --authority-output <access-authority.json> --keystore <keys>
+.\SearchClientTokenIssuer.exe --reissue-token <old-token.json> --drive E: --keystore <keys>
+```
+
+Recovery validates the new key before publication. `keys.reissue-pending` contains only NEW keys and the newly signed state; repeating the operation resumes that key using its new password. It is removed on success. The lost old password cannot be reset. Servers trust one key at a time; old signatures stop working after server activation. See `tutorials/Утрачен_пароль_ключа_издателя.html`.
 
 ## Build
 

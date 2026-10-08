@@ -336,6 +336,7 @@ if(BUILD_CONFIG_TOOL)
             nlohmann_json::nlohmann_json
             ws2_32
             advapi32
+            iphlpapi
     )
     target_compile_definitions(
             SearchEngineConfig
@@ -882,6 +883,7 @@ if(BUILD_TOKEN_ISSUER)
             tools/token_issuer/TokenDefaults.cpp
             tools/token_issuer/TokenDocument.cpp
             tools/token_issuer/CryptoStub.cpp
+            tools/token_issuer/AuthorityRecovery.cpp
     )
     target_include_directories(
             SearchClientTokenIssuer
@@ -1197,6 +1199,7 @@ if(WIN32 AND BUILD_TOKEN_ISSUER AND BUILD_AUTH_DB_TOOL)
         tools/token_issuer/TokenDocument.cpp
         tools/token_issuer/TokenAscii.cpp
         tools/token_issuer/CryptoStub.cpp
+        tools/token_issuer/AuthorityRecovery.cpp
         src/Auth/AuthClientStore.cpp
         src/Auth/IssuerPublicKeyPath.cpp
         src/Auth/RsaIdentitySignatureVerifier.cpp

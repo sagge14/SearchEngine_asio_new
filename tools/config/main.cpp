@@ -1,6 +1,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
 
 #include <nlohmann/json.hpp>
 
@@ -20,7 +21,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -485,6 +488,8 @@ struct InstalledSearchEngineService {
     std::wstring instance;
     std::wstring serviceName;
     std::wstring displayName;
+    DWORD state{};
+    DWORD processId{};
 };
 
 std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
@@ -493,17 +498,15 @@ std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
     DWORD bytesNeeded = 0;
     DWORD serviceCount = 0;
     DWORD resumeHandle = 0;
-    EnumServicesStatusExW(
+    const BOOL enumerated = EnumServicesStatusExW(
         manager.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
         SERVICE_STATE_ALL, nullptr, 0, &bytesNeeded, &serviceCount,
         &resumeHandle, nullptr
     );
-    if (GetLastError() != ERROR_MORE_DATA) {
-        if (bytesNeeded == 0) {
-            return {};
-        }
-        throw std::runtime_error("cannot enumerate Windows services");
-    }
+    const DWORD enumerationError = enumerated ? ERROR_SUCCESS : GetLastError();
+    if (!enumerated && enumerationError != ERROR_MORE_DATA)
+        throw std::runtime_error("cannot enumerate Windows services; Win32=" + std::to_string(enumerationError));
+    if (bytesNeeded == 0) return {};
 
     std::vector<unsigned char> buffer(bytesNeeded);
     resumeHandle = 0;
@@ -526,7 +529,9 @@ std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
         const std::wstring name = services[index].lpServiceName;
         if (name == L"SearchEngineService") {
             instances.push_back({
-                L"default", name, services[index].lpDisplayName
+                L"default", name, services[index].lpDisplayName,
+                services[index].ServiceStatusProcess.dwCurrentState,
+                services[index].ServiceStatusProcess.dwProcessId
             });
             continue;
         }
@@ -534,7 +539,9 @@ std::vector<InstalledSearchEngineService> installedSearchEngineInstances()
             std::wstring instance = name.substr(prefixLength);
             if (isValidInstanceId(instance)) {
                 instances.push_back({
-                    std::move(instance), name, services[index].lpDisplayName
+                    std::move(instance), name, services[index].lpDisplayName,
+                    services[index].ServiceStatusProcess.dwCurrentState,
+                    services[index].ServiceStatusProcess.dwProcessId
                 });
             }
         }
@@ -999,6 +1006,129 @@ json readJson(const fs::path& path)
     json value;
     input >> value;
     return value;
+}
+
+fs::path installedServiceSettingsPath(const std::wstring& serviceName)
+{
+    ScManager manager;
+    SC_HANDLE service = OpenServiceW(manager.get(), serviceName.c_str(), SERVICE_QUERY_CONFIG);
+    if (!service) serviceApiError("OpenService", GetLastError(), serviceName);
+    struct Guard { SC_HANDLE h; ~Guard() { CloseServiceHandle(h); } } guard{service};
+    DWORD size = 0;
+    QueryServiceConfigW(service, nullptr, 0, &size);
+    if (!size) serviceApiError("QueryServiceConfig", GetLastError(), serviceName);
+    std::vector<unsigned char> buffer(size);
+    auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+    if (!QueryServiceConfigW(service, config, size, &size))
+        serviceApiError("QueryServiceConfig", GetLastError(), serviceName);
+    const std::wstring command = config->lpBinaryPathName ? config->lpBinaryPathName : L"";
+    const auto dataDir = parseDataDirFromImagePath(command);
+    if (!dataDir || dataDir->empty()) throw std::runtime_error("service has no --data-dir");
+    fs::path directory(*dataDir);
+    if (directory.is_relative()) {
+        const auto begin = command.find_first_not_of(L" \t");
+        if (begin == std::wstring::npos) throw std::runtime_error("service has no executable path");
+        const bool quoted = command[begin] == L'"';
+        const auto start = begin + (quoted ? 1 : 0);
+        const auto end = quoted ? command.find(L'"', start) : command.find_first_of(L" \t", start);
+        const fs::path executable(command.substr(start, end - start));
+        if (!executable.is_absolute()) throw std::runtime_error("service executable path is not absolute");
+        directory = executable.parent_path() / directory;
+    }
+    return directory.lexically_normal() / L"Settings.json";
+}
+
+std::map<DWORD, std::set<unsigned short>> listeningServicePorts()
+{
+    std::map<DWORD, std::set<unsigned short>> ports;
+    for (const ULONG family : {AF_INET, AF_INET6}) {
+        DWORD size = 0;
+        DWORD error = GetExtendedTcpTable(nullptr, &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
+        if (error == ERROR_NOT_SUPPORTED) continue;
+        std::vector<unsigned char> buffer;
+        for (int attempt = 0; error == ERROR_INSUFFICIENT_BUFFER && attempt < 4; ++attempt) {
+            buffer.resize(size);
+            error = GetExtendedTcpTable(buffer.data(), &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
+        }
+        if (error != NO_ERROR) throw std::runtime_error("GetExtendedTcpTable: Win32=" + std::to_string(error));
+        if (buffer.empty()) continue;
+        if (family == AF_INET) {
+            const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+            for (DWORD i = 0; i < table->dwNumEntries; ++i)
+                ports[table->table[i].dwOwningPid].insert(ntohs(static_cast<u_short>(table->table[i].dwLocalPort)));
+        } else {
+            const auto* table = reinterpret_cast<const MIB_TCP6TABLE_OWNER_PID*>(buffer.data());
+            for (DWORD i = 0; i < table->dwNumEntries; ++i)
+                ports[table->table[i].dwOwningPid].insert(ntohs(static_cast<u_short>(table->table[i].dwLocalPort)));
+        }
+    }
+    return ports;
+}
+
+int listRunningServicesCommand(const std::vector<std::wstring>& args)
+{
+    const bool russian = interactiveLanguage(args) == UiLanguage::Russian;
+    const auto services = installedSearchEngineInstances();
+    const auto count = std::count_if(services.begin(), services.end(), [](const auto& service) {
+        return service.state == SERVICE_RUNNING;
+    });
+    writeInteractive(russian ? L"\nЗапущенные службы SearchEngine на этом компьютере\n"
+                             : L"\nRunning SearchEngine services on this computer\n");
+    if (!count) {
+        writeInteractive(russian ? L"Запущенных служб не найдено.\n" : L"No running services were found.\n");
+        return 0;
+    }
+    bool complete = true;
+    std::map<DWORD, std::set<unsigned short>> ports;
+    bool portsKnown = true;
+    try { ports = listeningServicePorts(); }
+    catch (const std::exception& error) {
+        complete = portsKnown = false;
+        writeInteractive((russian ? L"Не удалось получить открытые TCP-порты: " : L"Could not read TCP listeners: ") + utf16(error.what()) + L"\n");
+    }
+    writeInteractive(russian ? L"\nСлужба | Год | Порт в настройках | Открытые TCP-порты | PID\n"
+                             : L"\nService | Year | Configured port | Listening TCP ports | PID\n");
+    for (const auto& service : services) {
+        if (service.state != SERVICE_RUNNING) continue;
+        std::wstring year = L"?", configuredPort = L"?", warning;
+        fs::path settings;
+        try {
+            settings = installedServiceSettingsPath(service.serviceName);
+            const json root = readJson(settings);
+            const json& config = root.at("config");
+            const json& yearValue = config.at("year");
+            year = utf16(yearValue.is_string() ? yearValue.get<std::string>() : yearValue.dump());
+            const auto number = config.at(config.contains("port") ? "port" : "asio_port").get<int>();
+            if (number < 1 || number > 65535) throw std::runtime_error("invalid configured TCP port");
+            configuredPort = std::to_wstring(number);
+        } catch (const std::exception& error) {
+            complete = false;
+            warning = utf16(error.what());
+        }
+        std::wstring listeners = portsKnown ? L"-" : L"?";
+        const auto found = ports.find(service.processId);
+        if (portsKnown && service.processId != 0 && found != ports.end()) {
+            listeners.clear();
+            for (const auto port : found->second) {
+                if (!listeners.empty()) listeners += L", ";
+                listeners += std::to_wstring(port);
+            }
+        }
+        writeInteractive(service.serviceName + L" | " + year + L" | " + configuredPort +
+            L" | " + listeners + L" | " + std::to_wstring(service.processId) + L"\n");
+        if (!settings.empty()) writeInteractive(L"  " + settings.wstring() + L"\n");
+        if (!warning.empty()) writeInteractive((russian ? L"  Не удалось прочитать настройки: " : L"  Could not read settings: ") + warning + L"\n");
+    }
+    writeInteractive(russian
+        ? L"\nГод и порт в настройках прочитаны из Settings.json каждой службы.\n"
+          L"Открытые порты определены Windows по PID (IPv4 и IPv6).\n"
+          L"- означает отсутствие TCP-порта, ? — данные недоступны.\n"
+          L"Список отражает состояние на момент проверки; службы не изменяются.\n"
+        : L"\nYear and configured port come from each service's Settings.json.\n"
+          L"Listening ports come from Windows by PID (IPv4 and IPv6).\n"
+          L"- means no TCP listener; ? means unavailable information.\n"
+          L"This is a point-in-time snapshot; no services are changed.\n");
+    return complete ? 0 : 1;
 }
 
 void mergeJson(json& destination, const json& source)
@@ -2679,6 +2809,7 @@ void printUsage()
         << "  script-message --language ru|en --id ID [--arg1 VALUE ...]\n"
         << "  validate-script-messages\n"
         << "  inspect-installed [--instance ID]\n"
+        << "  list-running-services [--language auto|ru|en]\n"
         << "  service-control --action stop|start|status [--instance ID]\n"
         << "            [--timeout-seconds N]\n"
         << "  check-port --port N\n"
@@ -2755,6 +2886,9 @@ int wmain(int argc, wchar_t* argv[])
         }
         if (command == L"inspect-installed") {
             return inspectInstalledCommand(args);
+        }
+        if (command == L"list-running-services") {
+            return listRunningServicesCommand(args);
         }
         if (command == L"service-control") {
             return serviceControlCommand(args);
