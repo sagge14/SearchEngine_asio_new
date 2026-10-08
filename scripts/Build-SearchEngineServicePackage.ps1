@@ -1,0 +1,174 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('x64', 'x86', 'x86-modern', 'All')]
+    [string]$Architecture = 'All',
+    [string]$SettingsPath,
+    [string]$OutputDirectory,
+    [string]$VCRedistPath,
+    [switch]$SkipConfigure,
+    [string]$CloudRoot,
+    [string]$CloudReleaseId,
+    [switch]$SkipCloudPublish,
+    [switch]$SkipVersionBump,
+    [Nullable[int]]$Year
+)
+
+$ErrorActionPreference = 'Stop'
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'AppVersion.ps1')
+
+$productName = 'SearchEngineService'
+$releaseSettingsYear = if ($PSBoundParameters.ContainsKey('Year')) {
+    [int]$Year
+} else {
+    (Get-Date).Year
+}
+if ($releaseSettingsYear -lt 2000 -or $releaseSettingsYear -gt 2099) {
+    throw "Year must be inside 2000..2099; got $releaseSettingsYear."
+}
+$lockScript = Resolve-SearchEngineReleaseScript -ProjectRoot $projectRoot `
+    -ScriptName 'Enter-WorkspaceReleaseLock.ps1'
+if (-not $SkipCloudPublish) {
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = $env:WORKSPACE_RELEASE_CLOUD_ROOT
+    }
+    if ([string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $CloudRoot = [Environment]::GetEnvironmentVariable('WORKSPACE_RELEASE_CLOUD_ROOT', 'User')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CloudRoot) -and
+        -not (Test-Path -LiteralPath $CloudRoot -PathType Container)) {
+        throw "Configured release cloud root is unavailable: $CloudRoot"
+    }
+}
+$releaseLock = & $lockScript -ProjectRoot $projectRoot
+try {
+$versionInfo = Sync-SearchEngineAppVersion `
+    -ProjectRoot $projectRoot `
+    -ProductName $productName `
+    -BumpPatch:(-not $SkipVersionBump)
+if ([string]::IsNullOrWhiteSpace($CloudReleaseId)) {
+    $CloudReleaseId = $versionInfo.ReleaseId
+}
+
+if ($Architecture -eq 'All' -and
+    (-not [string]::IsNullOrWhiteSpace($OutputDirectory) -or
+     -not [string]::IsNullOrWhiteSpace($VCRedistPath))) {
+    throw '-OutputDirectory and -VCRedistPath require a single -Architecture.'
+}
+
+$builds = if ($Architecture -eq 'All') {
+    @(
+        @{ Architecture = 'x64'; Configure = 'windows-x64'; Build = 'windows-x64-release' },
+        @{ Architecture = 'x86-modern'; Configure = 'windows-x86'; Build = 'windows-x86-release' },
+        @{ Architecture = 'x86'; Configure = 'windows7-x86'; Build = 'windows7-x86-release' }
+    )
+} elseif ($Architecture -eq 'x86') {
+    @(@{ Architecture = 'x86'; Configure = 'windows7-x86'; Build = 'windows7-x86-release' })
+} elseif ($Architecture -eq 'x86-modern') {
+    @(@{ Architecture = 'x86-modern'; Configure = 'windows-x86'; Build = 'windows-x86-release' })
+} else {
+    @(@{ Architecture = 'x64'; Configure = 'windows-x64'; Build = 'windows-x64-release' })
+}
+
+foreach ($build in $builds) {
+    Push-Location $projectRoot
+    try {
+        if (-not $SkipConfigure) {
+            # Build-*Package packs explicitly; disable IDE PostBuild packaging for this tree.
+            & cmake --preset $build.Configure -DSEARCHENGINE_PACKAGE_ON_RELEASE_BUILD=OFF
+            if ($LASTEXITCODE -ne 0) {
+                throw "CMake configure '$($build.Configure)' failed with exit code $LASTEXITCODE."
+            }
+        }
+
+        # Avoid a second bump if this tree still has PACKAGE_ON_RELEASE_BUILD=ON
+        # (e.g. -SkipConfigure after an IDE packagable configure).
+        Invoke-SearchEngineCmakeBuildWithoutVersionBump {
+            & cmake --build --preset $build.Build `
+                --target SearchEngineConfig --clean-first
+            if ($LASTEXITCODE -ne 0) {
+                throw (
+                    "SearchEngineConfig $($build.Architecture) Release " +
+                    "rebuild failed with exit code $LASTEXITCODE."
+                )
+            }
+            & cmake --build --preset $build.Build `
+                --target SearchEngine SearchEngineConfig AuthDbTool `
+                SearchClientTokenIssuer SearchEngineAccessSetup SearchEngineArchive -- /m
+            if ($LASTEXITCODE -ne 0) {
+                throw (
+                    "SearchEngine, SearchEngineConfig, AuthDbTool, " +
+                    "SearchClientTokenIssuer, and SearchEngineArchive " +
+                    "$($build.Architecture) Release " +
+                    "build failed with exit code $LASTEXITCODE."
+                )
+            }
+        }
+
+        # Read-only native API checks must pass before this architecture is published.
+        & cmake "-DCONFIG_EXE=$projectRoot/out/build/$($build.Configure)/Release/SearchEngineConfig.exe" `
+            "-DTEST_ROOT=$projectRoot/out/build/$($build.Configure)/config-service-control-release-test" `
+            -P (Join-Path $projectRoot 'tests/config/SearchEngineConfigServiceControl.cmake')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Service-control native checks failed for $($build.Architecture)."
+        }
+    } finally {
+        Pop-Location
+    }
+
+    $packageArguments = @{
+        Architecture = $build.Architecture
+        SkipCloudPublish = $SkipCloudPublish
+        CloudReleaseId = $CloudReleaseId
+        Year = $releaseSettingsYear
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SettingsPath)) {
+        $packageArguments.SettingsPath = $SettingsPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
+        $packageArguments.OutputDirectory = $OutputDirectory
+    }
+    if (-not [string]::IsNullOrWhiteSpace($VCRedistPath)) {
+        $packageArguments.VCRedistPath = $VCRedistPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $packageArguments.CloudRoot = $CloudRoot
+    }
+
+    $packageOutput = @(& (Join-Path $PSScriptRoot 'New-SearchEngineServicePackage.ps1') `
+        @packageArguments)
+    $results = @($packageOutput | Where-Object {
+        $null -ne $_ -and $null -ne $_.PSObject.Properties['PackageDirectory']
+    })
+    if ($results.Count -ne 1) {
+        throw 'Packager did not return one structured package result.'
+    }
+    $package = $results[0]
+    foreach ($path in @($package.PackageDirectory, $package.PackagedExe)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+            throw "Required release artifact is missing: $path"
+        }
+    }
+    Assert-PeMatchesAppVersion -BinaryPath $package.PackagedExe `
+        -ExpectedProductVersion $versionInfo.Version `
+        -ExpectedFileVersion $versionInfo.FileVersion `
+        -ExpectedProductName $productName -ExpectedOriginalFilename 'SearchEngine.exe'
+    foreach ($name in @('package-manifest.json', 'package-checksums.sha256')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $package.PackageDirectory $name))) {
+            throw "Required package verification file is missing: $name"
+        }
+    }
+    if (-not $SkipCloudPublish -and -not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+        if (-not $package.CloudPublished) { throw 'Configured cloud publication did not complete.' }
+        foreach ($path in @($package.ZipPath, $package.Sha256Path)) {
+            if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+                throw "Required published artifact is missing: $path"
+            }
+        }
+    }
+    $package
+}
+} finally {
+    $releaseLock.Mutex.ReleaseMutex()
+    $releaseLock.Mutex.Dispose()
+}

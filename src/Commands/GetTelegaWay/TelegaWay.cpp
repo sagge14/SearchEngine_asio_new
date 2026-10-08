@@ -6,6 +6,7 @@
 #include "SQLite/SQLiteConnectionManager.h"
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 
 // Вспомогательная функция, чтобы получить текущий год в виде строки
 static std::string getCurrentYear() {
@@ -35,27 +36,54 @@ std::string getCurrentTime() {
     return std::string(buffer);
 }
 
+static std::string escapeSqlLiteral(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+
+    for (const char ch : value) {
+        escaped.push_back(ch);
+        if (ch == '\'')
+            escaped.push_back('\'');
+    }
+
+    return escaped;
+}
+
 
 [[maybe_unused]] TelegaWay::TelegaWay(const std::string& num, Telega::TYPE _type) {
 
 
     std::string type_str = _type == Telega::TYPE::VHOD ? "1" : "2";
-    auto condition = "where type = " + type_str + " and number = " + num;
+    const std::string sql_num = "'" + escapeSqlLiteral(num) + "'";
+    auto condition = "where type = " + type_str + " and number = " + sql_num;
 
-    auto db_way = SQLiteConnectionManager::instance().getConnection(base_way_dir);
+    auto db_way = SQLiteConnectionManager::instance().getReadOnlyConnection(base_way_dir);
     db_way->execSql("select * from way " +  condition);
 
     if (!db_way->empty())
         std::copy(db_way->begin(), db_way->end(), std::back_inserter(result_way));
 
-    const std::string currentYear = getCurrentYear();
+    // base.db contains only the live F12 queue.  Historical/future server
+    // years must return the yearly way journal without consulting it.
+    if (work_year != getCurrentYear())
+        return;
+
+    // The live queue is an optional enrichment source.  Do not let a missing
+    // base.db make the yearly way history unavailable, and never create it.
+    std::error_code existsError;
+    const auto basePath = std::filesystem::u8path(base_f12_dir);
+    if (!std::filesystem::exists(basePath, existsError) && !existsError)
+        return;
 
 
-    condition = "where type = " + type_str + " and number = " + num + " and print = 0";
+    condition =
+        "where type = " + type_str +
+        " and print = '0'"
+        " and (trim(number) = " + sql_num +
+        " or trim(number) = trim(coalesce(Sr, '') || ' ' || " + sql_num + "))"
+        " order by ind desc limit 1";
 
-    auto db_f12 = SQLiteConnectionManager::instance().getConnection(base_way_dir);
-    db_way->execSql("select * from way " +  condition);
-
+    auto db_f12 = SQLiteConnectionManager::instance().getReadOnlyConnection(base_f12_dir);
     db_f12->execSql( "select * from tab " +  condition);
 
     if (db_f12->empty())

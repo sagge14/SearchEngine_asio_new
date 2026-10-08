@@ -1,0 +1,63 @@
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 60,
+      "targets": [
+        {
+          "src": "D:\\BASES\\ARCHIVE.db3",
+          "max_versions": 120,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\BASES_PRD\\ARCHIVE.db3",
+          "max_versions": 120,
+          "is_directory": false,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 3600,
+      "targets": [
+        {
+          "src": "D:\\BASES",
+          "max_versions": 168,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true,
+          "exclude": [
+            "__astcache/",
+            ".vs/",
+            ".cursor/",
+            "out/",
+            "Win32/",
+            "Win64/",
+            "*.obj",
+            "*.pch",
+            "*.ilk",
+            "*.tds",
+            "*.dcu",
+            "*.tmp",
+            "Thumbs.db"
+          ]
+        },
+        {
+          "src": "D:\\BASES_PRD",
+          "max_versions": 168,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,107 +1,175 @@
 //
 // Created by Sg on 31.08.2025.
 //
-#include "nlohmann/json.hpp"
-#include "SQLite/SQLiteConnectionManager.h"
+
 #include "GetTelegaAttachments.h"
 
+#include "Commands/GetJsonTelega/AutoPadSource.h"
+#include "Commands/TelegramFiles/TelegramFileResolver.h"
+#include "MyUtils/Encoding.h"
+#include "nlohmann/json.hpp"
+
+#include <filesystem>
+#include <limits>
+#include <optional>
+#include <sstream>
 #include <string>
-#include <codecvt>
-#include <locale>
 
-inline std::string to_utf8(const std::wstring &wstr) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.to_bytes(wstr);
+std::vector<uint8_t> GetTelegaAttachmentsCmd::execute(
+    const std::vector<uint8_t>& data)
+{
+    auto result = executeResult(data);
+    return result.succeeded()
+        ? std::move(result.payload)
+        : std::vector<uint8_t>{};
 }
 
-inline std::wstring from_utf8(const std::string &str) {
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    return conv.from_bytes(str);
-}
-
-std::vector<uint8_t> GetTelegaAttachmentsCmd::execute(const std::vector<uint8_t> &_data) {
-    namespace nh = nlohmann;
+command_execution::CommandResult GetTelegaAttachmentsCmd::executeResult(
+    const std::vector<uint8_t>& data)
+{
     namespace fs = std::filesystem;
+    namespace nh = nlohmann;
 
-    std::string str_request(_data.begin(), _data.end());
     nh::json jsonRequest;
     try {
-        jsonRequest = nh::json::parse(str_request);
-    } catch (...) {
-        return {};
+        jsonRequest = nh::json::parse(std::string(data.begin(), data.end()));
+    }
+    catch (const nh::json::parse_error& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidJson,
+            error.what());
     }
 
-
-    int tlg_id = jsonRequest.value("id", -1);
-    if (tlg_id < 0) return {};
-
-    int int_type = jsonRequest.value("type", -1);
-    auto tlg_type = static_cast<Telega::TYPE>(int_type);
-
-    const decltype(Telega::getBases(Telega::TYPE{})) *base;
-    switch (tlg_type) {
-        case Telega::TYPE::VHOD:  base = &Telega::b_prm; break; //int_type == 0
-        case Telega::TYPE::ISHOD: base = &Telega::b_prd; break; //int_type == 1
-        default: return {};
+    if (!jsonRequest.is_object() ||
+        !jsonRequest.contains("id") ||
+        !jsonRequest["id"].is_number_integer() ||
+        !jsonRequest.contains("type") ||
+        !jsonRequest["type"].is_number_integer()) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "attachment list request requires integer id and type");
     }
 
-    std::string sql_qry =
-            "SELECT PrilName, DirectTo FROM archive WHERE `index` = '" + std::to_string(tlg_id) + "'";
-
-    std::string attachments_names;
-    std::string attachments_dir;
-
-    for (const auto& base_name : *base) {
-        auto db = SQLiteConnectionManager::instance().getConnection(base_name);
-        db->execSql(sql_qry);
-
-        if (!db->empty()) {
-            const auto& row = *db->begin();
-            attachments_names = row.at("PrilName");
-            attachments_dir   = row.at("DirectTo");
-            break;
-        }
+    std::int64_t wireId{};
+    std::int64_t wireType{};
+    try {
+        wireId = jsonRequest["id"].get<std::int64_t>();
+        wireType = jsonRequest["type"].get<std::int64_t>();
+    }
+    catch (const nh::json::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            error.what());
+    }
+    if (wireId < 0 || wireId > (std::numeric_limits<int>::max)() ||
+        (wireType != static_cast<int>(Telega::TYPE::VHOD) &&
+         wireType != static_cast<int>(Telega::TYPE::ISHOD))) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::InvalidRequest,
+            "attachment list id or type is outside the supported range");
     }
 
-    nh::json jres;
-    jres = nh::json::array();
+    const int telegramId = static_cast<int>(wireId);
+    const auto telegramType = static_cast<Telega::TYPE>(wireType);
 
-    auto getItem = [&attachments_dir] (const std::string& name)
+    // Empty base dir: source intentionally disabled — normal empty attachment list.
+    if (!Telega::isSourceConfigured(telegramType)) {
+        const nh::json empty = nh::json::array();
+        const std::string serialized = empty.dump();
+        return command_execution::CommandResult::success(
+            {serialized.begin(), serialized.end()});
+    }
+    try {
+        Telega::ensureBasesLoaded(telegramType);
+    }
+    catch (const Telega::SourceError& error) {
+        return mapAutoPadSourceError(error);
+    }
+
+    const auto lookup = lookupTelegramArchive(telegramId, telegramType);
+    if (lookup.failed()) {
+        return command_execution::CommandResult::failure(
+            lookup.error.value_or(command_execution::ErrorCode::InternalError),
+            lookup.diagnostic);
+    }
+
+    std::string attachmentNames;
+    std::string attachmentDirectory;
+    if (lookup.record) {
+        attachmentNames = lookup.record->prilName;
+        attachmentDirectory = lookup.record->directTo;
+    }
+
+    nh::json response = nh::json::array();
+    if (attachmentNames.empty()) {
+        const std::string serialized = response.dump();
+        return command_execution::CommandResult::success(
+            {serialized.begin(), serialized.end()});
+    }
+
+    auto appendItem = [&](const std::string& name)
+        -> std::optional<command_execution::CommandResult>
     {
-        fs::path full = fs::path(attachments_dir) / name;
-        nh::json item;
-        auto full2 = fs::path{from_utf8(full.string())}; // имя файла в UTF-8
-        item["name"]   = full.filename().string();
-        item["exists"] = fs::exists(full2);
-        item["size"]   = item["exists"] ? fs::file_size(full2) : 0;
+        fs::path fullPath;
+        try {
+            const fs::path utf8Path = fs::path(attachmentDirectory) / name;
+            fullPath = fs::path{encoding::utf8_to_wstring(utf8Path.string())};
+        }
+        catch (const std::exception& error) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::DatabaseSchemaFailed,
+                error.what());
+        }
 
-        return  item;
+        std::error_code metadataError;
+        const bool exists = fs::exists(fullPath, metadataError);
+        if (metadataError) {
+            return command_execution::CommandResult::failure(
+                command_execution::ErrorCode::FileMetadataFailed,
+                metadataError.message());
+        }
+
+        std::uintmax_t size = 0;
+        if (exists) {
+            size = fs::file_size(fullPath, metadataError);
+            if (metadataError) {
+                return command_execution::CommandResult::failure(
+                    command_execution::ErrorCode::FileMetadataFailed,
+                    metadataError.message());
+            }
+        }
+
+        nh::json item;
+        item["name"] = fs::path(name).filename().string();
+        item["exists"] = exists;
+        item["size"] = size;
+        response.push_back(std::move(item));
+        return std::nullopt;
     };
 
-    if(attachments_names.empty())
-    {
-        jres = std::vector<uint8_t>{};
-        std::string out = jres.dump();
-        return {out.begin(), out.end()};
-    }
-
-    if(tlg_type == Telega::TYPE::VHOD)
-    {
-        // разделяем имена по ";"
-        std::stringstream ss(attachments_names);
+    if (telegramType == Telega::TYPE::VHOD) {
+        std::stringstream names(attachmentNames);
         std::string name;
-        while (std::getline(ss, name, ';')) {
-            if (name.empty()) continue;
-
-            jres.push_back(getItem(name));
+        while (std::getline(names, name, ';')) {
+            if (name.empty())
+                continue;
+            if (auto error = appendItem(name))
+                return std::move(*error);
         }
     }
     else {
-        auto name = std::to_string(tlg_id) + ".zip";
-        jres.push_back(getItem(name));
+        if (auto error = appendItem(std::to_string(telegramId) + ".zip"))
+            return std::move(*error);
     }
 
-    std::string out = jres.dump();
-    return {out.begin(), out.end()};
+    try {
+        const std::string serialized = response.dump();
+        return command_execution::CommandResult::success(
+            {serialized.begin(), serialized.end()});
+    }
+    catch (const std::exception& error) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::SerializationFailed,
+            error.what());
+    }
 }
-

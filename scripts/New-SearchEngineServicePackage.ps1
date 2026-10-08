@@ -1,0 +1,1073 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('x64', 'x86', 'x86-modern')]
+    [string]$Architecture = 'x64',
+    [string]$BuildDirectory,
+    [string]$SettingsPath,
+    [string]$IgnorePath,
+    [string]$OutputDirectory,
+    [string]$VCRedistPath,
+    [string]$CloudRoot,
+    [string]$CloudReleaseId,
+    [switch]$SkipCloudPublish,
+    [Nullable[int]]$Year
+)
+
+$ErrorActionPreference = 'Stop'
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'AppVersion.ps1')
+. (Join-Path $PSScriptRoot 'ConsoleScriptEncoding.ps1')
+. (Join-Path $PSScriptRoot 'Assert-SearchEngineConfigAutoPadContract.ps1')
+. (Join-Path $PSScriptRoot 'SearchEngineServiceSourceFingerprint.ps1')
+$templateRoot = Join-Path $projectRoot 'deployment\SearchEngineServicePortable'
+$sourceDataRoot = Join-Path $templateRoot 'source-data'
+$packageMarkerName = '.searchengine-portable-package'
+# Two CP866 lines of 33 letters (lowercase then uppercase, CRLF), including ц/Ц.
+$expectedOemHash = '42E5905CB86ACE474F11B11F5A9DF49E4A25F6FF8E0D2FFB7A7BFC8A7ED29260'
+$productName = 'SearchEngineService'
+$versionInfo = Get-SearchEngineAppVersionNames `
+    -ProjectRoot $projectRoot `
+    -ProductName $productName
+if ([string]::IsNullOrWhiteSpace($CloudReleaseId)) {
+    $CloudReleaseId = $versionInfo.ReleaseId
+}
+
+if ($Architecture -eq 'x86') {
+    # Legacy Win7 SP1 portable (VS2019/v142). Keep -Architecture x86 meaning.
+    $packageName = 'SearchEngineService-x86-Windows7'
+    $minimumWindowsVersion = '6.1'
+    $minimumWindowsLabel = 'Windows 7 SP1'
+    $expectedMachine = 0x014c
+    $buildPresetDirectory = 'windows7-x86'
+    $visualStudioVersionRange = '[16.0,17.0)'
+    $expectedToolset = 'v142'
+} elseif ($Architecture -eq 'x86-modern') {
+    # Modern Win32 on VS2022/v143 (CMake preset windows-x86).
+    $packageName = 'SearchEngineService-x86'
+    $minimumWindowsVersion = '10.0'
+    $minimumWindowsLabel = 'Windows 10 / Windows Server 2016'
+    $expectedMachine = 0x014c
+    $buildPresetDirectory = 'windows-x86'
+    $visualStudioVersionRange = '[17.0,18.0)'
+    $expectedToolset = 'v143'
+} else {
+    $packageName = 'SearchEngineService-x64'
+    $minimumWindowsVersion = '10.0'
+    $minimumWindowsLabel = 'Windows 10 / Windows Server 2016'
+    $expectedMachine = 0x8664
+    $buildPresetDirectory = 'windows-x64'
+    $visualStudioVersionRange = '[17.0,18.0)'
+    $expectedToolset = 'v143'
+}
+$vcRedistArch = if ($Architecture -eq 'x64') { 'x64' } else { 'x86' }
+$vcRedistName = "vc_redist.$vcRedistArch.exe"
+$opensslDllName = if ($Architecture -eq 'x64') {
+    'libcrypto-3-x64.dll'
+} else {
+    'libcrypto-3.dll'
+}
+$opensslSslDllName = $opensslDllName.Replace('libcrypto', 'libssl')
+
+function Resolve-AbsolutePath([string]$Path, [string]$BasePath) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'An empty path is not allowed.'
+    }
+    if (-not [IO.Path]::IsPathRooted($Path)) {
+        $Path = Join-Path $BasePath $Path
+    }
+    return [IO.Path]::GetFullPath($Path)
+}
+
+function Resolve-RequiredFile([string]$Path, [string]$Description) {
+    $resolved = Resolve-AbsolutePath $Path $projectRoot
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "$Description was not found: $resolved"
+    }
+    return (Resolve-Path -LiteralPath $resolved).Path
+}
+
+function Find-VCRedist([string]$FileName, [string]$VersionRange) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+        'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        throw 'vswhere.exe was not found. Pass -VCRedistPath explicitly.'
+    }
+
+    $installationPath = & $vswhere -latest -products * `
+        -version $VersionRange -property installationPath
+    if ($LASTEXITCODE -ne 0 -or -not $installationPath) {
+        throw "Visual Studio $VersionRange was not found for $Architecture packaging."
+    }
+
+    $redistRoot = Join-Path ([string]$installationPath) 'VC\Redist\MSVC'
+    $candidate = Get-ChildItem -LiteralPath $redistRoot `
+        -Filter $FileName -Recurse -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $candidate) {
+        throw "$FileName was not found below $redistRoot"
+    }
+    return $candidate.FullName
+}
+
+function Get-VCRuntimeCrtDirectory([string]$VCRedistExePath, [string]$Arch, [string]$Toolset) {
+    $crtFolderName = 'Microsoft.VC' + $Toolset.TrimStart('v') + '.CRT'
+    $exeDir = Split-Path -Parent $VCRedistExePath
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+
+    function Add-CrtCandidate([string]$Directory) {
+        if ([string]::IsNullOrWhiteSpace($Directory)) {
+            return
+        }
+        $marker = Join-Path $Directory 'vcruntime140.dll'
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            if (-not $candidatePaths.Contains($Directory)) {
+                $candidatePaths.Add($Directory)
+            }
+        }
+    }
+
+    # Desktop CRT is {MSVC}\{version}\{arch}\Microsoft.VC*.CRT. vc_redist.exe
+    # often lives in the v143/v142 alias folder that has no CRT subfolder.
+    Add-CrtCandidate (Join-Path $exeDir (Join-Path $Arch $crtFolderName))
+    $leaf = Split-Path -Leaf $exeDir
+    $msvcRoot = $exeDir
+    if ($leaf -match '^v\d+$' -or $leaf -match '^\d+\.\d+') {
+        $parent = Split-Path -Parent $exeDir
+        if ((Split-Path -Leaf $parent) -ieq 'MSVC') {
+            $msvcRoot = $parent
+        }
+    }
+    if (Test-Path -LiteralPath $msvcRoot -PathType Container) {
+        Get-ChildItem -LiteralPath $msvcRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Add-CrtCandidate (
+                    Join-Path $_.FullName (Join-Path $Arch $crtFolderName)
+                )
+            }
+    }
+    if ($candidatePaths.Count -eq 0) {
+        throw "VC++ CRT folder $crtFolderName ($Arch) was not found near $VCRedistExePath"
+    }
+    return ($candidatePaths | Sort-Object -Descending | Select-Object -First 1)
+}
+
+function Get-UcrtDirectory([string]$Arch) {
+    $kitsRedist = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Redist'
+    if (-not (Test-Path -LiteralPath $kitsRedist -PathType Container)) {
+        throw "Windows Kits UCRT redist was not found: $kitsRedist"
+    }
+    $versioned = @(
+        Get-ChildItem -LiteralPath $kitsRedist -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+\.\d+' } |
+            Sort-Object Name -Descending |
+            ForEach-Object {
+                $path = Join-Path $_.FullName (Join-Path 'ucrt\DLLs' $Arch)
+                if (Test-Path -LiteralPath (Join-Path $path 'ucrtbase.dll') -PathType Leaf) {
+                    $path
+                }
+            }
+    )
+    if ($versioned.Count -gt 0) {
+        return $versioned[0]
+    }
+    $legacy = Join-Path $kitsRedist (Join-Path 'ucrt\DLLs' $Arch)
+    if (Test-Path -LiteralPath (Join-Path $legacy 'ucrtbase.dll') -PathType Leaf) {
+        return $legacy
+    }
+    throw "Universal CRT $Arch DLLs were not found under $kitsRedist"
+}
+
+function Copy-SideBySideRuntimeDlls {
+    param(
+        [string]$SourceDirectory,
+        [string]$StagingDirectory,
+        [string]$Label,
+        [int]$ExpectedMachine
+    )
+    $dlls = @(Get-ChildItem -LiteralPath $SourceDirectory -File -Filter '*.dll')
+    if ($dlls.Count -eq 0) {
+        throw "$Label contains no DLLs: $SourceDirectory"
+    }
+    foreach ($required in @('vcruntime140.dll', 'msvcp140.dll', 'ucrtbase.dll')) {
+        if ($Label -like 'VC++ CRT*' -and $required -eq 'ucrtbase.dll') {
+            continue
+        }
+        if ($Label -like 'Universal CRT*' -and $required -ne 'ucrtbase.dll') {
+            continue
+        }
+        $present = @($dlls | Where-Object {
+            $_.Name.Equals($required, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($present.Count -eq 0) {
+            throw "$Label is missing $required in $SourceDirectory"
+        }
+    }
+    # vcruntime140_1.dll exists for x64 (VS 2019 16.8+). x86 CRT folders
+    # keep exception helpers inside vcruntime140.dll and omit this file.
+    if ($Label -like 'VC++ CRT*' -and $ExpectedMachine -eq 0x8664) {
+        $hasEhDll = @($dlls | Where-Object {
+            $_.Name.Equals('vcruntime140_1.dll', [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($hasEhDll.Count -eq 0) {
+            throw "$Label is missing vcruntime140_1.dll in $SourceDirectory"
+        }
+    }
+    foreach ($dll in $dlls) {
+        if ((Get-PeMachine $dll.FullName) -ne $ExpectedMachine) {
+            throw "$Label DLL architecture mismatch: $($dll.FullName)"
+        }
+        foreach ($side in @('app', 'tools')) {
+            Copy-Item -LiteralPath $dll.FullName -Destination `
+                (Join-Path $StagingDirectory (Join-Path $side $dll.Name))
+        }
+    }
+}
+
+function Assert-Oem866Table([byte[]]$Bytes) {
+    $splitAt = -1
+    for ($i = 0; $i -lt ($Bytes.Length - 1); $i++) {
+        if ($Bytes[$i] -eq 0x0D -and $Bytes[$i + 1] -eq 0x0A) {
+            $splitAt = $i
+            break
+        }
+    }
+    if ($splitAt -lt 0) {
+        throw 'OEM866.INI must contain two CRLF-separated CP866 alphabet lines.'
+    }
+    $lowerLength = $splitAt
+    $upperLength = $Bytes.Length - $splitAt - 2
+    if ($lowerLength -ne 33 -or $upperLength -ne 33) {
+        throw ("OEM866.INI must contain two 33-byte CP866 alphabet lines; got {0} and {1}." `
+            -f $lowerLength, $upperLength)
+    }
+    # Alphabet order places ц/Ц immediately after х/Х (index 23).
+    if ($Bytes[23] -ne 0xE6 -or $Bytes[$splitAt + 2 + 23] -ne 0x96) {
+        throw 'OEM866.INI is missing CP866 letters ц/Ц after х/Х.'
+    }
+}
+
+function Get-Sha256FromBytes([byte[]]$Bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-PeMachine([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    $reader = New-Object IO.BinaryReader($stream)
+    try {
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "Not a PE executable: $Path"
+        }
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadUInt32()
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "Invalid PE signature: $Path"
+        }
+        return $reader.ReadUInt16()
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Get-PeImportedDlls([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 64 -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5A4D) {
+        throw "Not a PE executable: $Path"
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (
+        $peOffset -lt 0 -or
+        ($peOffset + 24) -gt $bytes.Length -or
+        [BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x00004550
+    ) {
+        throw "Invalid PE signature: $Path"
+    }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $peOffset + 6)
+    $optionalSize = [BitConverter]::ToUInt16($bytes, $peOffset + 20)
+    $optionalOffset = $peOffset + 24
+    if (($optionalOffset + $optionalSize) -gt $bytes.Length) {
+        throw "Truncated PE optional header: $Path"
+    }
+    $magic = [BitConverter]::ToUInt16($bytes, $optionalOffset)
+    $importDirOffset = if ($magic -eq 0x20B) {
+        $optionalOffset + 120
+    } elseif ($magic -eq 0x10B) {
+        $optionalOffset + 104
+    } else {
+        throw ("Unsupported PE optional magic 0x{0:X} in {1}" -f $magic, $Path)
+    }
+    if (($importDirOffset + 8) -gt $bytes.Length) {
+        throw "Truncated PE import directory: $Path"
+    }
+    $importRva = [BitConverter]::ToUInt32($bytes, $importDirOffset)
+    if ($importRva -eq 0) {
+        return @()
+    }
+
+    $sections = New-Object System.Collections.Generic.List[object]
+    $sectionOffset = $optionalOffset + $optionalSize
+    for ($i = 0; $i -lt $sectionCount; $i++) {
+        $entry = $sectionOffset + (40 * $i)
+        if (($entry + 40) -gt $bytes.Length) {
+            throw "Truncated PE section table: $Path"
+        }
+        $sections.Add([pscustomobject]@{
+            VirtualSize = [BitConverter]::ToUInt32($bytes, $entry + 8)
+            VirtualAddress = [BitConverter]::ToUInt32($bytes, $entry + 12)
+            SizeOfRawData = [BitConverter]::ToUInt32($bytes, $entry + 16)
+            PointerToRawData = [BitConverter]::ToUInt32($bytes, $entry + 20)
+        }) | Out-Null
+    }
+
+    function Convert-RvaToOffset([uint32]$Rva) {
+        foreach ($section in $sections) {
+            $span = [Math]::Max([uint32]$section.VirtualSize, [uint32]$section.SizeOfRawData)
+            if ($span -eq 0) {
+                continue
+            }
+            if ($Rva -ge $section.VirtualAddress -and $Rva -lt ($section.VirtualAddress + $span)) {
+                return [int64]$section.PointerToRawData + ([int64]$Rva - [int64]$section.VirtualAddress)
+            }
+        }
+        return $null
+    }
+
+    $importOffset = Convert-RvaToOffset $importRva
+    if ($null -eq $importOffset) {
+        throw "Import directory RVA 0x$($importRva.ToString('X')) is not in a section: $Path"
+    }
+
+    $names = New-Object System.Collections.Generic.List[string]
+    for ($descriptor = 0; $descriptor -lt 256; $descriptor++) {
+        $entry = [int64]$importOffset + (20 * $descriptor)
+        if (($entry + 20) -gt $bytes.Length) {
+            break
+        }
+        $nameRva = [BitConverter]::ToUInt32($bytes, [int]$entry + 12)
+        $firstThunk = [BitConverter]::ToUInt32($bytes, [int]$entry + 16)
+        $originalFirstThunk = [BitConverter]::ToUInt32($bytes, [int]$entry)
+        if ($nameRva -eq 0 -and $firstThunk -eq 0 -and $originalFirstThunk -eq 0) {
+            break
+        }
+        if ($nameRva -eq 0) {
+            continue
+        }
+        $nameOffset = Convert-RvaToOffset $nameRva
+        if ($null -eq $nameOffset -or $nameOffset -ge $bytes.Length) {
+            continue
+        }
+        $end = [int]$nameOffset
+        while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) {
+            $end++
+        }
+        if ($end -gt $nameOffset) {
+            $names.Add([Text.Encoding]::ASCII.GetString(
+                $bytes,
+                [int]$nameOffset,
+                $end - [int]$nameOffset
+            )) | Out-Null
+        }
+    }
+    return @($names)
+}
+
+function Assert-PeImportsExpectedOpenSsl {
+    param(
+        [string]$Path,
+        [string]$ExpectedCryptoDll,
+        [string]$ExpectedSslDll,
+        [string]$Label
+    )
+    $dlls = @(Get-PeImportedDlls $Path)
+    $cryptoImports = @($dlls | Where-Object {
+        $_ -like 'libcrypto-3*.dll' -or $_ -like 'libssl-3*.dll'
+    })
+    if ($cryptoImports.Count -eq 0) {
+        throw "$Label does not import OpenSSL libcrypto/libssl: $Path"
+    }
+    $arm64 = @($cryptoImports | Where-Object { $_ -match '(?i)arm64' })
+    if ($arm64.Count -gt 0) {
+        throw (
+            "$Label imports ARM64 OpenSSL ($($arm64 -join ', ')); " +
+            "expected $ExpectedCryptoDll. Relink against SEARCHENGINE_OPENSSL_ROOT " +
+            "lib/VC MD import libraries."
+        )
+    }
+    foreach ($imported in $cryptoImports) {
+        $expected = if ($imported -like 'libssl-3*') {
+            $ExpectedSslDll
+        } else {
+            $ExpectedCryptoDll
+        }
+        if (-not $imported.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+            throw (
+                "$Label imports '$imported' instead of '$expected'. " +
+                "The portable package ships $ExpectedCryptoDll next to the EXE."
+            )
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
+    $BuildDirectory = Join-Path $projectRoot `
+        "out\build\$buildPresetDirectory\Release"
+}
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+    $SettingsPath = Join-Path $sourceDataRoot 'Settings.json'
+}
+if ([string]::IsNullOrWhiteSpace($IgnorePath)) {
+    $IgnorePath = Join-Path $sourceDataRoot 'ignore.txt'
+}
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Get-SearchEnginePackageOutputDirectory `
+        -ProjectRoot $projectRoot `
+        -ReleaseId $CloudReleaseId `
+        -PackageLeaf $packageName
+}
+if ([string]::IsNullOrWhiteSpace($VCRedistPath)) {
+    $VCRedistPath = Find-VCRedist $vcRedistName $visualStudioVersionRange
+}
+
+$BuildDirectory = Resolve-AbsolutePath $BuildDirectory $projectRoot
+if (-not (Test-Path -LiteralPath $BuildDirectory -PathType Container)) {
+    throw "Release build directory was not found: $BuildDirectory"
+}
+if ([IO.Path]::GetFileName($BuildDirectory) -ne 'Release') {
+    throw "Only a Release directory can be packaged: $BuildDirectory"
+}
+
+$binaryPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngine.exe') 'SearchEngine Release binary'
+$configToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngineConfig.exe') `
+    'SearchEngineConfig Release helper'
+$archiveToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngineArchive.exe') `
+    'SearchEngineArchive Release helper'
+Assert-SearchEngineConfigSourceFreshness `
+    -ConfigToolPath $configToolPath `
+    -ProjectRoot $projectRoot
+$authDbToolPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'AuthDbTool.exe') `
+    'AuthDbTool Release helper'
+$tokenIssuerPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchClientTokenIssuer.exe') `
+    'SearchClientTokenIssuer Release helper'
+$accessSetupPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'SearchEngineAccessSetup.exe') `
+    'SearchEngineAccessSetup Release helper'
+$tokenIssuerDefaultsPath = Resolve-RequiredFile `
+    (Join-Path $BuildDirectory 'searchclient-auth-token.defaults.json') `
+    'SearchClientTokenIssuer defaults JSON'
+$registerAuthScriptPath = Resolve-RequiredFile `
+    (Join-Path $projectRoot 'scripts\Register-AuthClientFromToken.ps1') `
+    'Register-AuthClientFromToken.ps1'
+Assert-PeMatchesAppVersion `
+    -BinaryPath $binaryPath `
+    -ExpectedProductVersion $versionInfo.Version `
+    -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName `
+    -ExpectedOriginalFilename 'SearchEngine.exe'
+Assert-PeMatchesAppVersion `
+    -BinaryPath $configToolPath `
+    -ExpectedProductVersion $versionInfo.Version `
+    -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName `
+    -ExpectedOriginalFilename 'SearchEngineConfig.exe'
+Assert-PeMatchesAppVersion `
+    -BinaryPath $archiveToolPath `
+    -ExpectedProductVersion $versionInfo.Version `
+    -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName `
+    -ExpectedOriginalFilename 'SearchEngineArchive.exe'
+$settingsTemplatePath = Resolve-RequiredFile `
+    $SettingsPath 'Portable Settings.json template'
+$IgnorePath = Resolve-RequiredFile $IgnorePath 'Portable ignore.txt'
+$VCRedistPath = Resolve-RequiredFile $VCRedistPath `
+    "Microsoft Visual C++ Redistributable $vcRedistArch"
+$oemBase64Path = Resolve-RequiredFile `
+    (Join-Path $sourceDataRoot 'OEM866.INI.base64') 'OEM866 table source'
+$PrefixMapPath = Resolve-RequiredFile `
+    (Join-Path $sourceDataRoot 'prefix_map.json') 'Portable prefix_map.json'
+
+$machine = Get-PeMachine $binaryPath
+if ($machine -ne $expectedMachine) {
+    throw ('SearchEngine.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $machine)
+}
+$configToolMachine = Get-PeMachine $configToolPath
+if ($configToolMachine -ne $expectedMachine) {
+    throw ('SearchEngineConfig.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $configToolMachine)
+}
+$archiveToolMachine = Get-PeMachine $archiveToolPath
+if ($archiveToolMachine -ne $expectedMachine) {
+    throw ('SearchEngineArchive.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $archiveToolMachine)
+}
+$authDbToolMachine = Get-PeMachine $authDbToolPath
+if ($authDbToolMachine -ne $expectedMachine) {
+    throw ('AuthDbTool.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $authDbToolMachine)
+}
+if ((Get-PeMachine $accessSetupPath) -ne $expectedMachine) { throw 'SearchEngineAccessSetup architecture mismatch.' }
+Assert-PeMatchesAppVersion -BinaryPath $accessSetupPath `
+    -ExpectedProductVersion $versionInfo.Version -ExpectedFileVersion $versionInfo.FileVersion `
+    -ExpectedProductName $productName -ExpectedOriginalFilename 'SearchEngineAccessSetup.exe'
+$tokenIssuerMachine = Get-PeMachine $tokenIssuerPath
+if ($tokenIssuerMachine -ne $expectedMachine) {
+    throw ('SearchClientTokenIssuer.exe architecture mismatch: expected 0x{0:X4}, got 0x{1:X4}.' `
+        -f $expectedMachine, $tokenIssuerMachine)
+}
+foreach ($opensslBinary in @(
+    @{ Path = $binaryPath; Label = 'SearchEngine.exe' },
+    @{ Path = $authDbToolPath; Label = 'AuthDbTool.exe' },
+    @{ Path = $tokenIssuerPath; Label = 'SearchClientTokenIssuer.exe' },
+    @{ Path = $accessSetupPath; Label = 'SearchEngineAccessSetup.exe' }
+)) {
+    Assert-PeImportsExpectedOpenSsl `
+        -Path $opensslBinary.Path `
+        -ExpectedCryptoDll $opensslDllName `
+        -ExpectedSslDll $opensslSslDllName `
+        -Label $opensslBinary.Label
+}
+
+$OutputDirectory = Resolve-AbsolutePath $OutputDirectory $projectRoot
+$outputRoot = [IO.Path]::GetPathRoot($OutputDirectory)
+if ($OutputDirectory.TrimEnd('\').Equals(
+    $outputRoot.TrimEnd('\'),
+    [StringComparison]::OrdinalIgnoreCase
+) -or $OutputDirectory.Equals(
+    $projectRoot,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "Unsafe package output directory: $OutputDirectory"
+}
+
+$outputParent = Split-Path -Parent $OutputDirectory
+New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
+$stagingDirectory = Join-Path $outputParent `
+    (".$packageName.staging-" + [Guid]::NewGuid().ToString('N'))
+$previousDirectory = $null
+New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
+
+try {
+    foreach ($directory in @('app', 'data', 'tools', 'prerequisites')) {
+        New-Item -ItemType Directory `
+            -Path (Join-Path $stagingDirectory $directory) | Out-Null
+    }
+
+    $generatedSettingsPath = Join-Path $stagingDirectory 'data\Settings.json'
+    $prepareArguments = @{
+        TemplatePath = $settingsTemplatePath
+        OutputPath = $generatedSettingsPath
+        AllowedOutputRoot = $stagingDirectory
+        ConfigToolPath = $configToolPath
+    }
+    if ($PSBoundParameters.ContainsKey('Year')) {
+        $prepareArguments.Year = [int]$Year
+    }
+    $preparedSettings = & (Join-Path $PSScriptRoot `
+        'Prepare-YearBasedReleaseSettings.ps1') @prepareArguments
+    $releaseSettingsYear = [int]$preparedSettings.Year
+
+    & $configToolPath validate --settings $generatedSettingsPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SearchEngineConfig rejected generated portable Settings.json: $generatedSettingsPath"
+    }
+    & $configToolPath validate-prefix-map --path $PrefixMapPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "SearchEngineConfig rejected portable prefix_map.json: $PrefixMapPath"
+    }
+    Assert-SearchEngineConfigAutoPadContract `
+        -ConfigToolPath $configToolPath `
+        -TemplatePath $generatedSettingsPath
+
+    $cachePath = Join-Path (Split-Path -Parent $BuildDirectory) 'CMakeCache.txt'
+    if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+        throw "CMake cache was not found for the selected build: $cachePath"
+    }
+    $cacheText = [IO.File]::ReadAllText($cachePath)
+    if ($Architecture -eq 'x86' -and
+        ($cacheText -notmatch 'CMAKE_GENERATOR:INTERNAL=Visual Studio 16 2019' -or
+         $cacheText -notmatch 'SEARCHENGINE_WINDOWS_TARGET_VERSION:STRING=0x0601')) {
+        throw 'The x86 package must be built by VS2019 v142 with Windows target 0x0601.'
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $VCRedistPath
+    if ($signature.Status -ne 'Valid' -or
+        $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+        throw "VC++ Redistributable does not have a valid Microsoft signature: $VCRedistPath"
+    }
+    if ($Architecture -eq 'x86' -and
+        (Get-Item -LiteralPath $VCRedistPath).VersionInfo.FileVersion -notlike '14.29.*') {
+        throw 'The Windows 7 package requires the VS2019 VC++ Runtime 14.29 x86.'
+    }
+
+    $settings = Get-Content -LiteralPath $generatedSettingsPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json
+    $config = $settings.config
+    $indexRootsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['index_roots']
+    } else {
+        $null
+    }
+    $dirsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['dirs']
+    } else {
+        $null
+    }
+    $indexRoots = if ($null -ne $indexRootsProperty) {
+        @($indexRootsProperty.Value)
+    } elseif ($null -ne $dirsProperty) {
+        @($dirsProperty.Value)
+    } else {
+        @()
+    }
+    $indexedExtensionsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['indexed_extensions']
+    } else {
+        $null
+    }
+    $legacyExtensionsProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['extensions']
+    } else {
+        $null
+    }
+    $includeExtensionlessProperty = if ($null -ne $config) {
+        $config.PSObject.Properties['include_extensionless_files']
+    } else {
+        $null
+    }
+    $hasIndexedFileTypes = if ($null -ne $indexedExtensionsProperty) {
+        $indexedExtensionsValue = $indexedExtensionsProperty.Value
+        $includeExtensionlessIsValid = (
+            $null -eq $includeExtensionlessProperty -or
+            $includeExtensionlessProperty.Value -is [bool]
+        )
+        $includeExtensionless = (
+            $includeExtensionlessIsValid -and
+            $null -ne $includeExtensionlessProperty -and
+            $includeExtensionlessProperty.Value
+        )
+        $indexedExtensionsValue -is [System.Array] -and
+            $includeExtensionlessIsValid -and
+            ($indexedExtensionsValue.Count -gt 0 -or $includeExtensionless)
+    } elseif ($null -ne $legacyExtensionsProperty) {
+        $legacyExtensionsProperty.Value -is [System.Array] -and
+            $legacyExtensionsProperty.Value.Count -gt 0
+    } else {
+        $false
+    }
+    if (-not $config -or -not $config.year -or
+        $indexRoots.Count -eq 0 -or
+        -not $hasIndexedFileTypes) {
+        throw "Generated Settings.json is missing required config fields: $generatedSettingsPath"
+    }
+    $port = [int]$config.asio_port
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "Settings.json contains an invalid ASIO port: $port"
+    }
+
+    Copy-Item -LiteralPath $binaryPath `
+        -Destination (Join-Path $stagingDirectory 'app\SearchEngine.exe')
+    Copy-Item -LiteralPath $configToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchEngineConfig.exe')
+    Copy-Item -LiteralPath $archiveToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchEngineArchive.exe')
+    Copy-Item -LiteralPath $authDbToolPath `
+        -Destination (Join-Path $stagingDirectory 'tools\AuthDbTool.exe')
+    Copy-Item -LiteralPath $accessSetupPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchEngineAccessSetup.exe')
+    Copy-Item -LiteralPath $tokenIssuerPath `
+        -Destination (Join-Path $stagingDirectory 'tools\SearchClientTokenIssuer.exe')
+    Copy-Item -LiteralPath $tokenIssuerDefaultsPath `
+        -Destination (Join-Path $stagingDirectory `
+            'tools\searchclient-auth-token.defaults.json')
+    # OpenSSL runtime DLL: SearchEngine.exe (auth verify), AuthDbTool,
+    # AccessSetup and TokenIssuer all import libcrypto dynamically. Ship it next
+    # to each EXE — the service runs from install\bin, tools stay in
+    # install\tools, and Windows does not search across those folders.
+    $opensslDllCandidates = @(
+        (Join-Path $BuildDirectory $opensslDllName),
+        (Join-Path ${env:ProgramFiles} "OpenSSL-Win64\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles} "OpenSSL\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\$opensslDllName"),
+        (Join-Path ${env:ProgramFiles(x86)} "OpenSSL-Win32\bin\libcrypto-3.dll")
+    )
+    $opensslDll = $opensslDllCandidates |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Where-Object {
+            $name = [IO.Path]::GetFileName($_)
+            $name -notmatch '(?i)arm64' -and (Get-PeMachine $_) -eq $expectedMachine
+        } |
+        Select-Object -First 1
+    if (-not $opensslDll) {
+        throw "OpenSSL DLL '$opensslDllName' was not found for SearchEngine/TokenIssuer packaging."
+    }
+    $opensslFileName = [IO.Path]::GetFileName($opensslDll)
+    if (
+        -not $opensslFileName.Equals($opensslDllName, [StringComparison]::OrdinalIgnoreCase) -or
+        $opensslFileName -match '(?i)arm64'
+    ) {
+        throw "Refusing to package OpenSSL DLL '$opensslFileName'; expected '$opensslDllName'."
+    }
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("app\" + $opensslFileName))
+    Copy-Item -LiteralPath $opensslDll `
+        -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
+    # App-local VC++ CRT (and UCRT on x86/Win7) next to each EXE. Windows loads
+    # these from the EXE directory first, so Local-Machine-Install can still
+    # start SearchEngineConfig/TokenIssuer when vc_redist.exe cannot run.
+    $crtDirectory = Get-VCRuntimeCrtDirectory $VCRedistPath $vcRedistArch $expectedToolset
+    Copy-SideBySideRuntimeDlls `
+        -SourceDirectory $crtDirectory `
+        -StagingDirectory $stagingDirectory `
+        -Label "VC++ CRT $expectedToolset $vcRedistArch" `
+        -ExpectedMachine $expectedMachine
+    if ($vcRedistArch -eq 'x86') {
+        $ucrtDirectory = Get-UcrtDirectory $vcRedistArch
+        Copy-SideBySideRuntimeDlls `
+            -SourceDirectory $ucrtDirectory `
+            -StagingDirectory $stagingDirectory `
+            -Label "Universal CRT $vcRedistArch" `
+            -ExpectedMachine $expectedMachine
+    }
+    Copy-Item -LiteralPath $registerAuthScriptPath `
+        -Destination (Join-Path $stagingDirectory 'tools\Register-AuthClientFromToken.ps1')
+    Copy-Item -LiteralPath $IgnorePath `
+        -Destination (Join-Path $stagingDirectory 'data\ignore.txt')
+    Copy-Item -LiteralPath $PrefixMapPath `
+        -Destination (Join-Path $stagingDirectory 'data\prefix_map.json')
+
+    $oemBase64 = (Get-Content -LiteralPath $oemBase64Path -Raw).Trim()
+    $oemBytes = [Convert]::FromBase64String($oemBase64)
+    Assert-Oem866Table $oemBytes
+    $actualOemHash = Get-Sha256FromBytes $oemBytes
+    if ($actualOemHash -ne $expectedOemHash) {
+        throw 'The embedded OEM866 table failed its SHA-256 check.'
+    }
+    [IO.File]::WriteAllBytes(
+        (Join-Path $stagingDirectory 'data\OEM866.INI'),
+        $oemBytes
+    )
+
+    $portableBatchFiles = @(
+        @{ Source = 'Resolve-ServiceInstance.cmd'; Destination = 'Resolve-ServiceInstance.cmd' },
+        @{ Source = 'Setup-Access.bat'; Destination = 'Setup-Access.bat' },
+        @{ Source = 'Remove-SearchEngineAuthKeys.bat'; Destination = 'Remove-SearchEngineAuthKeys.bat' },
+        @{
+            Source = 'Install-SearchEngineService-Windows7.bat'
+            Destination = 'Install-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Local-Machine-Install-Windows7.bat'
+            Destination = 'Local-Machine-Install.bat'
+        },
+        @{
+            Source = 'Stop-SearchEngineService-Windows7.bat'
+            Destination = 'Stop-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Start-SearchEngineService-Windows7.bat'
+            Destination = 'Start-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Restart-SearchEngineService-Windows7.bat'
+            Destination = 'Restart-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Uninstall-SearchEngineService-Windows7.bat'
+            Destination = 'Uninstall-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Register-AuthClient-FromToken-Windows7.bat'
+            Destination = 'Register-AuthClient-FromToken.bat'
+        },
+        @{
+            Source = 'Issue-SearchClientToken-Windows7.bat'
+            Destination = 'Issue-SearchClientToken.bat'
+        },
+        @{
+            Source = 'Verify-Package-Windows7.bat'
+            Destination = 'Verify-Package.bat'
+        },
+        @{
+            Source = 'Configure-SearchEngineService.bat'
+            Destination = 'Configure-SearchEngineService.bat'
+        },
+        @{
+            Source = 'Archive-SearchEngineService.bat'
+            Destination = 'Archive-SearchEngineService.bat'
+        },
+        @{
+            Source = 'List-SearchEngineServices.bat'
+            Destination = 'List-SearchEngineServices.bat'
+        }
+    )
+    foreach ($batchFile in $portableBatchFiles) {
+        Copy-Item `
+            -LiteralPath (Join-Path $templateRoot $batchFile.Source) `
+            -Destination (Join-Path $stagingDirectory $batchFile.Destination)
+    }
+    Copy-Item -LiteralPath (Join-Path $templateRoot 'ServiceInstance.cmd') `
+        -Destination (Join-Path $stagingDirectory 'ServiceInstance.cmd')
+    Get-ChildItem -LiteralPath $stagingDirectory -Recurse -File |
+        Where-Object { $_.Extension -in @('.bat', '.cmd') } |
+        ForEach-Object {
+            $batchText = [IO.File]::ReadAllText($_.FullName)
+            $batchText = $batchText.Replace('{{ARCHITECTURE}}', $Architecture)
+            $batchText = $batchText.Replace('{{VC_REDIST_FILE}}', $vcRedistName)
+            $batchText = ($batchText -replace "`r?`n", "`r`n")
+            # Portable .bat/.cmd must stay strict ASCII for cmd.exe / Windows 7.
+            # Fail loudly instead of silently replacing non-ASCII with '?'.
+            Write-StrictAsciiText -Path $_.FullName -Text $batchText
+        }
+
+    $textTokens = @{
+        '{{ARCHITECTURE}}' = $Architecture
+        '{{MINIMUM_WINDOWS}}' = $minimumWindowsLabel
+        '{{PACKAGE_NAME}}' = $packageName
+        '{{VC_REDIST_FILE}}' = $vcRedistName
+    }
+    $textTemplates = @{
+        'README.txt' = 'README.txt'
+        'INSTALLATION_GUIDE_RU.txt' = 'INSTALLATION_GUIDE_RU.txt'
+    }
+    foreach ($name in $textTemplates.Keys) {
+        $text = Get-Content -LiteralPath `
+            (Join-Path $templateRoot $textTemplates[$name]) `
+            -Raw -Encoding UTF8
+        foreach ($token in $textTokens.Keys) {
+            $text = $text.Replace($token, $textTokens[$token])
+        }
+        [IO.File]::WriteAllText(
+            (Join-Path $stagingDirectory $name),
+            $text,
+            (New-Object Text.UTF8Encoding($true))
+        )
+    }
+
+    Copy-Item -LiteralPath $VCRedistPath -Destination `
+        (Join-Path $stagingDirectory ('prerequisites\' + $vcRedistName))
+
+    # User guides are copied recursively, byte-for-byte, and checksummed with
+    # the tools. Reject links and accidental data/secret payloads before copying.
+    $tutorialRoot = Join-Path $projectRoot 'tutorials'
+    if (Test-Path -LiteralPath $tutorialRoot -PathType Container) {
+        $pendingTutorials = New-Object 'Collections.Generic.Stack[IO.FileSystemInfo]'
+        $pendingTutorials.Push((Get-Item -LiteralPath $tutorialRoot))
+        while ($pendingTutorials.Count -gt 0) {
+            $item = $pendingTutorials.Pop()
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Tutorial links are not allowed: $($item.FullName)"
+            }
+            if ($item.Name -match '(?i)^searchclient-auth-(token|request)\.json$' -or
+                $item.Name -match '(?i)(^|[._-])(secrets?|credentials?)([._-]|$)' -or
+                $item.Name -match '(?i)^\.env($|\.)' -or
+                $item.Extension -match '(?i)^\.(db|db3|sqlite|sqlite3|pem|key|pfx|p12|cer|crt)$') {
+                throw "Data or secret material is not allowed in tutorials: $($item.Name)"
+            }
+            if ($item -is [IO.DirectoryInfo]) {
+                foreach ($child in $item.GetFileSystemInfos()) {
+                    $pendingTutorials.Push($child)
+                }
+                continue
+            }
+            $relative = $item.FullName.Substring($tutorialRoot.Length + 1)
+            $target = Join-Path (Join-Path $stagingDirectory 'tutorials') $relative
+            if (Test-Path -LiteralPath $target) {
+                throw "Duplicate tutorial package path: $relative"
+            }
+            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+            Copy-Item -LiteralPath $item.FullName -Destination $target
+        }
+    }
+
+    $protectedFiles = @()
+    foreach ($relativeRoot in @('app', 'tools', 'prerequisites')) {
+        $absoluteRoot = Join-Path $stagingDirectory $relativeRoot
+        $protectedFiles += Get-ChildItem -LiteralPath $absoluteRoot `
+            -Recurse -File
+    }
+    $packagedTutorials = Join-Path $stagingDirectory 'tutorials'
+    if (Test-Path -LiteralPath $packagedTutorials -PathType Container) {
+        $protectedFiles += Get-ChildItem -LiteralPath $packagedTutorials -Recurse -File -Force
+    }
+    foreach ($name in @(
+        'Install-SearchEngineService.bat',
+        'Resolve-ServiceInstance.cmd',
+        'Local-Machine-Install.bat',
+        'Stop-SearchEngineService.bat',
+        'Start-SearchEngineService.bat',
+        'Restart-SearchEngineService.bat',
+        'Uninstall-SearchEngineService.bat',
+        'Register-AuthClient-FromToken.bat',
+        'Issue-SearchClientToken.bat',
+        'Setup-Access.bat',
+        'Remove-SearchEngineAuthKeys.bat',
+        'Verify-Package.bat',
+        'Configure-SearchEngineService.bat',
+        'Archive-SearchEngineService.bat',
+        'List-SearchEngineServices.bat'
+    )) {
+        $protectedFiles += Get-Item -LiteralPath `
+            (Join-Path $stagingDirectory $name)
+    }
+
+    $manifestEntries = @($protectedFiles | Sort-Object FullName | ForEach-Object {
+        $relativePath = $_.FullName.Substring($stagingDirectory.Length + 1)
+        $entry = [ordered]@{
+            path = $relativePath.Replace('\', '/')
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+            size = $_.Length
+        }
+        if ($relativePath.StartsWith('tutorials\', [StringComparison]::OrdinalIgnoreCase)) {
+            $entry['role'] = 'tutorial'
+        }
+        $entry
+    })
+    $protectedData = @($manifestEntries.path | Where-Object { $_ -like 'data/*' })
+    if ($protectedData.Count -gt 0) {
+        throw ('Mutable data files must not be checksum-protected: ' +
+            ($protectedData -join ', '))
+    }
+    $checksumLines = @($manifestEntries | ForEach-Object {
+        '{0}  {1}' -f `
+            ([string]$_.sha256).ToLowerInvariant(),
+            ([string]$_.path).Replace('/', '\')
+    })
+    [IO.File]::WriteAllLines(
+        (Join-Path $stagingDirectory 'package-checksums.sha256'),
+        $checksumLines,
+        (New-Object Text.UTF8Encoding($false))
+    )
+    $sourceFingerprint = Get-SearchEngineServiceSourceFingerprint `
+        -ProjectRoot $projectRoot
+    $manifest = [ordered]@{
+        formatVersion = 2
+        product = 'SearchEngineService'
+        architecture = $Architecture
+        applicationVersion = $versionInfo.Version
+        fileVersion = $versionInfo.FileVersion
+        releaseId = $CloudReleaseId
+        minimumWindowsVersion = $minimumWindowsVersion
+        toolset = $expectedToolset
+        vcRuntimeFile = $vcRedistName
+        createdUtc = (Get-Date).ToUniversalTime().ToString('o')
+        sourceFingerprintAlgorithm = $sourceFingerprint.Algorithm
+        sourceFingerprint = $sourceFingerprint.Value
+        sourceFingerprintFileCount = $sourceFingerprint.FileCount
+        files = $manifestEntries
+    }
+    $manifestJson = $manifest | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText(
+        (Join-Path $stagingDirectory 'package-manifest.json'),
+        $manifestJson,
+        (New-Object Text.UTF8Encoding($false))
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $stagingDirectory $packageMarkerName),
+        "Generated by New-SearchEngineServicePackage.ps1`r`n",
+        (New-Object Text.UTF8Encoding($false))
+    )
+
+    if (Test-Path -LiteralPath $OutputDirectory) {
+        $existingMarker = Join-Path $OutputDirectory $packageMarkerName
+        if (-not (Test-Path -LiteralPath $existingMarker -PathType Leaf)) {
+            throw "Existing output has no package marker and was preserved: $OutputDirectory"
+        }
+
+        # Rename the old package first. If another program keeps the directory
+        # open, Rename-Item fails before any package files can be removed.
+        $previousDirectory = Join-Path $outputParent `
+            (".$packageName.previous-" + [Guid]::NewGuid().ToString('N'))
+        Rename-Item -LiteralPath $OutputDirectory `
+            -NewName (Split-Path -Leaf $previousDirectory) -ErrorAction Stop
+    }
+
+    try {
+        Move-Item -LiteralPath $stagingDirectory -Destination $OutputDirectory `
+            -ErrorAction Stop
+    } catch {
+        if ($previousDirectory -and
+            (Test-Path -LiteralPath $previousDirectory) -and
+            -not (Test-Path -LiteralPath $OutputDirectory)) {
+            Rename-Item -LiteralPath $previousDirectory `
+                -NewName (Split-Path -Leaf $OutputDirectory) -ErrorAction Stop
+        }
+        throw
+    }
+
+    if ($previousDirectory -and (Test-Path -LiteralPath $previousDirectory)) {
+        try {
+            Remove-Item -LiteralPath $previousDirectory -Recurse -Force `
+                -ErrorAction Stop
+        } catch {
+            Write-Warning (
+                'The new package is ready, but the previous package could not ' +
+                "be removed: $previousDirectory"
+            )
+        }
+    }
+} finally {
+    if (Test-Path -LiteralPath $stagingDirectory) {
+        Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+    }
+}
+
+$packageSize = (Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File |
+    Measure-Object -Property Length -Sum).Sum
+Write-Host 'Portable package created successfully.'
+Write-Host "Package: $OutputDirectory"
+Write-Host "Architecture: $Architecture"
+Write-Host "App version: $($versionInfo.Version)"
+Write-Host "Minimum Windows: $minimumWindowsLabel"
+Write-Host "Settings template: $settingsTemplatePath"
+Write-Host "Generated Settings year: $releaseSettingsYear"
+Write-Host "Size: $([Math]::Round($packageSize / 1MB, 1)) MB"
+Write-Host 'Copy the entire package directory to the target computer.'
+
+$cloudZipName = Get-SearchEngineCloudZipName `
+    -PackageLeaf $packageName `
+    -ReleaseId $CloudReleaseId
+$cloudHelper = & (Join-Path $PSScriptRoot 'Find-WorkspaceReleaseRoot.ps1') `
+    -Name 'Publish-ReleasePackageIfConfigured.ps1' -StartPath $projectRoot `
+    -Optional
+$cloudResult = $null
+if ($null -ne $cloudHelper) {
+    $cloudArgs = @{
+        PackageDirectory = $OutputDirectory
+        ProductName = 'SearchEngineService'
+        ZipName = $cloudZipName
+        ReleaseId = $CloudReleaseId
+        StartPath = $projectRoot
+        SkipCloudPublish = $SkipCloudPublish
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CloudRoot)) {
+        $cloudArgs.CloudRoot = $CloudRoot
+    }
+    $cloudResult = & $cloudHelper @cloudArgs
+}
+else {
+    Write-Host 'Cloud publish helper not found; local package only.'
+}
+
+[pscustomobject]@{
+    Product = $productName
+    Version = $versionInfo.Version
+    FileVersion = $versionInfo.FileVersion
+    PackageDirectory = $OutputDirectory
+    PackagedExe = Join-Path $OutputDirectory 'app\SearchEngine.exe'
+    CloudPublished = ($null -ne $cloudResult -and -not [string]::IsNullOrWhiteSpace($cloudResult.ZipPath))
+    ZipPath = if ($null -ne $cloudResult) { $cloudResult.ZipPath } else { $null }
+    Sha256Path = if ($null -ne $cloudResult) { $cloudResult.Sha256Path } else { $null }
+    Sha256 = if ($null -ne $cloudResult) { $cloudResult.Sha256 } else { $null }
+}

@@ -9,8 +9,6 @@
 #include <boost/serialization/string.hpp>
 //#include <boost/archive/portable_iarchive.hpp>
 //#include <boost/archive/portable_oarchive.hpp>
-#include <codecvt>
-#include <locale>
 #include <cstdint>
 
 // Класс FileData для хранения имени файла и его данных

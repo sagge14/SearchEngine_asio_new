@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Transaction Indexer — Решение и Объяснение</title>
+    
+    <!-- Highlight.js CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            border-bottom: 4px solid #3498db;
+            padding-bottom: 10px;
+        }
+        
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        
+        h3 {
+            color: #555;
+            margin-top: 30px;
+        }
+        
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 25px;
+            font-weight: 600;
+        }
+        
+        pre {
+            background-color: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+            margin: 15px 0;
+        }
+        
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .success {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        ul, ol {
+            margin: 15px 0;
+            padding-left: 30px;
+        }
+        
+        li {
+            margin: 8px 0;
+        }
+        
+        hr {
+            border: none;
+            border-top: 2px solid #ddd;
+            margin: 30px 0;
+        }
+        
+        .diagram {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+            margin: 20px 0;
+            white-space: pre;
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Blockchain Transaction Indexer — Решение и Объяснение</h1>
+    
+    <h2>0. Зачем это нужно? Какие проблемы решает?</h2>
+    
+    <h3>Реальная проблема блокчейн-нод</h3>
+    
+    <p>
+        Блокчейн-ноды (Ethereum, Bitcoin и др.) предоставляют JSON-RPC API для доступа к данным, 
+        но у них есть серьёзные ограничения для практического использования:
+    </p>
+    
+    <h4>Проблема 1: Невозможность поиска по адресу</h4>
+    
+    <p>
+        <strong>Что происходит:</strong> Блокчейн-нода может ответить на вопрос "Дай мне блок номер 1000000" 
+        или "Дай мне транзакцию с хешем 0xabc...", но она <strong>не может</strong> ответить на вопрос 
+        "Покажи все транзакции адреса 0x742d35cc6634c0532925a3b844bc9e7595f0beb".
+    </p>
+    
+    <div class="warning">
+        <strong>Почему так?</strong> Блокчейн хранит данные в виде цепочки блоков, где каждый блок содержит 
+        список транзакций. Но транзакции не индексированы по адресам отправителя/получателя. 
+        Чтобы найти все транзакции адреса, нужно перебрать <strong>все блоки</strong> от начала блокчейна 
+        (более 20 миллионов блоков в Ethereum на 2024 год).
+    </div>
+    
+    <pre><code class="language-bash"># Что МОЖЕТ нода:
+curl -X POST http://localhost:8545 -d '{
+  "jsonrpc": "2.0",
+  "method": "eth_getBlockByNumber",
+  "params": ["0x1000000", true],
+  "id": 1
+}'
+# ✅ Вернёт блок номер 1000000
+
+# Что НЕ МОЖЕТ нода:
+curl -X POST http://localhost:8545 -d '{
+  "jsonrpc": "2.0",
+  "method": "eth_getTransactionsByAddress",  # ❌ Такого метода нет!
+  "params": ["0x742d35cc6634c0532925a3b844bc9e7595f0beb"],
+  "id": 1
+}'
+# ❌ Метод не существует</code></pre>
+    
+    <h4>Проблема 2: Медленные запросы</h4>
+    
+    <p>
+        Даже если бы можно было искать по адресу, это требовало бы:
+    </p>
+    <ul>
+        <li><strong>Сканирование миллионов блоков</strong> — каждый запрос занимал бы минуты или часы</li>
+        <li><strong>Нагрузка на ноду</strong> — каждый запрос заставлял бы ноду делать тяжёлую работу</li>
+        <li><strong>Невозможность масштабирования</strong> — при 1000 одновременных запросов нода упадёт</li>
+    </ul>
+    
+    <h4>Проблема 3: Нет удобного API для аналитики</h4>
+    
+    <p>
+        Для построения дашбордов, аналитики, отчётов нужны запросы типа:
+    </p>
+    <ul>
+        <li>"Покажи транзакции адреса X за последний месяц"</li>
+        <li>"Найди все транзакции в диапазоне блоков 1000000-1000100"</li>
+        <li>"Посчитай сумму всех входящих транзакций для адреса Y"</li>
+        <li>"Покажи топ-10 адресов по объёму транзакций"</li>
+    </ul>
+    
+    <p>
+        Блокчейн-нода не предоставляет таких возможностей — это не её задача. 
+        Её задача — хранить и валидировать блоки, а не делать аналитику.
+    </p>
+    
+    <hr>
+    
+    <h3>Кто и зачем использует Transaction Indexer?</h3>
+    
+    <h4>1. Блокчейн-эксплореры (Blockchain Explorers)</h4>
+    
+    <p>
+        <strong>Примеры:</strong> Etherscan.io, Blockchain.com, BscScan.com
+    </p>
+    
+    <p>
+        <strong>Что они делают:</strong> Показывают пользователям историю транзакций, балансы адресов, 
+        статистику сети. Когда вы заходите на Etherscan и вводите адрес кошелька, вы видите все его транзакции — 
+        это работает благодаря индексатору транзакций.
+    </p>
+    
+    <div class="success">
+        <strong>Без индексера:</strong> Каждый запрос пользователя требовал бы сканирования 20+ миллионов блоков. 
+        Это невозможно в реальном времени.<br>
+        <strong>С индексером:</strong> Запрос выполняется за миллисекунды через SQL запрос к индексированной БД.
+    </div>
+    
+    <h4>2. Криптовалютные биржи</h4>
+    
+    <p>
+        <strong>Что им нужно:</strong>
+    </p>
+    <ul>
+        <li>Отслеживать входящие депозиты пользователей</li>
+        <li>Проверять подтверждения транзакций</li>
+        <li>Строить отчёты по транзакциям</li>
+        <li>Обнаруживать подозрительную активность</li>
+    </ul>
+    
+    <p>
+        Биржа не может каждый раз сканировать весь блокчейн — нужна быстрая БД с индексами.
+    </p>
+    
+    <h4>3. Аналитические платформы</h4>
+    
+    <p>
+        <strong>Примеры:</strong> Dune Analytics, Nansen, Glassnode
+    </p>
+    
+    <p>
+        Эти сервисы строят графики, анализируют паттерны, делают прогнозы. Им нужен быстрый доступ 
+        к историческим данным с фильтрацией и агрегацией — именно то, что предоставляет индексер.
+    </p>
+    
+    <h4>4. DeFi приложения</h4>
+    
+    <p>
+        Децентрализованные финансовые приложения часто показывают пользователям:
+    </p>
+    <ul>
+        <li>Историю их операций</li>
+        <li>Статистику по пулам ликвидности</li>
+        <li>Аналитику по токенам</li>
+    </ul>
+    
+    <p>
+        Всё это требует быстрого поиска транзакций по различным критериям.
+    </p>
+    
+    <h4>5. Комплаенс и AML (Anti-Money Laundering)</h4>
+    
+    <p>
+        Финансовые регуляторы требуют отслеживания транзакций для предотвращения отмывания денег. 
+        Нужно быстро находить все транзакции связанные с подозрительными адресами — это невозможно 
+        без индексации.
+    </p>
+    
+    <hr>
+    
+    <h3>Технические преимущества индексера</h3>
+    
+    <h4>Сравнение: Прямой запрос к ноде vs Индексер</h4>
+    
+    <table>
+        <tr>
+            <th>Задача</th>
+            <th>Прямой запрос к ноде</th>
+            <th>С индексером</th>
+        </tr>
+        <tr>
+            <td>Найти все транзакции адреса</td>
+            <td>❌ Невозможно (нет такого метода)</td>
+            <td>✅ SQL запрос за &lt;100ms</td>
+        </tr>
+        <tr>
+            <td>Транзакции в диапазоне блоков</td>
+            <td>⚠️ Нужно делать N запросов (по одному на блок)</td>
+            <td>✅ Один SQL запрос с WHERE block_number BETWEEN</td>
+        </tr>
+        <tr>
+            <td>Агрегация (сумма, количество)</td>
+            <td>❌ Нужно получить все данные и считать в коде</td>
+            <td>✅ SQL SUM/COUNT за миллисекунды</td>
+        </tr>
+        <tr>
+            <td>Пагинация</td>
+            <td>⚠️ Сложно реализовать</td>
+            <td>✅ Стандартный LIMIT/OFFSET или cursor</td>
+        </tr>
+        <tr>
+            <td>Масштабирование</td>
+            <td>❌ Нода не выдержит 1000+ запросов/сек</td>
+            <td>✅ БД легко масштабируется (реплики, шардинг)</td>
+        </tr>
+        <tr>
+            <td>Кэширование</td>
+            <td>⚠️ Сложно кэшировать RPC запросы</td>
+            <td>✅ БД сама кэширует частые запросы</td>
+        </tr>
+    </table>
+    
+    <h4>Производительность</h4>
+    
+    <div class="diagram">Запрос "Найти все транзакции адреса 0x742d...":
+
+БЕЗ индексера:
+  ┌─────────────┐
+  │   Клиент    │
+  └──────┬──────┘
+         │ Запрос: "Дай блок 0"
+         ▼
+  ┌─────────────┐
+  │   Нода      │ ──→ Сканирует блок 0 (100-200 транзакций)
+  └──────┬──────┘     Проверяет каждую транзакцию...
+         │             Время: ~50ms на блок
+         │ Запрос: "Дай блок 1"
+         ▼
+  ┌─────────────┐
+  │   Нода      │ ──→ Сканирует блок 1...
+  └──────┬──────┘
+         │ ... (повторяется 20+ миллионов раз)
+         │
+         │ ⏱️ Общее время: ЧАСЫ или ДНИ
+         ▼
+    ❌ Невозможно в реальном времени
+
+С индексером:
+  ┌─────────────┐
+  │   Клиент    │
+  └──────┬──────┘
+         │ GET /transactions?address=0x742d...
+         ▼
+  ┌─────────────┐
+  │ HTTP Server │
+  └──────┬──────┘
+         │ SELECT * FROM transactions 
+         │ WHERE from_address = '0x742d' 
+         │    OR to_address = '0x742d'
+         │ ORDER BY block_number LIMIT 100
+         ▼
+  ┌─────────────┐
+  │   SQLite    │ ──→ Использует индекс idx_from_address
+  │             │     Время: ~10-50ms
+  └──────┬──────┘
+         │
+         │ ✅ Результат за миллисекунды</div>
+    
+    <hr>
+    
+    <h3>Экономические преимущества</h3>
+    
+    <h4>Стоимость запросов</h4>
+    
+    <ul>
+        <li><strong>Прямой запрос к ноде:</strong> Каждый запрос нагружает ноду. Если у вас публичная нода 
+            (Infura, Alchemy), вы платите за каждый запрос. 1000 запросов в секунду = огромные расходы.</li>
+        
+        <li><strong>С индексером:</strong> Вы делаете один запрос к ноде при синхронизации блока 
+            (раз в 12 секунд для Ethereum). Все остальные запросы идут к вашей локальной БД — бесплатно.</li>
+    </ul>
+    
+    <h4>Независимость</h4>
+    
+    <p>
+        Если публичная нода (Infura/Alchemy) недоступна или ограничивает вас, ваш сервис продолжает работать, 
+        используя уже проиндексированные данные. Вы не зависите от внешних сервисов для поиска транзакций.
+    </p>
+    
+    <hr>
+    
+    <h3>Практический пример использования</h3>
+    
+    <p>
+        <strong>Сценарий:</strong> Вы создаёте криптовалютный кошелёк-приложение для пользователей.
+    </p>
+    
+    <h4>Без индексера:</h4>
+    
+    <ol>
+        <li>Пользователь открывает приложение и хочет увидеть историю транзакций</li>
+        <li>Приложение пытается получить все транзакции через RPC</li>
+        <li>Нода не может найти транзакции по адресу напрямую</li>
+        <li>Придётся сканировать все блоки (невозможно)</li>
+        <li>❌ Пользователь ждёт вечность или видит ошибку</li>
+    </ol>
+    
+    <h4>С индексером:</h4>
+    
+    <ol>
+        <li>Индексер работает в фоне, постоянно синхронизируясь с блокчейном</li>
+        <li>Все транзакции сохраняются в БД с индексами</li>
+        <li>Пользователь открывает приложение</li>
+        <li>Приложение делает запрос: <code>GET /transactions?address=0x742d...</code></li>
+        <li>Индексер возвращает результат за 50ms из БД</li>
+        <li>✅ Пользователь видит историю транзакций мгновенно</li>
+    </ol>
+    
+    <div class="note">
+        <strong>Итог:</strong> Transaction Indexer — это <strong>необходимый слой</strong> между блокчейн-нодой 
+        и приложениями, который делает данные блокчейна доступными для практического использования. 
+        Без него невозможно построить большинство реальных приложений на блокчейне.
+    </div>
+    
+    <hr>
+    
+    <h2>1. Что требуется в задании?</h2>
+    
+    <h3>Общая задача</h3>
+    <p>
+        Нужно создать <strong>бэкенд-сервис</strong>, который:
+    </p>
+    <ol>
+        <li>Подключается к блокчейн ноде через JSON-RPC</li>
+        <li>Периодически получает новые блоки</li>
+        <li>Извлекает транзакции из блоков</li>
+        <li>Сохраняет транзакции в базу данных</li>
+        <li>Предоставляет HTTP API для поиска транзакций</li>
+    </ol>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Блокчейн ноды предоставляют данные через JSON-RPC API, но для быстрого поиска транзакций по адресам 
+        или диапазонам блоков нужна собственная индексация. Прямые запросы к ноде медленные и неудобные 
+        для аналитики. Решение — создать промежуточный сервис, который постоянно синхронизируется с блокчейном 
+        и предоставляет быстрый API для запросов.
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Создаём асинхронный сервис на C++ с использованием Boost.Asio для неблокирующих операций, 
+        который работает в фоновом режиме, обрабатывает блоки параллельно и предоставляет REST API.
+    </p>
+    
+    <hr>
+    
+    <h2>2. Архитектура решения</h2>
+    
+    <h3>Компоненты системы</h3>
+    
+    <div class="diagram">┌─────────────────────────────────────────────────────────────┐
+│              RPC Client (JSON-RPC клиент)                    │
+│  - Подключение к блокчейн ноде                              │
+│  - Вызовы eth_blockNumber, eth_getBlockByNumber             │
+│  - Обработка ошибок и повторные попытки                     │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Block Fetcher (Получение блоков)                │
+│  - Периодический опрос ноды (polling)                       │
+│  - Отслеживание последнего обработанного блока              │
+│  - Очередь блоков для обработки                             │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│         Transaction Parser (Парсинг транзакций)             │
+│  - Извлечение данных из JSON блока                           │
+│  - Валидация полей транзакций                               │
+│  - Подготовка данных для сохранения                         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Storage Layer (База данных)                    │
+│  - SQLite/PostgreSQL                                         │
+│  - Индексы по address, block_number                         │
+│  - Защита от дубликатов (UNIQUE constraint)                 │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│              HTTP Server (REST API)                          │
+│  - GET /transactions с фильтрами                            │
+│  - Пагинация через cursor                                   │
+│  - JSON ответы                                               │
+└─────────────────────────────────────────────────────────────┘</div>
+    
+    <h4>Поток данных</h4>
+    <ol>
+        <li><strong>RPC Client</strong> периодически вызывает <code>eth_blockNumber</code></li>
+        <li>Если есть новые блоки, <strong>Block Fetcher</strong> получает их через <code>eth_getBlockByNumber</code></li>
+        <li><strong>Transaction Parser</strong> извлекает транзакции из JSON</li>
+        <li><strong>Storage Layer</strong> сохраняет транзакции в БД (с проверкой дубликатов)</li>
+        <li><strong>HTTP Server</strong> обрабатывает запросы пользователей и возвращает данные из БД</li>
+    </ol>
+    
+    <div class="note">
+        <strong>Важно:</strong> Все компоненты работают асинхронно через Boost.Asio, что позволяет обрабатывать 
+        множество операций параллельно без блокировки потоков.
+    </div>
+    
+    <hr>
+    
+    <h2>3. Детальное объяснение компонентов</h2>
+    
+    <h3>3.1. RPC Client</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Нужно общаться с блокчейн нодой через JSON-RPC протокол. Это HTTP POST запросы с JSON телом, 
+        содержащим метод и параметры. Например, для получения номера последнего блока нужно отправить:
+    </p>
+    
+    <pre><code class="language-json">{
+  "jsonrpc": "2.0",
+  "method": "eth_blockNumber",
+  "params": [],
+  "id": 1
+}</code></pre>
+    
+    <p>
+        Ответ будет содержать номер блока в hex формате: <code>"0x1234abc"</code>
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Создаём класс <code>RpcClient</code>, который использует Boost.Beast для HTTP запросов 
+        и nlohmann/json для работы с JSON.
+    </p>
+    
+    <h4>Разбор синтаксиса</h4>
+    
+    <pre><code class="language-cpp">#include &lt;boost/asio.hpp&gt;
+#include &lt;boost/beast.hpp&gt;
+#include &lt;nlohmann/json.hpp&gt;
+#include &lt;string&gt;
+#include &lt;optional&gt;
+
+namespace beast = boost::beast;
+namespace http = beast::http;
+namespace net = boost::asio;
+using tcp = boost::asio::ip::tcp;
+using json = nlohmann::json;
+
+class RpcClient {
+public:
+    RpcClient(
+        net::io_context& io,           // контекст для асинхронных операций
+        const std::string& host,        // адрес ноды (например, "localhost")
+        const std::string& port,        // порт (например, "8545")
+        const std::string& endpoint      // путь (например, "/")
+    );
+    
+    // Асинхронный вызов RPC метода
+    boost::asio::awaitable&lt;std::optional&lt;json&gt;&gt; call(
+        const std::string& method,      // имя метода ("eth_blockNumber")
+        const json& params = json::array()  // параметры метода
+    );
+    
+private:
+    net::io_context& io_;
+    std::string host_;
+    std::string port_;
+    std::string endpoint_;
+    uint64_t request_id_{1};           // счётчик для id запросов
+};</code></pre>
+    
+    <ul>
+        <li><strong>boost::asio::awaitable</strong> — возвращаемый тип корутины (C++20), позволяет использовать <code>co_await</code></li>
+        <li><strong>std::optional&lt;json&gt;</strong> — результат может отсутствовать при ошибке</li>
+        <li><strong>request_id_</strong> — уникальный ID для каждого запроса (требуется JSON-RPC)</li>
+    </ul>
+    
+    <h4>Как это работает?</h4>
+    
+    <pre><code class="language-cpp">boost::asio::awaitable&lt;std::optional&lt;json&gt;&gt; 
+RpcClient::call(const std::string& method, const json& params) {
+    // 1. Создаём JSON-RPC запрос
+    json request = {
+        {"jsonrpc", "2.0"},
+        {"method", method},
+        {"params", params},
+        {"id", request_id_++}
+    };
+    
+    // 2. Подключаемся к серверу
+    tcp::resolver resolver(io_);
+    auto endpoints = co_await resolver.async_resolve(host_, port_);
+    
+    beast::tcp_stream stream(io_);
+    co_await stream.async_connect(endpoints);
+    
+    // 3. Отправляем HTTP POST запрос
+    http::request&lt;http::string_body&gt; req{http::verb::post, endpoint_, 11};
+    req.set(http::field::host, host_);
+    req.set(http::field::content_type, "application/json");
+    req.body() = request.dump();
+    req.prepare_payload();
+    
+    co_await http::async_write(stream, req);
+    
+    // 4. Читаем ответ
+    beast::flat_buffer buffer;
+    http::response&lt;http::string_body&gt; res;
+    co_await http::async_read(stream, buffer, res);
+    
+    // 5. Парсим JSON ответ
+    json response = json::parse(res.body());
+    
+    // 6. Проверяем наличие ошибки
+    if (response.contains("error")) {
+        co_return std::nullopt;  // ошибка RPC
+    }
+    
+    // 7. Возвращаем результат
+    co_return response["result"];
+}</code></pre>
+    
+    <p>
+        <strong>Пошаговое объяснение:</strong>
+    </p>
+    <ol>
+        <li>Формируем JSON-RPC запрос с методом и параметрами</li>
+        <li>Разрешаем DNS имя хоста в IP адреса</li>
+        <li>Устанавливаем TCP соединение</li>
+        <li>Отправляем HTTP POST с JSON телом</li>
+        <li>Читаем HTTP ответ</li>
+        <li>Парсим JSON и проверяем наличие ошибок</li>
+        <li>Возвращаем результат через <code>co_return</code></li>
+    </ol>
+    
+    <div class="note">
+        <strong>Ключевой момент:</strong> Использование <code>co_await</code> делает код неблокирующим — 
+        пока ждём ответа от сервера, поток может обрабатывать другие задачи.
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Получение номера последнего блока
+auto block_number_json = co_await rpc_client.call("eth_blockNumber");
+if (block_number_json) {
+    std::string hex = *block_number_json;
+    uint64_t block_number = std::stoull(hex, nullptr, 16);  // конвертация hex → число
+}
+
+// Получение блока по номеру
+json params = {"0x" + std::to_string(block_number), true};  // true = полные транзакции
+auto block_json = co_await rpc_client.call("eth_getBlockByNumber", params);
+if (block_json) {
+    // block_json содержит все данные блока, включая транзакции
+}</code></pre>
+    
+    <hr>
+    
+    <h3>3.2. Block Fetcher</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Нужно постоянно отслеживать новые блоки в блокчейне. Блоки появляются периодически 
+        (в Ethereum примерно каждые 12 секунд). После перезапуска сервиса нужно продолжить 
+        с последнего обработанного блока, а не начинать с начала.
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Создаём класс <code>BlockFetcher</code>, который:
+    </p>
+    <ul>
+        <li>Хранит номер последнего обработанного блока</li>
+        <li>Периодически опрашивает ноду (polling)</li>
+        <li>Помещает новые блоки в очередь для обработки</li>
+        <li>Восстанавливает состояние из БД при старте</li>
+    </ul>
+    
+    <h4>Разбор синтаксиса</h4>
+    
+    <pre><code class="language-cpp">#include &lt;boost/asio.hpp&gt;
+#include &lt;boost/asio/experimental/channel.hpp&gt;
+#include &lt;atomic&gt;
+#include &lt;memory&gt;
+
+class BlockFetcher {
+public:
+    BlockFetcher(
+        net::io_context& io,
+        RpcClient& rpc_client,
+        Storage& storage,
+        std::size_t poll_interval_ms = 2000  // опрос каждые 2 секунды
+    );
+    
+    // Запуск фонового процесса получения блоков
+    void start();
+    
+    // Остановка (graceful shutdown)
+    void stop();
+    
+    // Канал для передачи блоков в обработчик
+    using BlockChannel = boost::asio::experimental::channel&lt;
+        void(boost::system::error_code, json)
+    &gt;;
+    
+    BlockChannel& getBlockChannel() { return block_channel_; }
+    
+private:
+    // Основной цикл опроса
+    boost::asio::awaitable&lt;void&gt; fetchLoop();
+    
+    // Получение одного блока
+    boost::asio::awaitable&lt;bool&gt; fetchBlock(uint64_t block_number);
+    
+    net::io_context& io_;
+    RpcClient& rpc_client_;
+    Storage& storage_;
+    std::atomic&lt;uint64_t&gt; last_processed_block_{0};
+    std::atomic&lt;bool&gt; running_{false};
+    BlockChannel block_channel_;
+    std::chrono::milliseconds poll_interval_;
+};</code></pre>
+    
+    <ul>
+        <li><strong>boost::asio::experimental::channel</strong> — потокобезопасная очередь для передачи данных между корутинами</li>
+        <li><strong>std::atomic&lt;uint64_t&gt;</strong> — атомарная переменная для безопасного доступа из разных потоков</li>
+        <li><strong>poll_interval_ms</strong> — интервал между опросами ноды</li>
+    </ul>
+    
+    <h4>Как это работает?</h4>
+    
+    <pre><code class="language-cpp">void BlockFetcher::start() {
+    // 1. Восстанавливаем последний обработанный блок из БД
+    last_processed_block_ = storage_.getLastProcessedBlock();
+    
+    running_ = true;
+    
+    // 2. Запускаем корутину fetchLoop
+    boost::asio::co_spawn(
+        io_,
+        [this]() { return fetchLoop(); },
+        boost::asio::detached
+    );
+}
+
+boost::asio::awaitable&lt;void&gt; BlockFetcher::fetchLoop() {
+    while (running_) {
+        try {
+            // 1. Получаем номер последнего блока в сети
+            auto latest_json = co_await rpc_client_.call("eth_blockNumber");
+            if (!latest_json) {
+                co_await net::steady_timer(io_, poll_interval_).async_wait();
+                continue;  // ошибка RPC, повторяем через интервал
+            }
+            
+            // 2. Конвертируем hex в число
+            std::string hex = *latest_json;
+            uint64_t latest_block = std::stoull(hex, nullptr, 16);
+            
+            // 3. Обрабатываем все новые блоки
+            uint64_t current = last_processed_block_.load() + 1;
+            while (current &lt;= latest_block && running_) {
+                auto success = co_await fetchBlock(current);
+                if (success) {
+                    last_processed_block_.store(current);
+                    current++;
+                } else {
+                    // Ошибка получения блока, ждём перед повтором
+                    co_await net::steady_timer(io_, poll_interval_).async_wait();
+                    break;
+                }
+            }
+            
+            // 4. Ждём перед следующим опросом
+            co_await net::steady_timer(io_, poll_interval_).async_wait();
+            
+        } catch (const std::exception& e) {
+            // Логируем ошибку и продолжаем
+            std::cerr &lt;&lt; "Error in fetchLoop: " &lt;&lt; e.what() &lt;&lt; std::endl;
+            co_await net::steady_timer(io_, poll_interval_).async_wait();
+        }
+    }
+}
+
+boost::asio::awaitable&lt;bool&gt; BlockFetcher::fetchBlock(uint64_t block_number) {
+    // Формируем hex строку для номера блока
+    std::stringstream ss;
+    ss &lt;&lt; "0x" &lt;&lt; std::hex &lt;&lt; block_number;
+    
+    json params = {ss.str(), true};  // true = полные транзакции
+    
+    auto block_json = co_await rpc_client_.call("eth_getBlockByNumber", params);
+    if (!block_json) {
+        co_return false;  // ошибка RPC
+    }
+    
+    // Отправляем блок в канал для обработки
+    boost::system::error_code ec;
+    co_await block_channel_.async_send(ec, *block_json);
+    
+    co_return !ec;  // true если успешно отправлено
+}</code></pre>
+    
+    <div class="success">
+        <strong>Преимущества:</strong> Использование канала позволяет разделить получение блоков 
+        и их обработку. Пока один блок обрабатывается, можно уже получать следующий.
+    </div>
+    
+    <hr>
+    
+    <h3>3.3. Transaction Parser</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Блокчейн нода возвращает блок в формате JSON с множеством полей. Нужно извлечь только 
+        транзакции и преобразовать их в структуру для сохранения в БД. Поля могут быть в hex формате 
+        (например, адреса, хеши, значения), их нужно конвертировать.
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Создаём класс <code>TransactionParser</code>, который извлекает транзакции из JSON блока 
+        и преобразует их в структуру <code>Transaction</code>.
+    </p>
+    
+    <h4>Разбор синтаксиса</h4>
+    
+    <pre><code class="language-cpp">#include &lt;nlohmann/json.hpp&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;cstdint&gt;
+
+struct Transaction {
+    uint64_t block_number;
+    std::string block_hash;
+    std::string tx_hash;
+    std::string from_address;
+    std::string to_address;      // может быть пустым для создания контракта
+    std::string value;            // в wei (hex строка)
+    uint64_t timestamp;
+};
+
+class TransactionParser {
+public:
+    // Парсинг блока и извлечение транзакций
+    static std::vector&lt;Transaction&gt; parseBlock(const json& block_json);
+    
+private:
+    // Конвертация hex строки в число
+    static uint64_t hexToUint64(const std::string& hex);
+    
+    // Нормализация адреса (убрать префикс 0x, привести к нижнему регистру)
+    static std::string normalizeAddress(const std::string& addr);
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    
+    <pre><code class="language-cpp">std::vector&lt;Transaction&gt; TransactionParser::parseBlock(const json& block_json) {
+    std::vector&lt;Transaction&gt; transactions;
+    
+    // 1. Извлекаем основные поля блока
+    std::string block_hash = block_json["hash"].get&lt;std::string&gt;();
+    uint64_t block_number = hexToUint64(block_json["number"].get&lt;std::string&gt;());
+    uint64_t timestamp = hexToUint64(block_json["timestamp"].get&lt;std::string&gt;());
+    
+    // 2. Проверяем наличие транзакций
+    if (!block_json.contains("transactions") || !block_json["transactions"].is_array()) {
+        return transactions;  // пустой блок
+    }
+    
+    // 3. Обрабатываем каждую транзакцию
+    for (const auto& tx_json : block_json["transactions"]) {
+        Transaction tx;
+        tx.block_number = block_number;
+        tx.block_hash = normalizeAddress(block_hash);
+        tx.tx_hash = normalizeAddress(tx_json["hash"].get&lt;std::string&gt;());
+        tx.from_address = normalizeAddress(tx_json["from"].get&lt;std::string&gt;());
+        
+        // to может быть null для создания контракта
+        if (tx_json.contains("to") && !tx_json["to"].is_null()) {
+            tx.to_address = normalizeAddress(tx_json["to"].get&lt;std::string&gt;());
+        } else {
+            tx.to_address = "";  // создание контракта
+        }
+        
+        tx.value = tx_json["value"].get&lt;std::string&gt;();  // оставляем hex для точности
+        tx.timestamp = timestamp;
+        
+        transactions.push_back(tx);
+    }
+    
+    return transactions;
+}
+
+uint64_t TransactionParser::hexToUint64(const std::string& hex) {
+    // Убираем префикс 0x если есть
+    std::string clean = hex;
+    if (clean.size() &gt; 2 && clean.substr(0, 2) == "0x") {
+        clean = clean.substr(2);
+    }
+    
+    // Конвертируем hex в число
+    return std::stoull(clean, nullptr, 16);
+}
+
+std::string TransactionParser::normalizeAddress(const std::string& addr) {
+    std::string result = addr;
+    
+    // Убираем префикс 0x
+    if (result.size() &gt; 2 && result.substr(0, 2) == "0x") {
+        result = result.substr(2);
+    }
+    
+    // Приводим к нижнему регистру (EIP-55 не учитываем для простоты)
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    
+    return result;
+}</code></pre>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Значение транзакции храним как hex строку, чтобы сохранить точность 
+        (wei — это очень большие числа). При необходимости можно конвертировать в decimal для отображения.
+    </div>
+    
+    <hr>
+    
+    <h3>3.4. Storage Layer</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Нужно хранить транзакции в реляционной БД с возможностью быстрого поиска по адресу 
+        и диапазону блоков. Также важно избежать дубликатов при повторной обработке блоков 
+        (например, при перезапуске или обработке реоргов).
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Используем SQLite (легковесная) или PostgreSQL (для продакшена). Создаём таблицу 
+        с индексами и UNIQUE constraint на tx_hash для защиты от дубликатов.
+    </p>
+    
+    <h4>Разбор синтаксиса</h4>
+    
+    <pre><code class="language-cpp">#include &lt;sqlite3.h&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+#include &lt;mutex&gt;
+
+class Storage {
+public:
+    Storage(const std::string& db_path);
+    ~Storage();
+    
+    // Инициализация схемы БД
+    void initialize();
+    
+    // Сохранение транзакций (с проверкой дубликатов)
+    bool insertTransactions(const std::vector&lt;Transaction&gt;& transactions);
+    
+    // Получение последнего обработанного блока
+    uint64_t getLastProcessedBlock();
+    
+    // Обновление последнего обработанного блока
+    void updateLastProcessedBlock(uint64_t block_number);
+    
+    // Поиск транзакций (для API)
+    std::vector&lt;Transaction&gt; findTransactions(
+        const std::optional&lt;std::string&gt;& address = std::nullopt,
+        const std::optional&lt;uint64_t&gt;& from_block = std::nullopt,
+        const std::optional&lt;uint64_t&gt;& to_block = std::nullopt,
+        size_t limit = 100,
+        const std::optional&lt;std::string&gt;& cursor = std::nullopt
+    );
+    
+private:
+    sqlite3* db_;
+    std::mutex db_mutex_;  // защита от конкурентного доступа
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    
+    <pre><code class="language-cpp">void Storage::initialize() {
+    const char* sql = R"(
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            block_number INTEGER NOT NULL,
+            block_hash TEXT NOT NULL,
+            tx_hash TEXT NOT NULL UNIQUE,  -- UNIQUE предотвращает дубликаты
+            from_address TEXT NOT NULL,
+            to_address TEXT,
+            value TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        );
+        
+        -- Индексы для быстрого поиска
+        CREATE INDEX IF NOT EXISTS idx_block_number ON transactions(block_number);
+        CREATE INDEX IF NOT EXISTS idx_from_address ON transactions(from_address);
+        CREATE INDEX IF NOT EXISTS idx_to_address ON transactions(to_address);
+        CREATE INDEX IF NOT EXISTS idx_timestamp ON transactions(timestamp);
+        
+        -- Составной индекс для поиска по адресу и блоку
+        CREATE INDEX IF NOT EXISTS idx_address_block 
+            ON transactions(from_address, block_number);
+        
+        -- Таблица для хранения состояния
+        CREATE TABLE IF NOT EXISTS state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    )";
+    
+    char* err_msg = nullptr;
+    int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK) {
+        throw std::runtime_error("Failed to initialize database: " + std::string(err_msg));
+    }
+}
+
+bool Storage::insertTransactions(const std::vector&lt;Transaction&gt;& transactions) {
+    std::lock_guard&lt;std::mutex&gt; lock(db_mutex_);
+    
+    const char* sql = R"(
+        INSERT OR IGNORE INTO transactions 
+        (block_number, block_hash, tx_hash, from_address, to_address, value, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    )";
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    
+    // Начинаем транзакцию для производительности
+    sqlite3_exec(db_, "BEGIN TRANSACTION", nullptr, nullptr, nullptr);
+    
+    bool success = true;
+    for (const auto& tx : transactions) {
+        sqlite3_bind_int64(stmt, 1, tx.block_number);
+        sqlite3_bind_text(stmt, 2, tx.block_hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 3, tx.tx_hash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 4, tx.from_address.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 5, tx.to_address.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 6, tx.value.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_int64(stmt, 7, tx.timestamp);
+        
+        int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE && rc != SQLITE_CONSTRAINT) {
+            // SQLITE_CONSTRAINT = дубликат (игнорируем)
+            success = false;
+        }
+        
+        sqlite3_reset(stmt);
+    }
+    
+    sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
+    sqlite3_finalize(stmt);
+    
+    return success;
+}
+
+uint64_t Storage::getLastProcessedBlock() {
+    std::lock_guard&lt;std::mutex&gt; lock(db_mutex_);
+    
+    const char* sql = "SELECT value FROM state WHERE key = 'last_block'";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    
+    uint64_t result = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        result = std::stoull(
+            reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 0))
+        );
+    }
+    
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+std::vector&lt;Transaction&gt; Storage::findTransactions(
+    const std::optional&lt;std::string&gt;& address,
+    const std::optional&lt;uint64_t&gt;& from_block,
+    const std::optional&lt;uint64_t&gt;& to_block,
+    size_t limit,
+    const std::optional&lt;std::string&gt;& cursor
+) {
+    std::lock_guard&lt;std::mutex&gt; lock(db_mutex_);
+    
+    std::string sql = "SELECT block_number, block_hash, tx_hash, from_address, "
+                      "to_address, value, timestamp FROM transactions WHERE 1=1";
+    
+    // Построение WHERE условий
+    if (address) {
+        sql += " AND (from_address = ? OR to_address = ?)";
+    }
+    if (from_block) {
+        sql += " AND block_number >= ?";
+    }
+    if (to_block) {
+        sql += " AND block_number <= ?";
+    }
+    if (cursor) {
+        // cursor = последний tx_hash из предыдущего запроса
+        sql += " AND tx_hash > ?";
+    }
+    
+    sql += " ORDER BY block_number ASC, tx_hash ASC LIMIT ?";
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    
+    int param = 1;
+    if (address) {
+        sqlite3_bind_text(stmt, param++, address-&gt;c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, param++, address-&gt;c_str(), -1, SQLITE_STATIC);
+    }
+    if (from_block) {
+        sqlite3_bind_int64(stmt, param++, *from_block);
+    }
+    if (to_block) {
+        sqlite3_bind_int64(stmt, param++, *to_block);
+    }
+    if (cursor) {
+        sqlite3_bind_text(stmt, param++, cursor-&gt;c_str(), -1, SQLITE_STATIC);
+    }
+    sqlite3_bind_int64(stmt, param++, limit);
+    
+    std::vector&lt;Transaction&gt; result;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        Transaction tx;
+        tx.block_number = sqlite3_column_int64(stmt, 0);
+        tx.block_hash = reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 1));
+        tx.tx_hash = reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 2));
+        tx.from_address = reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 3));
+        tx.to_address = reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 4));
+        tx.value = reinterpret_cast&lt;const char*&gt;(sqlite3_column_text(stmt, 5));
+        tx.timestamp = sqlite3_column_int64(stmt, 6);
+        result.push_back(tx);
+    }
+    
+    sqlite3_finalize(stmt);
+    return result;
+}</code></pre>
+    
+    <div class="note">
+        <strong>Производительность:</strong> Использование <code>BEGIN TRANSACTION</code> и <code>COMMIT</code> 
+        позволяет вставлять множество транзакций за одну операцию записи на диск, что значительно быстрее.
+    </div>
+    
+    <hr>
+    
+    <h3>3.5. HTTP Server</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>
+        Нужно предоставить REST API для поиска транзакций. Пользователи должны иметь возможность 
+        фильтровать по адресу, диапазону блоков, использовать пагинацию через cursor.
+    </p>
+    
+    <h4>Решение</h4>
+    <p>
+        Используем Boost.Beast для создания HTTP сервера. Обрабатываем GET запросы к <code>/transactions</code> 
+        с query параметрами.
+    </p>
+    
+    <h4>Разбор синтаксиса</h4>
+    
+    <pre><code class="language-cpp">#include &lt;boost/beast.hpp&gt;
+#include &lt;boost/asio.hpp&gt;
+#include &lt;nlohmann/json.hpp&gt;
+
+namespace http = boost::beast::http;
+
+class HttpServer {
+public:
+    HttpServer(
+        net::io_context& io,
+        Storage& storage,
+        unsigned short port = 8080
+    );
+    
+    void start();
+    
+private:
+    class Session : public std::enable_shared_from_this&lt;Session&gt; {
+    public:
+        Session(tcp::socket socket, Storage& storage);
+        void start();
+        
+    private:
+        boost::asio::awaitable&lt;void&gt; readRequest();
+        boost::asio::awaitable&lt;void&gt; handleRequest();
+        void sendResponse(const json& data);
+        
+        tcp::socket socket_;
+        Storage& storage_;
+        beast::flat_buffer buffer_;
+        http::request&lt;http::string_body&gt; request_;
+    };
+    
+    void doAccept();
+    
+    net::io_context& io_;
+    Storage& storage_;
+    tcp::acceptor acceptor_;
+};</code></pre>
+    
+    <h4>Как это работает?</h4>
+    
+    <pre><code class="language-cpp">void HttpServer::doAccept() {
+    acceptor_.async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec) {
+                std::make_shared&lt;Session&gt;(std::move(socket), storage_)-&gt;start();
+            }
+            doAccept();  // принимаем следующее соединение
+        }
+    );
+}
+
+boost::asio::awaitable&lt;void&gt; HttpServer::Session::readRequest() {
+    http::request&lt;http::string_body&gt; req;
+    co_await http::async_read(socket_, buffer_, req);
+    request_ = std::move(req);
+    co_await handleRequest();
+}
+
+boost::asio::awaitable&lt;void&gt; HttpServer::Session::handleRequest() {
+    // Парсим URL и query параметры
+    std::string target = request_.target();
+    
+    if (target.find("/transactions") != 0) {
+        sendError(404, "Not Found");
+        co_return;
+    }
+    
+    // Извлекаем query параметры
+    auto pos = target.find('?');
+    std::map&lt;std::string, std::string&gt; params;
+    if (pos != std::string::npos) {
+        std::string query = target.substr(pos + 1);
+        // Простой парсинг (можно использовать библиотеку)
+        std::istringstream iss(query);
+        std::string pair;
+        while (std::getline(iss, pair, '&')) {
+            auto eq_pos = pair.find('=');
+            if (eq_pos != std::string::npos) {
+                std::string key = pair.substr(0, eq_pos);
+                std::string value = pair.substr(eq_pos + 1);
+                // URL decode (упрощённо)
+                params[key] = value;
+            }
+        }
+    }
+    
+    // Парсим параметры
+    std::optional&lt;std::string&gt; address;
+    std::optional&lt;uint64_t&gt; from_block, to_block;
+    size_t limit = 100;
+    std::optional&lt;std::string&gt; cursor;
+    
+    if (params.count("address")) {
+        address = params["address"];
+    }
+    if (params.count("from_block")) {
+        from_block = std::stoull(params["from_block"]);
+    }
+    if (params.count("to_block")) {
+        to_block = std::stoull(params["to_block"]);
+    }
+    if (params.count("limit")) {
+        limit = std::stoull(params["limit"]);
+        limit = std::min(limit, size_t(1000));  // максимум 1000
+    }
+    if (params.count("cursor")) {
+        cursor = params["cursor"];
+    }
+    
+    // Выполняем запрос к БД
+    auto transactions = storage_.findTransactions(
+        address, from_block, to_block, limit, cursor
+    );
+    
+    // Формируем JSON ответ
+    json response = json::array();
+    for (const auto& tx : transactions) {
+        response.push_back({
+            {"block_number", tx.block_number},
+            {"block_hash", tx.block_hash},
+            {"tx_hash", tx.tx_hash},
+            {"from_address", tx.from_address},
+            {"to_address", tx.to_address},
+            {"value", tx.value},
+            {"timestamp", tx.timestamp}
+        });
+    }
+    
+    // Если есть ещё данные, добавляем cursor для следующей страницы
+    if (transactions.size() == limit && !transactions.empty()) {
+        json meta = {{"next_cursor", transactions.back().tx_hash}};
+        response.push_back({{"_meta", meta}});
+    }
+    
+    sendResponse(response);
+}
+
+void HttpServer::Session::sendResponse(const json& data) {
+    http::response&lt;http::string_body&gt; res;
+    res.result(http::status::ok);
+    res.set(http::field::content_type, "application/json");
+    res.body() = data.dump();
+    res.prepare_payload();
+    
+    http::async_write(
+        socket_,
+        res,
+        [self = shared_from_this()](boost::system::error_code ec, std::size_t) {
+            // Соединение закроется автоматически
+        }
+    );
+}</code></pre>
+    
+    <h4>Примеры запросов</h4>
+    
+    <pre><code class="language-bash"># Получить все транзакции (первые 100)
+GET /transactions
+
+# Транзакции конкретного адреса
+GET /transactions?address=0x742d35cc6634c0532925a3b844bc9e7595f0beb
+
+# Транзакции в диапазоне блоков
+GET /transactions?from_block=1000000&to_block=1000100
+
+# С пагинацией
+GET /transactions?limit=50&cursor=0xabc123...
+</code></pre>
+    
+    <hr>
+    
+    <h2>4. Интеграция компонентов</h2>
+    
+    <h3>Главный файл (main.cpp)</h3>
+    
+    <pre><code class="language-cpp">#include &lt;boost/asio.hpp&gt;
+#include &lt;iostream&gt;
+#include &lt;signal.h&gt;
+
+int main() {
+    try {
+        // 1. Создаём io_context для асинхронных операций
+        net::io_context io;
+        
+        // 2. Инициализируем компоненты
+        Storage storage("transactions.db");
+        storage.initialize();
+        
+        RpcClient rpc_client(io, "localhost", "8545", "/");
+        
+        BlockFetcher fetcher(io, rpc_client, storage, 2000);
+        
+        HttpServer http_server(io, storage, 8080);
+        
+        // 3. Запускаем все компоненты
+        fetcher.start();
+        http_server.start();
+        
+        // 4. Обработка сигналов для graceful shutdown
+        boost::asio::signal_set signals(io, SIGINT, SIGTERM);
+        signals.async_wait([&](boost::system::error_code, int) {
+            std::cout &lt;&lt; "Shutting down..." &lt;&lt; std::endl;
+            fetcher.stop();
+            io.stop();
+        });
+        
+        // 5. Запускаем обработку блоков в отдельном потоке
+        std::thread block_processor([&]() {
+            auto& block_channel = fetcher.getBlockChannel();
+            TransactionParser parser;
+            
+            while (true) {
+                boost::system::error_code ec;
+                json block_json;
+                block_channel.async_receive(
+                    [&](boost::system::error_code e, json b) {
+                        ec = e;
+                        block_json = b;
+                    }
+                );
+                io.run_one();  // ждём получения блока
+                
+                if (ec) break;  // канал закрыт
+                
+                // Парсим и сохраняем транзакции
+                auto transactions = TransactionParser::parseBlock(block_json);
+                if (!transactions.empty()) {
+                    storage.insertTransactions(transactions);
+                    
+                    // Обновляем последний обработанный блок
+                    uint64_t block_num = transactions[0].block_number;
+                    storage.updateLastProcessedBlock(block_num);
+                }
+            }
+        });
+        
+        // 6. Запускаем io_context (блокирующий вызов)
+        std::cout &lt;&lt; "Server started on port 8080" &lt;&lt; std::endl;
+        io.run();
+        
+        block_processor.join();
+        
+    } catch (const std::exception& e) {
+        std::cerr &lt;&lt; "Error: " &lt;&lt; e.what() &lt;&lt; std::endl;
+        return 1;
+    }
+    
+    return 0;
+}</code></pre>
+    
+    <div class="success">
+        <strong>Архитектура:</strong> Все компоненты работают асинхронно через один <code>io_context</code>, 
+        что позволяет эффективно использовать ресурсы и обрабатывать множество операций параллельно.
+    </div>
+    
+    <hr>
+    
+    <h2>5. Требования к производительности</h2>
+    
+    <h3>5.1. Обработка 50+ блоков в секунду</h3>
+    
+    <h4>Проблема</h4>
+    <p>
+        Нужно обрабатывать минимум 50 блоков в секунду. В Ethereum блок содержит в среднем 
+        100-200 транзакций, значит нужно обрабатывать ~5000-10000 транзакций в секунду.
+    </p>
+    
+    <h4>Решение</h4>
+    <ul>
+        <li><strong>Параллельная обработка блоков:</strong> Используем thread pool для парсинга нескольких блоков одновременно</li>
+        <li><strong>Батчинг в БД:</strong> Вставляем транзакции батчами через одну транзакцию БД</li>
+        <li><strong>Асинхронный I/O:</strong> Все сетевые операции неблокирующие</li>
+    </ul>
+    
+    <pre><code class="language-cpp">// Пример параллельной обработки блоков
+class BlockProcessor {
+    boost::asio::thread_pool pool_{4};  // 4 потока для обработки
+    
+    void processBlock(const json& block_json) {
+        boost::asio::post(pool_, [this, block_json]() {
+            auto transactions = TransactionParser::parseBlock(block_json);
+            if (!transactions.empty()) {
+                storage_.insertTransactions(transactions);
+            }
+        });
+    }
+};</code></pre>
+    
+    <h3>5.2. Отсутствие утечек памяти</h3>
+    
+    <h4>Решение</h4>
+    <ul>
+        <li>Используем умные указатели (<code>std::shared_ptr</code>, <code>std::unique_ptr</code>)</li>
+        <li>RAII для ресурсов (сокеты, соединения БД)</li>
+        <li>Ограничиваем размер очередей (channel capacity)</li>
+    </ul>
+    
+    <hr>
+    
+    <h2>6. Обработка ошибок и надёжность</h2>
+    
+    <h3>6.1. Retry при ошибках RPC</h3>
+    
+    <pre><code class="language-cpp">boost::asio::awaitable&lt;std::optional&lt;json&gt;&gt; 
+RpcClient::callWithRetry(const std::string& method, const json& params, int max_retries = 3) {
+    for (int i = 0; i &lt; max_retries; ++i) {
+        auto result = co_await call(method, params);
+        if (result) {
+            co_return result;
+        }
+        
+        // Экспоненциальная задержка перед повтором
+        auto delay = std::chrono::milliseconds(100 * (1 &lt;&lt; i));
+        co_await net::steady_timer(io_, delay).async_wait();
+    }
+    
+    co_return std::nullopt;
+}</code></pre>
+    
+    <h3>6.2. Graceful Shutdown</h3>
+    
+    <p>
+        При получении SIGINT/SIGTERM сервис должен:
+    </p>
+    <ol>
+        <li>Остановить получение новых блоков</li>
+        <li>Дождаться завершения текущих операций</li>
+        <li>Закрыть соединения с БД</li>
+        <li>Корректно завершить работу</li>
+    </ol>
+    
+    <hr>
+    
+    <h2>7. Бонусные функции</h2>
+    
+    <h3>7.1. Обработка реоргов (Chain Reorgs)</h3>
+    
+    <p>
+        Иногда блокчейн может "откатиться" — блок, который считался валидным, становится невалидным. 
+        Нужно отслеживать это и удалять транзакции из невалидных блоков.
+    </p>
+    
+    <pre><code class="language-cpp">void Storage::handleReorg(uint64_t from_block) {
+    // Удаляем все транзакции начиная с from_block
+    const char* sql = "DELETE FROM transactions WHERE block_number >= ?";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_bind_int64(stmt, 1, from_block);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}</code></pre>
+    
+    <h3>7.2. Метрики</h3>
+    
+    <p>
+        Добавить эндпоинт <code>GET /metrics</code> для мониторинга:
+    </p>
+    <ul>
+        <li>Количество обработанных блоков</li>
+        <li>Количество транзакций в БД</li>
+        <li>Последний обработанный блок</li>
+        <li>Время обработки последнего блока</li>
+    </ul>
+    
+    <hr>
+    
+    <h2>8. Структура проекта</h2>
+    
+    <div class="diagram">blockchain-indexer/
+├── CMakeLists.txt
+├── README.md
+├── config.json.example
+├── src/
+│   ├── main.cpp
+│   ├── rpc/
+│   │   ├── RpcClient.h
+│   │   └── RpcClient.cpp
+│   ├── fetcher/
+│   │   ├── BlockFetcher.h
+│   │   └── BlockFetcher.cpp
+│   ├── parser/
+│   │   ├── TransactionParser.h
+│   │   └── TransactionParser.cpp
+│   ├── storage/
+│   │   ├── Storage.h
+│   │   └── Storage.cpp
+│   └── http/
+│       ├── HttpServer.h
+│       └── HttpServer.cpp
+└── test/
+    └── test_main.cpp</div>
+    
+    <hr>
+    
+    <h2>9. Заключение</h2>
+    
+    <p>
+        Это задание требует понимания:
+    </p>
+    <ul>
+        <li><strong>Асинхронного программирования</strong> (Boost.Asio, корутины)</li>
+        <li><strong>Работы с БД</strong> (SQL, индексы, транзакции)</li>
+        <li><strong>HTTP протокола</strong> (REST API, query параметры)</li>
+        <li><strong>JSON-RPC</strong> (блокчейн API)</li>
+        <li><strong>Многопоточности</strong> (thread safety, race conditions)</li>
+    </ul>
+    
+    <div class="note">
+        <strong>Ключевые моменты для успешной реализации:</strong>
+        <ol>
+            <li>Используйте асинхронные операции везде, где возможно</li>
+            <li>Правильно обрабатывайте ошибки и добавляйте retry логику</li>
+            <li>Тестируйте на реальных данных (можно использовать тестовую сеть)</li>
+            <li>Добавьте логирование для отладки</li>
+            <li>Обеспечьте thread safety для всех разделяемых ресурсов</li>
+        </ol>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

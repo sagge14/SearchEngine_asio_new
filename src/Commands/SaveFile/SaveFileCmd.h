@@ -17,6 +17,8 @@ public:
     explicit SaveFileCmd(std::wstring  _defaultSaveDirectory): defaultSaveDirectory{std::move(_defaultSaveDirectory)}{};
 
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) final;
+    [[nodiscard]] command_execution::CommandResult executeResult(
+        const std::vector<uint8_t>& data) final;
 
     static std::wstring getUniqueFilename(const std::filesystem::path &directory, const std::wstring &filename,
                                    const std::vector<uint8_t> &fileContent);

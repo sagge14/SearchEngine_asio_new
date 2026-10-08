@@ -19,6 +19,7 @@ class SqlLogger {
 public:
     // Получение экземпляра Singleton
     static SqlLogger& instance(const std::string& dbPath = "");
+    static void shutdown() noexcept;
 
     // Асинхронное добавление логов
     void logRequest(const PersonalRequest& request);
@@ -46,6 +47,8 @@ private:
     std::mutex queueMutex;
     std::condition_variable queueCondVar;
     std::atomic<bool> stopWorker{false};
+    static SqlLogger* instance_;
+    static std::mutex instanceMutex_;
 };
 
 namespace logutil {

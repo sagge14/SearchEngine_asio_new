@@ -1,7 +1,9 @@
 #pragma once
 
 #include "FileWatcher.h"
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace boost::asio {
     class io_context;
@@ -12,10 +14,9 @@ class MultiDirWatcher
 {
 public:
     using FileCb   = FileWatcher::Callback;
-    using DirMatch = std::function<bool(const std::wstring&)>; // true → слежка
 
     MultiDirWatcher(const std::wstring& parentDir,
-                    DirMatch            matchFn,   // какие подпапки ловим
+                    const std::unordered_set<std::wstring>& kids,  // имена подпапок из конфига
                     FileCb              fileCb,
                     boost::asio::io_context* io);   // событие по файлам
 
@@ -27,7 +28,7 @@ private:
     void watchParent();                 // поток-наблюдатель
 
     std::wstring parentDir_;
-    DirMatch     matchFn_;
+    std::unordered_set<std::wstring> kids_;
     FileCb       fileCb_;
 
     HANDLE              hParent_{INVALID_HANDLE_VALUE};
@@ -36,4 +37,5 @@ private:
 
     // name  → активный вотчер
     std::unordered_map<std::wstring,std::unique_ptr<FileWatcher>> inner_;
+    std::thread watchThread_;
 };

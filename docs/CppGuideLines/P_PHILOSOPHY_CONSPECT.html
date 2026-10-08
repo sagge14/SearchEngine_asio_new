@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: P - Философия (C++ Core Guidelines)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 25px;
+        }
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 20px;
+            font-weight: 600;
+        }
+        pre {
+            background: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+        }
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .bad {
+            background-color: #ffebee;
+            border-left: 4px solid #f44336;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .good {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        hr {
+            border: none;
+            border-top: 2px solid #ddd;
+            margin: 30px 0;
+        }
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        @media (max-width: 768px) {
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>P: Философия - Подробный конспект</h1>
+    
+    <div class="note">
+        <strong>О разделе:</strong> Раздел P содержит фундаментальные принципы программирования на C++. Эти правила формируют 
+        основу для всех остальных рекомендаций и помогают понять философию современного C++.
+    </div>
+
+    <hr>
+
+    <h2>P.1: Выражайте идеи напрямую в коде</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Компиляторы не читают комментарии. Если важная информация о коде находится только в комментариях, она может быть 
+    упущена, неправильно понята или устареть. Код, который выражает свои намерения напрямую через типы, имена и структуру, 
+    более надёжен и понятен.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте систему типов C++ для выражения семантики. Выбирайте осмысленные имена. Структурируйте код так, чтобы 
+    его назначение было очевидным без комментариев.</p>
+    
+    <h4>Разбор синтаксиса</h4>
+    <ul>
+        <li><strong>Типы:</strong> Используйте пользовательские типы вместо примитивов для выражения семантики</li>
+        <li><strong>Имена:</strong> Выбирайте имена, которые отражают назначение переменной или функции</li>
+        <li><strong>const:</strong> Используйте const для выражения неизменяемости</li>
+        <li><strong>Структура:</strong> Организуйте код так, чтобы его логика была очевидной</li>
+    </ul>
+    
+    <h4>Как это работает?</h4>
+    <p>Компилятор проверяет типы на этапе компиляции. Если вы используете тип Month вместо int, компилятор не позволит 
+    передать невалидное значение. Это предотвращает ошибки, которые комментарии не могут предотвратить.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: неясно, что возвращается
+// Возвращает номер месяца (1-12)
+int month();
+
+// Плохо: неясно, что означают параметры
+void process(int a, int b, int c);
+
+// Плохо: магические числа без объяснения
+if (status == 3) {
+    // что означает 3?
+}
+
+// Плохо: комментарий объясняет, что делает код
+// Увеличиваем счётчик на 1
+counter = counter + 1;</code></pre>
+            <p><strong>Проблемы:</strong></p>
+            <ul>
+                <li>Тип int не передаёт семантику месяца</li>
+                <li>Параметры a, b, c не имеют смысла</li>
+                <li>Магическое число 3 требует комментария</li>
+                <li>Комментарий дублирует код</li>
+            </ul>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: тип выражает семантику
+enum class Month {
+    January = 1, February, March, April, May, June,
+    July, August, September, October, November, December
+};
+Month current_month() const;  // явно возвращает месяц
+
+// Хорошо: осмысленные имена параметров
+void process(UserId user_id, OrderId order_id, PaymentId payment_id);
+
+// Хорошо: именованная константа вместо магического числа
+enum class OrderStatus { Pending, Processing, Completed, Cancelled };
+if (status == OrderStatus::Completed) {
+    // намерение очевидно из кода
+}
+
+// Хорошо: код самодокументируемый
+increment_counter();  // имя функции выражает действие</code></pre>
+            <p><strong>Преимущества:</strong></p>
+            <ul>
+                <li>Тип Month предотвращает ошибки</li>
+                <li>Имена параметров объясняют назначение</li>
+                <li>Константа OrderStatus::Completed понятна</li>
+                <li>Код не требует комментариев</li>
+            </ul>
+        </div>
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Пример 1: Использование типов для безопасности
+class Temperature {
+    double value;
+public:
+    explicit Temperature(double v) : value(v) {
+        if (v < -273.15) throw std::invalid_argument("Ниже абсолютного нуля");
+    }
+    double get_celsius() const { return value; }
+    double get_fahrenheit() const { return value * 9.0/5.0 + 32.0; }
+};
+
+// Использование:
+Temperature temp{25.0};  // тип выражает, что это температура
+// temp = 25.0;  // ошибка компиляции - нельзя присвоить double
+
+// Пример 2: Использование enum class вместо магических чисел
+enum class FileMode {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite
+};
+
+void open_file(const std::string& path, FileMode mode) {
+    // mode может быть только одним из трёх значений
+    // компилятор предотвратит передачу невалидного значения
+}
+
+// Использование:
+open_file("data.txt", FileMode::ReadOnly);  // понятно и безопасно</code></pre>
+    
+    <div class="note">
+        <strong>Ключевой момент:</strong> Код, который выражает идеи напрямую, легче читать, понимать и поддерживать. 
+        Компилятор может проверить типы, но не может проверить комментарии.
+    </div>
+
+    <hr>
+
+    <h2>P.2: Пишите на стандартном ISO C++</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Многие компиляторы поддерживают расширения языка, которые не являются частью стандарта C++. Использование таких 
+    расширений делает код непереносимым и может привести к проблемам при переходе на другой компилятор или платформу.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте только стандартные возможности ISO C++. Настройте компилятор так, чтобы он отклонял нестандартные расширения.</p>
+    
+    <h4>Разбор синтаксиса</h4>
+    <ul>
+        <li><strong>Стандарт C++:</strong> Используйте возможности из стандарта (C++17, C++20, C++23)</li>
+        <li><strong>Флаги компилятора:</strong> Используйте флаги типа -pedantic, -std=c++20 для строгой проверки</li>
+        <li><strong>Избегайте:</strong> Расширений компилятора (например, __attribute__, #pragma)</li>
+    </ul>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: использование расширения GCC
+void func() __attribute__((deprecated));
+
+// Плохо: использование нестандартного типа
+__int128 big_number;  // не стандарт C++
+
+// Плохо: использование нестандартных макросов
+#ifdef _MSC_VER
+    // код только для MSVC
+#endif
+
+// Плохо: использование нестандартных библиотек
+#include &lt;windows.h&gt;  // специфично для Windows</code></pre>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: стандартный C++ атрибут
+[[deprecated("Используйте new_func()")]]
+void func();
+
+// Хорошо: стандартный тип из &lt;cstdint&gt;
+#include &lt;cstdint&gt;
+std::int64_t big_number;  // стандартный тип
+
+// Хорошо: стандартные возможности
+#include &lt;filesystem&gt;  // стандартная библиотека C++17
+namespace fs = std::filesystem;
+
+// Хорошо: кроссплатформенный код
+#include &lt;fstream&gt;  // стандартная библиотека</code></pre>
+        </div>
+    </div>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Если вам действительно нужно использовать расширения компилятора (например, для оптимизации), 
+        изолируйте их в отдельные модули и документируйте зависимость от конкретного компилятора.
+    </div>
+
+    <hr>
+
+    <h2>P.3: Выражайте намерения</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Код может быть технически правильным, но если его намерение неясно, его сложно понять, поддерживать и изменять. 
+    Неясные намерения приводят к ошибкам при модификации кода.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте конструкции языка, которые явно выражают ваше намерение. Предпочитайте range-based for обычным циклам, 
+    алгоритмы STL ручным циклам, умные указатели сырым указателям.</p>
+    
+    <h4>Как это работает?</h4>
+    <p>Когда вы используете range-based for, намерение "пройти по всем элементам" очевидно. Когда вы используете std::find, 
+    намерение "найти элемент" очевидно. Компилятор и другие программисты понимают ваши намерения без дополнительных объяснений.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: неясно намерение
+gsl::index i = 0;
+while (i < v.size()) {
+    process(v[i]);
+    ++i;
+}
+
+// Плохо: неясно, что мы ищем
+bool found = false;
+for (gsl::index i = 0; i < vec.size(); ++i) {
+    if (vec[i] == target) {
+        found = true;
+        break;
+    }
+}
+
+// Плохо: неясно, что делает этот код
+int* p = get_pointer();
+if (p != nullptr) {
+    use(*p);
+    delete p;
+}</code></pre>
+            <p><strong>Проблемы:</strong></p>
+            <ul>
+                <li>Неясно, что мы просто проходим по элементам</li>
+                <li>Ручной поиск скрывает намерение</li>
+                <li>Неясно, кто владеет указателем</li>
+            </ul>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: намерение очевидно - пройти по всем элементам
+for (const auto& x : v) {
+    process(x);
+}
+
+// Хорошо: намерение найти элемент выражено явно
+auto it = std::find(vec.begin(), vec.end(), target);
+bool found = (it != vec.end());
+
+// Хорошо: намерение владения выражено через unique_ptr
+std::unique_ptr&lt;int&gt; p = get_pointer();
+if (p) {
+    use(*p);
+    // автоматическое освобождение памяти
+}</code></pre>
+            <p><strong>Преимущества:</strong></p>
+            <ul>
+                <li>Намерение "пройти по элементам" очевидно</li>
+                <li>std::find явно выражает поиск</li>
+                <li>unique_ptr выражает владение</li>
+            </ul>
+        </div>
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Пример 1: Использование алгоритмов STL
+#include &lt;algorithm&gt;
+#include &lt;vector&gt;
+#include &lt;numeric&gt;
+
+std::vector&lt;int&gt; numbers = {1, 2, 3, 4, 5};
+
+// Плохо: ручной подсчёт суммы
+int sum = 0;
+for (size_t i = 0; i < numbers.size(); ++i) {
+    sum += numbers[i];
+}
+
+// Хорошо: намерение "суммировать" выражено явно
+int sum = std::accumulate(numbers.begin(), numbers.end(), 0);
+
+// Пример 2: Использование range-based for для контейнеров
+std::map&lt;std::string, int&gt; scores = {{"Alice", 100}, {"Bob", 85}};
+
+// Плохо: ручной обход
+for (auto it = scores.begin(); it != scores.end(); ++it) {
+    std::cout << it->first << ": " << it->second << "\n";
+}
+
+// Хорошо: намерение "пройти по парам" очевидно
+for (const auto& [name, score] : scores) {
+    std::cout << name << ": " << score << "\n";
+}</code></pre>
+
+    <hr>
+
+    <h2>P.4: В идеале программа должна быть статически типобезопасной</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Ошибки типов, обнаруженные во время выполнения, могут привести к сбоям программы. Статическая типобезопасность 
+    позволяет обнаруживать ошибки на этапе компиляции, когда их исправить проще и дешевле.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте систему типов C++ для предотвращения ошибок. Избегайте небезопасных конструкций: union без тегов, 
+    небезопасных приведений типов, распада массивов.</p>
+    
+    <h4>Проблемные области</h4>
+    <ul>
+        <li><strong>Union:</strong> Может содержать разные типы, но компилятор не знает, какой активен</li>
+        <li><strong>Приведения типов:</strong> Обходят систему типов</li>
+        <li><strong>Распад массивов:</strong> Массив превращается в указатель, теряется информация о размере</li>
+        <li><strong>Ошибки диапазона:</strong> Доступ за пределами массива</li>
+        <li><strong>Сужение преобразований:</strong> Потеря данных при преобразовании типов</li>
+    </ul>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: union без тега - небезопасно
+union Value {
+    int i;
+    double d;
+    char* s;
+};
+Value v;
+v.i = 42;
+// Какой тип активен? Неизвестно!
+
+// Плохо: небезопасное приведение типа
+void* ptr = malloc(100);
+int* int_ptr = (int*)ptr;  // небезопасно
+
+// Плохо: распад массива
+void process(int arr[]) {  // на самом деле int*
+    // размер массива потерян!
+}
+
+// Плохо: доступ за пределами массива
+int arr[10];
+arr[15] = 42;  // неопределённое поведение</code></pre>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: std::variant вместо union
+#include &lt;variant&gt;
+std::variant&lt;int, double, std::string&gt; v = 42;
+// Тип известен и проверяется компилятором
+
+// Хорошо: std::any или шаблоны вместо void*
+template&lt;typename T&gt;
+std::unique_ptr&lt;T&gt; allocate() {
+    return std::make_unique&lt;T&gt;();
+}
+
+// Хорошо: std::array или std::span вместо распада
+#include &lt;array&gt;
+#include &lt;span&gt;
+void process(std::span&lt;int&gt; arr) {
+    // размер доступен через arr.size()
+}
+
+// Хорошо: проверка границ
+#include &lt;vector&gt;
+std::vector&lt;int&gt; vec(10);
+if (index < vec.size()) {
+    vec[index] = 42;  // безопасно
+}</code></pre>
+        </div>
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Пример: Использование std::variant для типобезопасного union
+#include &lt;variant&gt;
+#include &lt;string&gt;
+#include &lt;iostream&gt;
+
+using Value = std::variant&lt;int, double, std::string&gt;;
+
+void print_value(const Value& v) {
+    // Компилятор заставляет обработать все возможные типы
+    std::visit([](auto&& val) {
+        std::cout << val << "\n";
+    }, v);
+}
+
+// Использование:
+Value v1 = 42;
+Value v2 = 3.14;
+Value v3 = std::string("Hello");
+
+print_value(v1);  // безопасно и типобезопасно
+
+// Пример: Использование std::span для безопасной работы с массивами
+#include &lt;span&gt;
+#include &lt;array&gt;
+
+void process_data(std::span&lt;const int&gt; data) {
+    // data.size() всегда доступен
+    for (size_t i = 0; i < data.size(); ++i) {
+        // безопасный доступ
+        std::cout << data[i] << " ";
+    }
+}
+
+std::array&lt;int, 5&gt; arr = {1, 2, 3, 4, 5};
+process_data(arr);  // безопасно передать массив</code></pre>
+    
+    <div class="note">
+        <strong>Важно:</strong> Статическая типобезопасность не гарантирует отсутствие всех ошибок, но она предотвращает 
+        множество распространённых ошибок на этапе компиляции, когда их исправить проще всего.
+    </div>
+
+    <hr>
+
+    <h2>P.5: Предпочитайте проверки на этапе компиляции проверкам во время выполнения</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Проверки во время выполнения требуют дополнительного кода, могут быть пропущены и обнаруживают ошибки только при 
+    выполнении программы. Проверки на этапе компиляции не требуют дополнительного кода во время выполнения и обнаруживают 
+    ошибки до запуска программы.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте static_assert для проверок на этапе компиляции. Используйте constexpr для вычислений на этапе компиляции. 
+    Используйте систему типов для предотвращения ошибок.</p>
+    
+    <h4>Как это работает?</h4>
+    <p>static_assert проверяет условие на этапе компиляции. Если условие ложно, компиляция завершается с ошибкой. constexpr 
+    позволяет вычислять значения на этапе компиляции, что даёт возможность использовать их в static_assert и других контекстах, 
+    требующих констант времени компиляции.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: проверка во время выполнения
+int bits = 0;
+for (int i = 1; i; i <<= 1)
+    ++bits;
+if (bits < 32)
+    std::cerr << "Int слишком мал\n";
+
+// Плохо: проверка во время выполнения
+template&lt;typename T&gt;
+void process(T value) {
+    if (sizeof(T) < 4) {
+        throw std::runtime_error("Тип слишком мал");
+    }
+    // ...
+}
+
+// Плохо: вычисление во время выполнения
+double calculate_pi() {
+    return 3.14159265358979323846;
+}
+const double pi = calculate_pi();  // вычисляется во время выполнения</code></pre>
+            <p><strong>Проблемы:</strong></p>
+            <ul>
+                <li>Ошибка обнаруживается только при выполнении</li>
+                <li>Требуется дополнительный код проверки</li>
+                <li>Может быть пропущена при тестировании</li>
+            </ul>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: проверка на этапе компиляции
+static_assert(sizeof(int) >= 4, "Int должен быть минимум 32 бита");
+
+// Хорошо: проверка на этапе компиляции в шаблоне
+template&lt;typename T&gt;
+void process(T value) {
+    static_assert(sizeof(T) >= 4, "Тип должен быть минимум 32 бита");
+    // ...
+}
+
+// Хорошо: вычисление на этапе компиляции
+constexpr double calculate_pi() {
+    return 3.14159265358979323846;
+}
+constexpr double pi = calculate_pi();  // вычисляется на этапе компиляции</code></pre>
+            <p><strong>Преимущества:</strong></p>
+            <ul>
+                <li>Ошибка обнаруживается на этапе компиляции</li>
+                <li>Нет накладных расходов во время выполнения</li>
+                <li>Невозможно пропустить при тестировании</li>
+            </ul>
+        </div>
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Пример 1: Проверка размера типа на этапе компиляции
+#include &lt;cstdint&gt;
+
+// Проверяем, что int64_t действительно 64 бита
+static_assert(sizeof(std::int64_t) == 8, 
+              "int64_t должен быть 8 байт");
+
+// Пример 2: Проверка свойств типа
+template&lt;typename T&gt;
+class Container {
+    static_assert(std::is_copy_constructible_v&lt;T&gt;,
+                  "T должен быть копируемым");
+    static_assert(std::is_destructible_v&lt;T&gt;,
+                  "T должен быть уничтожаемым");
+    // ...
+};
+
+// Пример 3: Вычисление на этапе компиляции
+constexpr int factorial(int n) {
+    return (n <= 1) ? 1 : n * factorial(n - 1);
+}
+
+constexpr int fact_5 = factorial(5);  // вычисляется на этапе компиляции
+static_assert(fact_5 == 120, "5! должно быть 120");
+
+// Пример 4: Проверка условий компиляции
+template&lt;typename T&gt;
+void safe_divide(T a, T b) {
+    static_assert(std::is_arithmetic_v&lt;T&gt;,
+                  "T должен быть арифметическим типом");
+    // ...
+}</code></pre>
+    
+    <div class="success">
+        <strong>Правило:</strong> Если что-то можно проверить на этапе компиляции, проверьте это на этапе компиляции. 
+        Это быстрее, надёжнее и не требует дополнительного кода во время выполнения.
+    </div>
+
+    <hr>
+
+    <h2>P.8: Не допускайте утечек ресурсов</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Ресурсы (память, файлы, сетевые соединения, блокировки) ограничены. Если ресурсы не освобождаются после использования, 
+    они накапливаются и в конечном итоге исчерпываются, что приводит к сбою программы.</p>
+    
+    <h4>Решение</h4>
+    <p>Используйте RAII (Resource Acquisition Is Initialization) - идиому, при которой ресурс приобретается в конструкторе 
+    и освобождается в деструкторе. Используйте умные указатели для управления памятью, контейнеры STL для управления данными.</p>
+    
+    <h4>Как это работает?</h4>
+    <p>RAII гарантирует, что ресурс будет освобождён при выходе из области видимости, даже если произойдёт исключение. 
+    Деструктор вызывается автоматически при выходе из области видимости или при выбрасывании исключения.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: возможна утечка файлового дескриптора
+void process_file(const char* name) {
+    FILE* input = fopen(name, "r");
+    if (!input) return;  // утечка, если файл не открыт
+    
+    char buffer[100];
+    if (fgets(buffer, sizeof(buffer), input) == nullptr) {
+        fclose(input);  // нужно не забыть закрыть
+        return;
+    }
+    
+    // обработка данных...
+    
+    if (error_condition) {
+        return;  // УТЕЧКА! файл не закрыт
+    }
+    
+    fclose(input);  // легко забыть
+}
+
+// Плохо: утечка памяти
+void allocate_memory() {
+    int* ptr = new int[1000];
+    // ... использование ...
+    if (some_condition) {
+        return;  // УТЕЧКА! память не освобождена
+    }
+    delete[] ptr;  // легко забыть
+}
+
+// Плохо: утечка блокировки
+std::mutex mtx;
+void critical_section() {
+    mtx.lock();
+    // ... работа ...
+    if (error) {
+        return;  // УТЕЧКА! блокировка не снята
+    }
+    mtx.unlock();  // легко забыть
+}</code></pre>
+            <p><strong>Проблемы:</strong></p>
+            <ul>
+                <li>Легко забыть освободить ресурс</li>
+                <li>При исключении ресурс не освобождается</li>
+                <li>Код становится сложным из-за множества точек выхода</li>
+            </ul>
+        </div>
+        
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: RAII автоматически закрывает файл
+#include &lt;fstream&gt;
+#include &lt;string&gt;
+
+void process_file(const std::string& name) {
+    std::ifstream input(name);  // автоматически откроется
+    if (!input.is_open()) {
+        return;  // автоматически закроется при выходе
+    }
+    
+    std::string line;
+    if (!std::getline(input, line)) {
+        return;  // автоматически закроется
+    }
+    
+    // обработка данных...
+    
+    if (error_condition) {
+        return;  // автоматически закроется
+    }
+    // файл автоматически закроется при выходе из функции
+}
+
+// Хорошо: умный указатель автоматически освобождает память
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+
+void allocate_memory() {
+    auto ptr = std::make_unique&lt;int[]&gt;(1000);
+    // ... использование ...
+    if (some_condition) {
+        return;  // память автоматически освободится
+    }
+    // память автоматически освободится при выходе
+}
+
+// Хорошо: lock_guard автоматически снимает блокировку
+#include &lt;mutex&gt;
+std::mutex mtx;
+
+void critical_section() {
+    std::lock_guard&lt;std::mutex&gt; lock(mtx);
+    // ... работа ...
+    if (error) {
+        return;  // блокировка автоматически снимется
+    }
+    // блокировка автоматически снимется при выходе
+}</code></pre>
+            <p><strong>Преимущества:</strong></p>
+            <ul>
+                <li>Ресурс автоматически освобождается</li>
+                <li>Работает даже при исключениях</li>
+                <li>Код проще и понятнее</li>
+            </ul>
+        </div>
+    </div>
+    
+    <h4>Дополнительные примеры</h4>
+    
+    <pre><code class="language-cpp">// Пример 1: Собственный RAII класс для ресурса
+class DatabaseConnection {
+    void* connection_handle;
+public:
+    DatabaseConnection(const std::string& connection_string) {
+        connection_handle = open_connection(connection_string);
+        if (!connection_handle) {
+            throw std::runtime_error("Не удалось подключиться");
+        }
+    }
+    
+    ~DatabaseConnection() {
+        if (connection_handle) {
+            close_connection(connection_handle);
+        }
+    }
+    
+    // Удаляем копирование и присваивание
+    DatabaseConnection(const DatabaseConnection&) = delete;
+    DatabaseConnection& operator=(const DatabaseConnection&) = delete;
+    
+    // Разрешаем перемещение
+    DatabaseConnection(DatabaseConnection&& other) noexcept
+        : connection_handle(other.connection_handle) {
+        other.connection_handle = nullptr;
+    }
+    
+    void execute_query(const std::string& query) {
+        // использование connection_handle
+    }
+};
+
+// Использование:
+void process_database() {
+    DatabaseConnection db("server=localhost;database=mydb");
+    // ... работа с базой данных ...
+    // соединение автоматически закроется при выходе
+}
+
+// Пример 2: Использование finally для гарантированной очистки
+#include &lt;functional&gt;
+
+template&lt;typename F&gt;
+class Finally {
+    F cleanup;
+public:
+    explicit Finally(F f) : cleanup(std::move(f)) {}
+    ~Finally() { cleanup(); }
+    
+    Finally(const Finally&) = delete;
+    Finally& operator=(const Finally&) = delete;
+};
+
+template&lt;typename F&gt;
+Finally&lt;F&gt; make_finally(F f) {
+    return Finally&lt;F&gt;(std::move(f));
+}
+
+void example() {
+    int* resource = acquire_resource();
+    auto cleanup = make_finally([resource]() {
+        release_resource(resource);
+    });
+    
+    // ... работа с ресурсом ...
+    // ресурс автоматически освободится при выходе
+}</code></pre>
+    
+    <div class="success">
+        <strong>Правило нуля:</strong> Если вы используете RAII правильно, вам не нужно вручную управлять ресурсами. 
+        Деструкторы делают это автоматически.
+    </div>
+
+    <hr>
+
+    <h2>Заключение</h2>
+    
+    <div class="note">
+        <h3>Ключевые принципы раздела P (Философия):</h3>
+        <ul>
+            <li><strong>Выражайте идеи в коде:</strong> Используйте типы и имена для выражения семантики</li>
+            <li><strong>Стандартный C++:</strong> Избегайте расширений компилятора</li>
+            <li><strong>Явные намерения:</strong> Код должен быть самодокументируемым</li>
+            <li><strong>Типобезопасность:</strong> Используйте систему типов для предотвращения ошибок</li>
+            <li><strong>Проверки на этапе компиляции:</strong> Предпочитайте статические проверки динамическим</li>
+            <li><strong>RAII:</strong> Используйте автоматическое управление ресурсами</li>
+        </ul>
+    </div>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Эти принципы формируют основу для всех остальных рекомендаций C++ Core Guidelines. 
+        Понимание философии поможет применять остальные правила более осознанно.
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе C++ Core Guidelines. 
+    Полный документ: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

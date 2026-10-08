@@ -1,0 +1,32 @@
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:\\AutoPadEconomicalBackups_Test",
+      "period_sec": 10,
+      "targets": [
+        {
+          "src": "D:\\BASES",
+          "is_directory": true,
+          "mode": "auto",
+          "strategy": "mirror_history",
+          "history_periods": [
+            {"every": "10s", "keep": 3},
+            {"every": "1min", "keep": 3},
+            {"every": "1h", "keep": 2}
+          ]
+        },
+        {
+          "src": "D:\\BASES_PRD",
+          "is_directory": true,
+          "mode": "auto",
+          "strategy": "mirror_history",
+          "history_periods": [
+            {"every": "10s", "keep": 3},
+            {"every": "1min", "keep": 3},
+            {"every": "1h", "keep": 2}
+          ]
+        }
+      ]
+    }
+  ]
+}

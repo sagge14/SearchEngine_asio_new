@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: Как работает ASIO Server</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 25px;
+        }
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 20px;
+            font-weight: 600;
+        }
+        pre {
+            background: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+        }
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .diagram {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+            white-space: pre;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Конспект: Как работает ASIO Server</h1>
+
+<p>
+    ASIO Server — асинхронный TCP-сервер на Boost.Asio, обрабатывающий клиентские подключения 
+    и выполняющий команды (поиск, получение файлов, регистрация пользователей и др.).
+</p>
+
+<hr>
+
+<h2>1. Общая архитектура</h2>
+
+<h4>Проблема/Контекст</h4>
+<p>
+    Серверу поисковой системы нужно принимать множество одновременных TCP-подключений,
+    читать команды, выполнять их (часто с тяжёлой логикой: поиск, SQL, файлы) и отправлять ответы.
+    Блокирующий ввод-вывод ограничивает пропускную способность; нужна асинхронность.
+</p>
+
+<h4>Решение</h4>
+<p>
+    Используется <strong>Boost.Asio</strong> с C++20 <strong>корутинами</strong> (co_await, co_spawn).
+    Архитектура разделена на три основных класса:
+</p>
+
+<div class="diagram">┌─────────────────────────────────────────────────────────────────────────┐
+│                        AsioServer (принимает соединения)                     │
+│  acceptor_ → async_accept → создаёт session для каждого клиента              │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  session (одно соединение): readLoop + writeLoop + commandExec           │
+│  - readLoop: читает Header + payload, запускает commandExec на cpu_pool  │
+│  - writeLoop: получает из channel и пишет в сокет                        │
+│  - commandExec: выполняет команду и отправляет результат через channel   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Interface (статический диспетчер команд)                                │
+│  cmdMap[COMMAND] → unique_ptr&lt;Command&gt; → execute(data) → vector&lt;uint8_t&gt;  │
+└─────────────────────────────────────────────────────────────────────────┘</div>
+
+<h4>Разбор ключевых компонентов</h4>
+<table>
+    <tr><th>Компонент</th><th>Назначение</th></tr>
+    <tr><td><code>AsioServer</code></td><td>Слушает порт, создаёт <code>session</code> на каждое подключение</td></tr>
+    <tr><td><code>session</code></td><td>Управляет одним сокетом: чтение, запись, выполнение команд</td></tr>
+    <tr><td><code>Interface</code></td><td>Карта команд → обработчики, выполнение через <code>execCommand</code></td></tr>
+    <tr><td><code>write_channel_</code></td><td>Канал для передачи данных из commandExec в writeLoop (потокобезопасно)</td></tr>
+    <tr><td><code>cpu_pool_</code></td><td>Пул потоков для тяжёлых задач (поиск, SQL), чтобы не блокировать I/O</td></tr>
+</table>
+
+<hr>
+
+<h2>2. Класс AsioServer</h2>
+
+<h4>Проблема/Контекст</h4>
+<p>
+    Нужно принимать входящие соединения на заданном порту и для каждого создавать отдельную сессию,
+    не блокируя основной поток.
+</p>
+
+<h4>Разбор синтаксиса</h4>
+
+<pre><code class="language-cpp">class AsioServer
+{
+public:
+    AsioServer(
+        boost::asio::io_context& net_io,   // контекст для сетевых операций
+        boost::asio::thread_pool& cpu_pool, // пул для CPU-задач
+        unsigned short port                 // порт прослушивания
+    );
+
+private:
+    void do_accept();                      // рекурсивный вызов accept
+
+    boost::asio::io_context& net_io_;      // ссылка на net io_context
+    boost::asio::thread_pool& cpu_pool_;   // ссылка на пул потоков
+    tcp::acceptor acceptor_;               // приёмник соединений
+};</code></pre>
+
+<ul>
+    <li><strong>net_io_</strong> — io_context, в котором выполняются сетевые операции (accept, read, write).</li>
+    <li><strong>cpu_pool_</strong> — thread_pool для выполнения тяжёлых команд (поиск, SQL, работа с файлами).</li>
+    <li><strong>acceptor_</strong> — TCP acceptor, слушает порт и принимает новые соединения.</li>
+</ul>
+
+<h4>Как это работает?</h4>
+
+<pre><code class="language-cpp">AsioServer::AsioServer(
+    boost::asio::io_context& net_io,
+    boost::asio::thread_pool& cpu_pool,
+    unsigned short port
+)
+    : net_io_(net_io)
+    , cpu_pool_(cpu_pool)
+    , acceptor_(net_io_, tcp::endpoint(tcp::v4(), port))
+{
+    do_accept();
+}
+
+void AsioServer::do_accept() {
+    acceptor_.async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec)
+                std::make_shared&lt;session&gt;(std::move(socket), cpu_pool_)-&gt;start();
+            do_accept();  // сразу планируем следующий accept
+        });
+}</code></pre>
+
+<ol>
+    <li>В конструкторе создаётся <code>acceptor</code> на <code>tcp::endpoint(tcp::v4(), port)</code>.</li>
+    <li>Вызывается <code>do_accept()</code>.</li>
+    <li><code>async_accept</code> асинхронно ждёт нового клиента; когда клиент подключается, вызывается callback.</li>
+    <li>В callback: при отсутствии ошибки создаётся <code>std::make_shared&lt;session&gt;</code>, сокет передаётся в session, вызывается <code>start()</code>.</li>
+    <li><code>do_accept()</code> вызывается снова — запускается ожидание следующего подключения (цепочка «рекурсии через callback»).</li>
+</ol>
+
+<div class="note">
+    <strong>Важно:</strong> Каждое соединение обслуживается отдельным экземпляром <code>session</code>.
+    Session хранится в shared_ptr, чтобы жить до завершения всех асинхронных операций.
+</div>
+
+<hr>
+
+<h2>3. Класс session</h2>
+
+<h4>Проблема/Контекст</h4>
+<p>
+    Для одного TCP-соединения нужно: читать данные (заголовок + payload), выполнять команду,
+    отправлять ответ. Чтение и запись должны идти асинхронно и параллельно; выполнение команд
+    — на отдельном пуле, чтобы не блокировать сетевой цикл.
+</p>
+
+<h4>Разбор синтаксиса</h4>
+
+<pre><code class="language-cpp">class session : public std::enable_shared_from_this&lt;session&gt;
+{
+    static constexpr std::size_t kWriteChannelCapacity = 8;  // буфер канала записи
+    enum { max_length = 64 * 1024 };  // 64 KB на чтение порциями
+
+    using WriteItem = std::variant&lt;Header, std::shared_ptr&lt;std::vector&lt;BYTE&gt;&gt;,
+                                  std::filesystem::path&gt;;
+
+    tcp::socket socket_;
+    boost::asio::thread_pool& cpu_pool_;
+    Header header_{};
+    std::vector&lt;BYTE&gt; v_data_{};
+    std::atomic_bool stopped_{false};
+    std::atomic&lt;bool&gt; command_running_{false};  // только одна команда за раз
+    boost::asio::experimental::channel&lt;void(boost::system::error_code, WriteItem)&gt; write_channel_;
+    // ...
+};</code></pre>
+
+<ul>
+    <li><strong>WriteItem</strong> — variant: может быть заголовок ответа, буфер байтов или путь к файлу (для потоковой отправки).</li>
+    <li><strong>write_channel_</strong> — канал между <code>commandExec</code> и <code>writeLoop</code>; capacity = 8 элементов.</li>
+    <li><strong>command_running_</strong> — атомарный флаг: не более одной выполняющейся команды на сессию.</li>
+</ul>
+
+<h4>Запуск сессии: start()</h4>
+
+<pre><code class="language-cpp">void session::start()
+{
+    auto self = shared_from_this();
+    auto ex = socket_.get_executor();
+
+    // Запуск readLoop как корутины
+    boost::asio::co_spawn(ex, [self]() -&gt; boost::asio::awaitable&lt;void&gt; {
+        co_await self->readLoop();
+    }, [self](const std::exception_ptr& eptr) {
+        if (eptr) { /* логируем */ }
+        self->stop("readLoop finished");
+    });
+
+    // Запуск writeLoop как корутины
+    boost::asio::co_spawn(ex, [self]() -&gt; boost::asio::awaitable&lt;void&gt; {
+        co_await self->writeLoop();
+    }, [self](const std::exception_ptr& eptr) {
+        if (eptr) { /* логируем */ }
+        self->stop("writeLoop finished");
+    });
+}</code></pre>
+
+<p>
+    <code>co_spawn</code> запускает корутины в executor сокета (net_io). <code>readLoop</code> и <code>writeLoop</code>
+    работают параллельно. При завершении любой из них (нормальном или по исключению) вызывается <code>stop()</code>.
+</p>
+
+<hr>
+
+<h3>3.1 readLoop — цикл чтения</h3>
+
+<h4>Как это работает?</h4>
+
+<pre><code class="language-cpp">boost::asio::awaitable&lt;void&gt; session::readLoop()
+{
+    while (!stopped_ && socket_.is_open()) {
+        // 1. Читаем заголовок
+        co_await boost::asio::async_read(socket_,
+            boost::asio::buffer(&amp;header_, sizeof(header_)),
+            boost::asio::use_awaitable);
+
+        // 2. Проверки: размер payload, валидность команды
+        if (header_.size &gt; MAX_PAYLOAD) { /* SOMEERROR в канал, выход */ }
+        if (!trustCommand()) { /* SOMEERROR в канал, выход */ }
+
+        // 3. Читаем payload порциями
+        v_data_.assign(header_.size, 0);
+        while (total_read &lt; header_.size) {
+            bytes = co_await socket_.async_read_some(...);
+            total_read += bytes;
+        }
+
+        // 4. Не более одной команды одновременно
+        if (command_running_.exchange(true)) {
+            write_channel_.try_send(..., SERVER_BUSY_ERROR);
+            return;
+        }
+
+        // 5. Запускаем commandExec на cpu_pool
+        co_spawn(cpu_pool_, [self]() -&gt; awaitable&lt;void&gt; {
+            co_await self->commandExec();
+            self->command_running_ = false;
+        }, boost::asio::detached);
+    }
+}</code></pre>
+
+<ol>
+    <li>Читается <code>Header</code> (size, command).</li>
+    <li>Проверяется размер payload (ограничение 1 GB) и валидность команды через <code>trustCommand()</code>.</li>
+    <li>Тело запроса читается в <code>v_data_</code> порциями по 64 KB.</li>
+    <li>Если уже выполняется команда, отправляется <code>SERVER_BUSY_ERROR</code> и цикл продолжает читать следующий запрос.</li>
+    <li>Иначе <code>commandExec</code> запускается на <code>cpu_pool_</code>, чтобы не блокировать net_io.</li>
+</ol>
+
+<div class="success">
+    Разделение I/O (readLoop) и CPU (commandExec на cpu_pool) позволяет обрабатывать много соединений
+    и выполнять тяжёлые команды параллельно без блокировки сети.
+</div>
+
+<hr>
+
+<h3>3.2 writeLoop — цикл записи</h3>
+
+<h4>Как это работает?</h4>
+
+<pre><code class="language-cpp">boost::asio::awaitable&lt;void&gt; session::writeLoop()
+{
+    while (!stopped_ && socket_.is_open()) {
+        auto [ec, item] = co_await write_channel_.async_receive(
+            boost::asio::as_tuple(boost::asio::use_awaitable));
+
+        if (ec) break;  // канал закрыт
+
+        if (auto hdr = std::get_if&lt;Header&gt;(&amp;item))
+            co_await boost::asio::async_write(socket_, boost::asio::buffer(hdr, sizeof(*hdr)), ...);
+        else if (auto buf = std::get_if&lt;shared_ptr&lt;vector&lt;BYTE&gt;&gt;&gt;(&amp;item))
+            co_await boost::asio::async_write(socket_, boost::asio::buffer(**buf), ...);
+        else if (auto p = std::get_if&lt;filesystem::path&gt;(&amp;item))
+            if (co_await openFileStream(*p))
+                co_await sendNextFileChunk();  // потоковая отправка файла
+    }
+}</code></pre>
+
+<p>
+    <code>writeLoop</code> ждёт элементы из <code>write_channel_</code>. В зависимости от типа <code>WriteItem</code>:
+</p>
+<ul>
+    <li><strong>Header</strong> — пишет заголовок в сокет.</li>
+    <li><strong>shared_ptr&lt;vector&lt;BYTE&gt;&gt;</strong> — пишет буфер.</li>
+    <li><strong>filesystem::path</strong> — открывает файл и потоково отправляет через <code>sendNextFileChunk</code> (chunk 64 KB).</li>
+</ul>
+
+<hr>
+
+<h3>3.3 commandExec — выполнение команды</h3>
+
+<h4>Как это работает?</h4>
+
+<pre><code class="language-cpp">boost::asio::awaitable&lt;void&gt; session::commandExec()
+{
+    // Обработка специальных команд
+    if (header_.command == COMMAND::SOMEERROR) {
+        write_channel_.try_send(..., header_);
+        co_return;
+    }
+
+    if (header_.command == COMMAND::GETBINFILE) {
+        // Путь к файлу в v_data_
+        std::string pathStr(v_data_.begin(), v_data_.end());
+        if (!exists(file_path)) {
+            write_channel_.try_send(..., SOMEERROR);
+            co_return;
+        }
+        header_.size = file_size(file_path);
+        co_await write_channel_.async_send(..., header_, ...);
+        co_await write_channel_.async_send(..., file_path, ...);  // потоковая отправка
+        // ...
+    }
+    else {
+        // Обычные команды через Interface
+        if (header_.command == COMMAND::USER_REGISTRY)
+            userName_ = string(v_data_.begin(), v_data_.end());
+        else
+            answer = Interface::execCommand(header_.command, v_data_);
+
+        header_.size = answer.size();
+        co_await write_channel_.async_send(..., header_, ...);
+        co_await write_channel_.async_send(..., make_shared&lt;vector&lt;BYTE&gt;&gt;(answer), ...);
+    }
+    logutil::log(personalRequest);
+}</code></pre>
+
+<p>
+    Команда выполняется, результат уходит в <code>write_channel_</code>, откуда его забирает <code>writeLoop</code>.
+</p>
+
+<hr>
+
+<h3>3.4 stop() — завершение сессии</h3>
+
+<pre><code class="language-cpp">void session::stop(const char* why)
+{
+    if (stopped_.exchange(true)) return;  // идемпотентно
+
+    write_channel_.close();   // writeLoop выйдет из async_receive
+    socket_.shutdown(...);
+    socket_.close(ec);
+    logutil::log(userName_, "EMPTY", "DISCONNECT");
+}</code></pre>
+
+<p>
+    Закрытие канала прерывает ожидание <code>writeLoop</code>, затем закрывается сокет.
+</p>
+
+<hr>
+
+<h2>4. Протокол: Header и COMMAND</h2>
+
+<h4>Структура сообщения</h4>
+
+<pre><code class="language-cpp">struct Header {
+    uint_fast64_t size{};   // размер payload в байтах
+    COMMAND command{};      // код команды
+};</code></pre>
+
+<p>Каждое сообщение: <code>[Header 16 байт][Payload size байт]</code>.</p>
+
+<h4>Список команд (enum COMMAND)</h4>
+<p>
+    Команды задаются макросом <code>COMMAND_LIST</code> (SOLOREQUEST, FILETEXT, GETBINFILE, PING и т.д.).
+    Специальная команда <code>SAVE_MESSAGE_TO</code> кодируется в старших 32 битах (userId).
+</p>
+
+<h4>trustCommand() — валидация</h4>
+
+<pre><code class="language-cpp">bool session::trustCommand() {
+    if (header_.command &gt; SOMEERROR && header_.command &lt; END_COMMAND)
+        return true;
+    if ((uint64_t)header_.command &gt;&gt; 32 == SAVE_MESSAGE_TO) {
+        userId_ = (uint32_t)(header_.command &amp; 0xFFFFFFFF);
+        header_.command = COMMAND::SAVE_MESSAGE_TO;
+        Interface::setCommand(SAVE_MESSAGE_TO, make_unique&lt;SaveMessageCmd&gt;(userId_));
+        return true;
+    }
+    header_.command = SOMEERROR;
+    return false;
+}</code></pre>
+
+<p>
+    Проверяется диапазон команды или специальный формат <code>SAVE_MESSAGE_TO</code> с userId в младших 32 битах.
+</p>
+
+<hr>
+
+<h2>5. Interface — диспетчер команд</h2>
+
+<h4>Проблема/Контекст</h4>
+<p>
+    Команд много (поиск, файлы, SQL, регистрация, пинг и т.д.). Нужен единый механизм: по коду команды
+    вызывать соответствующий обработчик.
+</p>
+
+<h4>Решение</h4>
+
+<pre><code class="language-cpp">class Interface {
+    inline static std::string year_{};
+    inline static SearchServer* searchServer_ = nullptr;
+    inline static std::map&lt;COMMAND, std::unique_ptr&lt;Command&gt;&gt; cmdMap{};
+
+public:
+    static void setYear(const std::string& year);
+    static void setSearchServer(SearchServer* _server);
+    static void setCommand(COMMAND command, std::unique_ptr&lt;Command&gt; myCmd);
+    static std::vector&lt;uint8_t&gt; execCommand(COMMAND _command, std::vector&lt;uint8_t&gt;&amp; _request);
+};</code></pre>
+
+<p>
+    <code>cmdMap</code> — карта «команда → обработчик». В <code>setSearchServer</code> заполняются команды:
+</p>
+
+<pre><code class="language-cpp">// Пример из setSearchServer:
+cmdMap[COMMAND::SOLOREQUEST] = std::make_unique&lt;SoloRequestCmd&gt;(searchServer_);
+cmdMap[COMMAND::PING] = std::make_unique&lt;PingCmd&gt;();
+cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique&lt;GetFileCmd&gt;([](auto){ return "D:\\OPIS_ADMIN\\" + year_ + ".db"; });
+// ...
+</code></pre>
+
+<p>
+    <code>execCommand</code> вызывает <code>cmdMap.at(_command)->execute(_request)</code> и возвращает <code>vector&lt;uint8_t&gt;</code>.
+</p>
+
+<div class="note">
+    <strong>Command</strong> — интерфейс с методом <code>virtual std::vector&lt;uint8_t&gt; execute(const std::vector&lt;uint8_t&gt;&amp; data)</code>.
+    Каждая команда реализует свой обработчик.
+</div>
+
+<hr>
+
+<h2>6. Инициализация в main.cpp</h2>
+
+<pre><code class="language-cpp">// 1. Настройка Interface
+asio_server::Interface::setYear(settings.year);
+asio_server::Interface::setSearchServer(&server);  // заполняет cmdMap
+
+// 2. Создание AsioServer
+auto asioServer = std::make_shared&lt;asio_server::AsioServer&gt;(
+    runtime.net(),      // io_context для сети
+    runtime.cpu_pool(), // thread_pool для команд
+    settings.port       // порт
+);</code></pre>
+
+<p>
+    <code>runtime</code> предоставляет <code>net()</code> (io_context) и <code>cpu_pool()</code>.
+    AsioServer запускает <code>do_accept</code> и начинает принимать соединения.
+</p>
+
+<hr>
+
+<h2>7. Диаграмма потока данных</h2>
+
+<div class="diagram">Клиент                    session                              cpu_pool_
+   │                         │                                        │
+   │  ─── [Header+Payload] ──&gt;│ readLoop                               │
+   │                         │    │                                    │
+   │                         │    └──&gt; co_spawn(commandExec) ─────────&gt;│ commandExec
+   │                         │              │                          │     │
+   │                         │              │  write_channel_.async_send│     │
+   │                         │              └──────────────────────────┼─────┘
+   │                         │                                        │
+   │                         │ writeLoop &lt;── async_receive(channel)    │
+   │                         │    │                                   │
+   │  &lt;── [Header+Answer] ───│ async_write(socket)                    │
+   │                         │                                        │</div>
+
+<hr>
+
+<h2>8. Ключевые моменты для запоминания</h2>
+
+<div class="success">
+    <ul>
+        <li><strong>AsioServer</strong> — acceptor + создание session на каждое соединение.</li>
+        <li><strong>session</strong> — readLoop + writeLoop (параллельно) + commandExec на cpu_pool.</li>
+        <li><strong>write_channel_</strong> — связь между commandExec и writeLoop (вариант: Header, буфер, путь к файлу).</li>
+        <li><strong>Interface</strong> — cmdMap и execCommand для диспетчеризации команд.</li>
+        <li><strong>Протокол</strong> — Header (size, command) + payload; trustCommand проверяет валидность.</li>
+    </ul>
+</div>
+
+<div class="warning">
+    В одной сессии одновременно выполняется не более одной команды (command_running_).
+    При повторном запросе до завершения предыдущего возвращается SERVER_BUSY_ERROR.
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+</body>
+</html>

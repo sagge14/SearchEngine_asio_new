@@ -1,5 +1,6 @@
 #include "AsioServer.h"
 #include "SearchServer/SearchServer.h"
+#include <cassert>
 #include "SQLite/SQLiteConnectionManager.h"
 #include "MyUtils/SqlLogger.h"
 #include <iostream>
@@ -7,11 +8,7 @@
 #include <utility>
 #include <filesystem>
 #include "Commands/SearchServer/SearchServerCmd.h"
-#include "Commands/SaveFile/SaveTlgToSend.h"
-#include "Commands/SaveFile/SaveDefaultCmd.h"
 #include "Commands/GetFile/GetFileCmd.h"
-#include "Commands/SaveMessage/SaveMessageCmd.h"
-#include "Commands/SaveMessage/GetMessageCmd.h"
 #include "Commands/GetJsonTelega/GetJsonTelegaCmd.h"
 #include "Commands/UserRegistry/RegisterUserCmd.h"
 #include "Commands/ServiceCommands/PingCmd.h"
@@ -19,16 +16,79 @@
 #include "Commands/GetAttachments/GetAttachmentsCmd.h"
 #include "Commands/GetIshTelegaPdtv/GetIshTelegaPdtvCommand.h"
 #include "Commands/GetTelegaAttachments/GetTelegaAttachments.h"
-#include "Commands/GetTelegaSingleAttachment/GetTelegaSingleAttachmentCmd.h"
+#include "Commands/TelegramFiles/TelegramFileResolver.h"
+#include "Commands/TelegramFiles/PdtvFileResolver.h"
+#include "Commands/Auth/AuthenticateCmd.h"
+#include "Commands/StreamingUpload/StreamingUpload.h"
+#include "Auth/AuthRuntime.h"
+#include "MyUtils/Utf8Path.h"
+#include <nlohmann/json.hpp>
 #include <mutex>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <span>
 #include <boost/concept_check.hpp>
 
 using boost::asio::ip::tcp;
 
+bool asio_server::ServerActivity::tryStartCommand()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (stopping)
+        return false;
+    ++active_commands;
+    return true;
+}
+
+void asio_server::ServerActivity::finishCommand() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (active_commands > 0)
+        --active_commands;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+bool asio_server::ServerActivity::tryStartSession()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (stopping)
+        return false;
+    ++active_sessions;
+    return true;
+}
+
+void asio_server::ServerActivity::finishSession() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (active_sessions > 0)
+        --active_sessions;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+void asio_server::ServerActivity::stopAccepting() noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    stopping = true;
+    if (active_commands == 0 && active_sessions == 0)
+        condition.notify_all();
+}
+
+void asio_server::ServerActivity::wait()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [this]() {
+        return active_commands == 0 && active_sessions == 0;
+    });
+}
+
 void asio_server::session::start()
 {
+    remoteIP_ = getRemoteIP();
     auto self = shared_from_this();
-    auto ex = socket_.get_executor();
+    auto ex = strand_;
 
     boost::asio::co_spawn(
             ex,
@@ -42,7 +102,8 @@ void asio_server::session::start()
                         search_server::addToLog(std::string("readLoop failed: ") + e.what());
                     }
                 }
-                self->stop("readLoop finished");
+                if (!self->terminal_error_queued_.load(std::memory_order_acquire))
+                    self->stop("readLoop finished");
             }
     );
 
@@ -71,68 +132,204 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
 
         while (!stopped_ && socket_.is_open()) {
 
+            Header requestHeader{};
             co_await boost::asio::async_read(
-                    socket_, boost::asio::buffer(&header_, sizeof(header_)),
+                    socket_, boost::asio::buffer(&requestHeader, sizeof(requestHeader)),
                     boost::asio::use_awaitable);
+
+            if (isStreamingUploadCommand(requestHeader.command)) {
+                const bool keepSession =
+                    co_await handleStreamingUpload(requestHeader);
+                if (!keepSession)
+                    co_return;
+                continue;
+            }
 
             // 1) лимит размера
             constexpr std::size_t MAX_PAYLOAD = 1000 * 1024 * 1024; // 1GB
-            if (header_.size > MAX_PAYLOAD) {
-                search_server::addToLog("Too big payload from " + getRemoteIP());
-                // отправить SOMEERROR без commandExec
-                asio_server::Header err{};
-                err.command = COMMAND::SOMEERROR;
-                err.size = 0;
-                write_channel_.try_send(boost::system::error_code{}, err);
+            if (requestHeader.size > MAX_PAYLOAD) {
+                co_await queueError(
+                    command_execution::ErrorCode::PayloadTooLarge,
+                    "payload_size=" + std::to_string(requestHeader.size),
+                    true,
+                    requestHeader.command);
                 co_return;
+            }
+
+            COMMAND normalizedDisabledLegacyMessageCommand = COMMAND::SOMEERROR;
+            if (isDisabledLegacyMessageWireCommand(
+                    requestHeader.command, normalizedDisabledLegacyMessageCommand))
+            {
+                // Auth gate stays strict: unauthenticated data access is terminal.
+                const auto gate = evaluateSessionCommandGate(
+                    normalizedDisabledLegacyMessageCommand,
+                    authenticated_);
+                if (!gate.allow_execute)
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthRequired,
+                        "session is not authenticated",
+                        gate.close_after_auth_required,
+                        normalizedDisabledLegacyMessageCommand);
+                    co_return;
+                }
+
+                // Drain advertised body with bounded memory to preserve framing.
+                constexpr std::size_t kLegacyDiscardChunk = 64 * 1024;
+                std::array<BYTE, kLegacyDiscardChunk> discardBuffer{};
+                std::uint64_t remaining = requestHeader.size;
+                bool drainOk = true;
+                while (remaining > 0)
+                {
+                    const std::size_t toRead = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kLegacyDiscardChunk, remaining));
+                    boost::system::error_code drainEc;
+                    const std::size_t got = co_await boost::asio::async_read(
+                        socket_,
+                        boost::asio::buffer(discardBuffer.data(), toRead),
+                        boost::asio::transfer_exactly(toRead),
+                        boost::asio::redirect_error(boost::asio::use_awaitable, drainEc));
+                    if (drainEc || got != toRead)
+                    {
+                        drainOk = false;
+                        break;
+                    }
+                    remaining -= toRead;
+                }
+
+                if (!drainOk)
+                    co_return;
+
+                co_await queueError(
+                    command_execution::ErrorCode::InvalidCommand,
+                    "legacy message queue command is disabled",
+                    false,
+                    normalizedDisabledLegacyMessageCommand);
+                continue;
             }
 
             // 2) валидация команды
-            if (!trustCommand()) {
-                asio_server::Header err{};
-                err.command = COMMAND::SOMEERROR;
-                err.size = 0;
-                write_channel_.try_send(boost::system::error_code{}, err);
+            if (!trustCommand(requestHeader)) {
+                co_await queueError(
+                    command_execution::ErrorCode::InvalidCommand,
+                    "wire_command=" + std::to_string(
+                        static_cast<uint_fast64_t>(requestHeader.command)),
+                    true,
+                    requestHeader.command);
                 co_return;
             }
 
-            v_data_.assign(header_.size, 0);
+            // Legacy upload commands: reject with bounded drain to preserve framing.
+            // Intercepted here, before generic requestData allocation, so the server
+            // never buffers the full body regardless of advertised payload size.
+            if (requestHeader.command == COMMAND::LOAD_TLG_TO_SEND ||
+                requestHeader.command == COMMAND::LOAD_RAZN)
+            {
+                // Auth gate: must fire before touching any body bytes.
+                const auto legacyGate = evaluateSessionCommandGate(
+                    requestHeader.command, authenticated_);
+                if (!legacyGate.allow_execute)
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthRequired,
+                        "session is not authenticated",
+                        legacyGate.close_after_auth_required,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                if (!activity_ || !activity_->tryStartCommand())
+                {
+                    co_await queueError(
+                        command_execution::ErrorCode::ServerStopping,
+                        {},
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                // Drain advertised body with a bounded fixed-size buffer.
+                // RAM cost: O(kLegacyDiscardChunk), not O(payload_size).
+                constexpr std::size_t kLegacyDiscardChunk = 64 * 1024;
+                std::array<BYTE, kLegacyDiscardChunk> discardBuffer{};
+                std::uint64_t remaining = requestHeader.size;
+                bool drainOk = true;
+                while (remaining > 0)
+                {
+                    const std::size_t toRead = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(kLegacyDiscardChunk, remaining));
+                    boost::system::error_code drainEc;
+                    const std::size_t got = co_await boost::asio::async_read(
+                        socket_,
+                        boost::asio::buffer(discardBuffer.data(), toRead),
+                        boost::asio::transfer_exactly(toRead),
+                        boost::asio::redirect_error(boost::asio::use_awaitable, drainEc));
+                    if (drainEc || got != toRead)
+                    {
+                        drainOk = false;
+                        break;
+                    }
+                    remaining -= toRead;
+                }
+
+                activity_->finishCommand();
+
+                if (!drainOk)
+                    co_return; // client closed mid-body; session framing is broken
+
+                co_await queueError(
+                    command_execution::ErrorCode::InvalidCommand,
+                    "legacy upload is disabled; use streaming V1",
+                    false,
+                    requestHeader.command);
+                continue; // framing intact; keep session alive
+            }
+
+            std::vector<BYTE> requestData(requestHeader.size, 0);
 
             std::size_t total_read = 0;
-            while (total_read < header_.size) {
-                std::size_t to_read = std::min<std::size_t>(max_length, header_.size - total_read);
+            while (total_read < requestHeader.size) {
+                std::size_t to_read = std::min<std::size_t>(
+                    max_length,
+                    requestHeader.size - total_read);
                 std::size_t bytes = co_await socket_.async_read_some(
-                        boost::asio::buffer(v_data_.data() + total_read, to_read),
+                        boost::asio::buffer(requestData.data() + total_read, to_read),
                         boost::asio::use_awaitable);
                 total_read += bytes;
             }
 
-            if (command_running_.exchange(true)) {
-                asio_server::Header err{};
-                err.command = COMMAND::SERVER_BUSY_ERROR;
-                err.size = 0;
-                write_channel_.try_send(boost::system::error_code{}, err);
+            if (!activity_ || !activity_->tryStartCommand()) {
+                co_await queueError(
+                    command_execution::ErrorCode::ServerStopping,
+                    {},
+                    true,
+                    requestHeader.command);
                 co_return;
             }
 
-            co_spawn(
+            try {
+                co_await co_spawn(
                     cpu_pool_,
-                    [self = shared_from_this()]() -> boost::asio::awaitable<void> {
-                        try {
-                            co_await self->commandExec();
-                        } catch (const std::exception& e) {
-                            search_server::addToLog(
-                                    std::string("commandExec failed: ") + e.what()
-                            );
-                        }
-
-                        self->command_running_ = false;
+                    [self = shared_from_this(),
+                     requestHeader,
+                     requestData = std::move(requestData)]() mutable
+                        -> boost::asio::awaitable<void>
+                    {
+                        co_await self->commandExec(
+                            requestHeader,
+                            std::move(requestData));
                         co_return;
                     },
-                    boost::asio::detached
-            );
+                    boost::asio::use_awaitable);
+            } catch (const std::exception& e) {
+                search_server::addToLog(
+                    std::string("commandExec failed: ") + e.what());
+            } catch (...) {
+                search_server::addToLog(
+                    "commandExec failed: unknown exception");
+            }
 
-
+            activity_->finishCommand();
 
         }
     }
@@ -146,14 +343,23 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
     co_return;
 }
 
-
-
 void asio_server::session::stop(const char* why)
+{
+    auto self = shared_from_this();
+    boost::asio::dispatch(
+        strand_,
+        [self, reason = std::string(why ? why : "unspecified")]() {
+            self->stopOnExecutor(reason);
+        }
+    );
+}
+
+void asio_server::session::stopOnExecutor(const std::string& why)
 {
     // идемпотентно
     if (stopped_.exchange(true)) return;
 
-    search_server::addToLog(std::string("Session stop: ") + why + " " + getRemoteIP());
+    search_server::addToLog("Session stop: " + why + " " + getRemoteIP());
 
     boost::system::error_code ec;
 
@@ -167,7 +373,13 @@ void asio_server::session::stop(const char* why)
     }
 
     // 3) логировать DISCONNECT один раз
-    logutil::log(userName_, "EMPTY", "DISCONNECT");
+    std::string userName;
+    {
+        std::lock_guard<std::mutex> lock(user_name_mutex_);
+        userName = userName_;
+    }
+    logutil::log(userName, "EMPTY", "DISCONNECT");
+    finishSession();
 }
 
 
@@ -177,22 +389,49 @@ boost::asio::awaitable<void> asio_server::session::writeLoop()
         while (!stopped_ && socket_.is_open()) {
             boost::system::error_code ec;
             WriteItem item;
+
             std::tie(ec, item) =
                     co_await write_channel_.async_receive(boost::asio::as_tuple(boost::asio::use_awaitable));
 
             if (ec) break; // channel closed => выходим
 
-            if (auto hdr = std::get_if<asio_server::Header>(&item)) {
-                co_await boost::asio::async_write(socket_, boost::asio::buffer(hdr, sizeof(*hdr)),
-                                                  boost::asio::use_awaitable);
+            if (auto response = std::get_if<ResponseWrite>(&item)) {
+                co_await boost::asio::async_write(
+                    socket_,
+                    boost::asio::buffer(&response->header, sizeof(response->header)),
+                    boost::asio::use_awaitable);
+                if (response->payload && !response->payload->empty()) {
+                    co_await boost::asio::async_write(
+                        socket_,
+                        boost::asio::buffer(*response->payload),
+                        boost::asio::use_awaitable);
+                }
             }
-            else if (auto buf = std::get_if<std::shared_ptr<std::vector<BYTE>>>(&item)) {
-                co_await boost::asio::async_write(socket_, boost::asio::buffer(**buf),
-                                                  boost::asio::use_awaitable);
+            else if (auto file = std::get_if<FileTransfer>(&item)) {
+                co_await boost::asio::async_write(
+                    socket_,
+                    boost::asio::buffer(&file->header, sizeof(file->header)),
+                    boost::asio::use_awaitable);
+                if (!(co_await sendFile(file->stream, file->header.size))) {
+                    stop("file transfer failed");
+                    co_return;
+                }
             }
-            else if (auto p = std::get_if<std::filesystem::path>(&item)) {
-                if (co_await openFileStream(*p))
-                    co_await sendNextFileChunk();
+            else if (auto error = std::get_if<ErrorWrite>(&item)) {
+                co_await boost::asio::async_write(
+                    socket_,
+                    boost::asio::buffer(&error->header, sizeof(error->header)),
+                    boost::asio::use_awaitable);
+                if (error->payload && !error->payload->empty()) {
+                    co_await boost::asio::async_write(
+                        socket_,
+                        boost::asio::buffer(*error->payload),
+                        boost::asio::use_awaitable);
+                }
+                if (error->closeAfterWrite) {
+                    stop("terminal error sent");
+                    co_return;
+                }
             }
         }
     }
@@ -206,6 +445,7 @@ boost::asio::awaitable<void> asio_server::session::writeLoop()
 
 asio_server::session::~session()
 {
+    finishSession();
     boost::system::error_code ec;
     if (socket_.is_open()) {
         socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
@@ -214,58 +454,409 @@ asio_server::session::~session()
 }
 
 
-boost::asio::awaitable<void> asio_server::session::sendNextFileChunk() {
-
+boost::asio::awaitable<bool> asio_server::session::sendFile(
+    const std::shared_ptr<std::ifstream>& stream,
+    uint_fast64_t expectedSize)
+{
     constexpr std::size_t blockSize = 64 * 1024;
 
     if (!socket_.is_open()) {
         search_server::addToLog("Соединение прервано, отправка отменена");
-        co_return;
+        co_return false;
     }
 
-    if (!file_stream || !file_stream->is_open()) {
+    if (!stream || !stream->is_open()) {
         search_server::addToLog("Файл не открыт для отправки");
-        co_return ;
+        co_return false;
     }
 
-    while(file_stream && file_stream->is_open()) {
-
-
-        auto buffer = std::make_shared<std::vector<BYTE>>(blockSize);
-        file_stream->read(reinterpret_cast<char *>(buffer->data()), blockSize);
-        std::streamsize bytesRead = file_stream->gcount();
+    uint_fast64_t bytesRemaining = expectedSize;
+    while (bytesRemaining > 0) {
+        const auto nextSize = static_cast<std::size_t>(
+            std::min<uint_fast64_t>(blockSize, bytesRemaining));
+        auto buffer = std::make_shared<std::vector<BYTE>>(nextSize);
+        stream->read(
+            reinterpret_cast<char*>(buffer->data()),
+            static_cast<std::streamsize>(nextSize));
+        const std::streamsize bytesRead = stream->gcount();
 
         if (bytesRead <= 0) {
-            search_server::addToLog("Файл полностью отправлен");
-            co_return;
+            search_server::addToLog("File read failed before advertised size");
+            co_return false;
         }
 
-        buffer->resize(bytesRead);
+        buffer->resize(static_cast<std::size_t>(bytesRead));
 
         boost::system::error_code ec;
         co_await boost::asio::async_write(
                 socket_,
-                boost::asio::buffer(buffer->data(), static_cast<size_t>(bytesRead)),
-                boost::asio::redirect_error(boost::asio::use_awaitable, ec)
-        );
+                boost::asio::buffer(*buffer),
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
 
         if (ec) {
-            search_server::addToLog("sendNextFileChunk write error: " + ec.message());
-            stop("file send error");
-            co_return;
+            search_server::addToLog("sendNextFileChunk socket error: " + ec.message());
+            co_return false;
         }
 
-
+        bytesRemaining -= static_cast<uint_fast64_t>(bytesRead);
     }
+
+    search_server::addToLog("Файл полностью отправлен");
+    co_return true;
 }
 
-boost::asio::awaitable<void>  asio_server::session::commandExec() {
-    try {
+boost::asio::awaitable<bool> asio_server::session::queueError(
+    command_execution::ErrorCode error,
+    std::string diagnostic,
+    bool closeAfterWrite,
+    COMMAND requestCommand)
+{
+    constexpr std::size_t maxDiagnosticSize = 512;
+    if (diagnostic.size() > maxDiagnosticSize) {
+        diagnostic.resize(maxDiagnosticSize);
+        diagnostic += "...";
+    }
+    for (char& character : diagnostic) {
+        if (character == '\r' || character == '\n' || character == '\t')
+            character = ' ';
+    }
 
+    const bool typedResponse =
+        typed_errors_enabled_.load(std::memory_order_acquire);
+
+    std::string logMessage =
+        "Command error: code=" + std::string(command_execution::toString(error)) +
+        ", command=" + getTextCommand(requestCommand) +
+        ", remote=" + getRemoteIP() +
+        ", wire=" + (typedResponse ? "typed-v1" : "legacy");
+    if (!diagnostic.empty())
+        logMessage += ", diagnostic=" + diagnostic;
+    search_server::addToLog(logMessage);
+
+    boost::system::error_code sendError;
+    Header errorHeader{};
+    auto errorPayload = std::make_shared<std::vector<BYTE>>();
+    if (typedResponse) {
+        const auto wireError = makeTypedErrorResponse(error);
+        errorHeader = Header{
+            sizeof(wireError),
+            COMMAND::ERROR_RESPONSE};
+        errorPayload->resize(sizeof(wireError));
+        std::memcpy(errorPayload->data(), &wireError, sizeof(wireError));
+    } else {
+        errorHeader = makeLegacyErrorHeader(error);
+    }
+
+    co_await write_channel_.async_send(
+        boost::system::error_code{},
+        WriteItem{ErrorWrite{errorHeader, std::move(errorPayload), closeAfterWrite}},
+        boost::asio::redirect_error(boost::asio::use_awaitable, sendError));
+
+    if (sendError) {
+        search_server::addToLog(
+            "Failed to queue command error " +
+            std::string(command_execution::toString(error)) +
+            ": " + sendError.message());
+        co_return false;
+    }
+
+    if (closeAfterWrite)
+        terminal_error_queued_.store(true, std::memory_order_release);
+
+    co_return true;
+}
+
+boost::asio::awaitable<bool> asio_server::session::queueJsonResponse(
+    COMMAND command,
+    std::string json)
+{
+    Header header{};
+    header.command = command;
+    header.size = static_cast<uint_fast64_t>(json.size());
+    auto payload = std::make_shared<std::vector<BYTE>>(json.begin(), json.end());
+
+    boost::system::error_code sendError;
+    co_await write_channel_.async_send(
+        boost::system::error_code{},
+        WriteItem{ResponseWrite{header, std::move(payload)}},
+        boost::asio::redirect_error(boost::asio::use_awaitable, sendError));
+    if (sendError) {
+        search_server::addToLog(
+            "Failed to queue streaming upload JSON: " + sendError.message());
+        co_return false;
+    }
+    co_return true;
+}
+
+boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
+    Header requestHeader)
+{
+    streaming_upload::StreamingUploadSink sink;
+    bool commandStarted = false;
+    bool readySent = false;
+    auto finishCommandIfStarted = [&]() {
+        if (commandStarted && activity_) {
+            activity_->finishCommand();
+            commandStarted = false;
+        }
+    };
+    auto abortPrepared = [&]() {
+        sink.abort();
+        finishCommandIfStarted();
+    };
+
+    if (!trustCommand(requestHeader)) {
+        co_await queueError(
+            command_execution::ErrorCode::InvalidCommand,
+            "wire_command=" + std::to_string(
+                static_cast<uint_fast64_t>(requestHeader.command)),
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+
+    const auto gate = evaluateSessionCommandGate(
+        requestHeader.command,
+        authenticated_);
+    if (!gate.allow_execute) {
+        co_await queueError(
+            command_execution::ErrorCode::AuthRequired,
+            "session is not authenticated",
+            gate.close_after_auth_required,
+            requestHeader.command);
+        co_return false;
+    }
+
+    if (requestHeader.size > streaming_upload::kMaxMetadataBytes) {
+        co_await queueError(
+            command_execution::ErrorCode::PayloadTooLarge,
+            "streaming upload metadata_size=" +
+                std::to_string(requestHeader.size),
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+
+    if (!activity_ || !activity_->tryStartCommand()) {
+        co_await queueError(
+            command_execution::ErrorCode::ServerStopping,
+            {},
+            true,
+            requestHeader.command);
+        co_return false;
+    }
+    commandStarted = true;
+
+    std::string unexpectedError;
+    try {
+        std::vector<BYTE> metadataBytes(
+            static_cast<std::size_t>(requestHeader.size), 0);
+        std::size_t totalRead = 0;
+        while (totalRead < metadataBytes.size()) {
+            const std::size_t toRead = std::min<std::size_t>(
+                max_length,
+                metadataBytes.size() - totalRead);
+            const std::size_t bytes = co_await socket_.async_read_some(
+                boost::asio::buffer(metadataBytes.data() + totalRead, toRead),
+                boost::asio::use_awaitable);
+            totalRead += bytes;
+        }
+
+        streaming_upload::Metadata metadata{};
+        auto parsed = streaming_upload::parseMetadata(metadataBytes, metadata);
+        if (parsed.failed()) {
+            co_await queueError(
+                parsed.error.value_or(command_execution::ErrorCode::InvalidJson),
+                std::move(parsed.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        std::string operatorName;
+        {
+            std::lock_guard<std::mutex> lock(user_name_mutex_);
+            operatorName = userName_;
+        }
+
+        std::filesystem::path configuredRoot;
+        std::string rootError;
+        try {
+            const std::string& rootUtf8 =
+                requestHeader.command == COMMAND::UPLOAD_RAZN_V1
+                    ? Interface::raznOutputDir()
+                    : Interface::tlgSendRoot();
+            configuredRoot = encoding::utf8_to_path(rootUtf8);
+        }
+        catch (const std::exception& error) {
+            rootError = error.what();
+        }
+        if (!rootError.empty()) {
+            co_await queueError(
+                command_execution::ErrorCode::ConfigurationError,
+                rootError,
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        streaming_upload::PlannedTarget target;
+        command_execution::CommandResult planned =
+            command_execution::CommandResult::failure(
+                command_execution::ErrorCode::InternalError);
+        if (requestHeader.command == COMMAND::UPLOAD_RAZN_V1) {
+            planned = streaming_upload::planRaznTarget(
+                configuredRoot, metadata, target);
+        } else {
+            planned = streaming_upload::planTlgTarget(
+                configuredRoot,
+                operatorName,
+                metadata,
+                streaming_upload::currentLocalTimeParts(),
+                target);
+        }
+        if (planned.failed()) {
+            co_await queueError(
+                planned.error.value_or(
+                    command_execution::ErrorCode::ConfigurationError),
+                std::move(planned.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        auto prepared = sink.prepare(target, metadata.file_size);
+        if (prepared.failed()) {
+            co_await queueError(
+                prepared.error.value_or(
+                    command_execution::ErrorCode::FileOpenFailed),
+                std::move(prepared.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        if (!(co_await queueJsonResponse(
+                requestHeader.command,
+                streaming_upload::makeReadyJson()))) {
+            abortPrepared();
+            co_return false;
+        }
+        readySent = true;
+
+        std::array<BYTE, streaming_upload::kChunkSize> chunk{};
+        std::uint64_t remaining = metadata.file_size;
+        while (remaining > 0) {
+            const std::size_t toRead = static_cast<std::size_t>(
+                (std::min)(
+                    static_cast<std::uint64_t>(chunk.size()),
+                    remaining));
+            std::size_t got = 0;
+            while (got < toRead) {
+                const std::size_t bytes = co_await socket_.async_read_some(
+                    boost::asio::buffer(chunk.data() + got, toRead - got),
+                    boost::asio::use_awaitable);
+                if (bytes == 0) {
+                    search_server::addToLog(
+                        "streaming upload EOF before advertised file_size");
+                    abortPrepared();
+                    co_return false;
+                }
+                got += bytes;
+            }
+            auto written = sink.writeChunk(
+                std::span<const std::uint8_t>(chunk.data(), toRead));
+            if (written.failed()) {
+                search_server::addToLog(
+                    "streaming upload write failed: " + written.diagnostic);
+                abortPrepared();
+                co_return false;
+            }
+            remaining -= toRead;
+        }
+
+        auto published = sink.publish();
+        if (published.failed()) {
+            co_await queueError(
+                published.error.value_or(
+                    command_execution::ErrorCode::FileWriteFailed),
+                std::move(published.diagnostic),
+                false,
+                requestHeader.command);
+            finishCommandIfStarted();
+            co_return true;
+        }
+
+        if (!(co_await queueJsonResponse(
+                requestHeader.command,
+                streaming_upload::makeFinalJson(sink.savedName())))) {
+            abortPrepared();
+            co_return false;
+        }
+
+        PersonalRequest personalRequest{};
+        personalRequest.request_type = getTextCommand(requestHeader.command);
+        personalRequest.request = sink.savedName().empty()
+            ? getTextCommand(requestHeader.command)
+            : sink.savedName();
+        {
+            std::lock_guard<std::mutex> lock(user_name_mutex_);
+            personalRequest.user_name = userName_;
+        }
+        logutil::log(personalRequest);
+        finishCommandIfStarted();
+        co_return true;
+    }
+    catch (const boost::system::system_error& error) {
+        abortPrepared();
+        if (error.code() == boost::asio::error::eof) {
+            search_server::addToLog(
+                "Client closed during streaming upload (" + getRemoteIP() + ")");
+        } else {
+            search_server::addToLog(
+                std::string("streaming upload error: ") + error.what());
+        }
+        co_return false;
+    }
+    catch (const std::exception& error) {
+        const bool afterReady = readySent;
+        unexpectedError = error.what();
+        abortPrepared();
+        if (afterReady) {
+            search_server::addToLog(
+                "streaming upload failed after READY: " + unexpectedError);
+            co_return false;
+        }
+    }
+
+    if (!unexpectedError.empty()) {
+        co_await queueError(
+            command_execution::ErrorCode::InternalError,
+            unexpectedError,
+            false,
+            requestHeader.command);
+        co_return true;
+    }
+    co_return false;
+}
+
+boost::asio::awaitable<void> asio_server::session::commandExec(
+    Header requestHeader,
+    std::vector<BYTE> requestData)
+{
+    std::optional<command_execution::CommandResult> unexpectedFailure;
+    bool responseQueued = false;
+
+    try {
         // Обработка команды
         std::vector<BYTE> answer;
+        bool enableTypedErrorsAfterResponse = false;
         PersonalRequest personalRequest{};
-        personalRequest.request_type = getTextCommand(header_.command);
+        personalRequest.request_type = getTextCommand(requestHeader.command);
         boost::system::error_code ec;
 
         /*
@@ -277,134 +868,398 @@ boost::asio::awaitable<void>  asio_server::session::commandExec() {
         co_await timer.async_wait(boost::asio::use_awaitable);
          */
 
-        if (header_.command == COMMAND::SOMEERROR)
+        if (requestHeader.command == COMMAND::SOMEERROR)
         {
-            write_channel_.try_send(boost::system::error_code{}, header_);
+            co_await queueError(
+                command_execution::ErrorCode::InvalidCommand,
+                {},
+                false,
+                requestHeader.command);
             co_return;
         }
 
-        if (header_.command == COMMAND::GETBINFILE)
+        // Session authorization gate: data commands require
+        // USER_REGISTRY("admin") from TCP peer 127.0.0.1, or successful
+        // AUTHENTICATE_V1. The name "admin" is local-only for either path.
+        // Unauthenticated data access fails closed.
+        const auto gate = evaluateSessionCommandGate(
+            requestHeader.command,
+            authenticated_);
+        if (!gate.allow_execute)
         {
-            // answer содержит путь к файлу (в виде std::vector<BYTE>, но это строка пути)
-            std::string pathStr(v_data_.begin(), v_data_.end());
-            personalRequest.request = pathStr;
-            std::filesystem::path file_path(pathStr);
+            co_await queueError(
+                command_execution::ErrorCode::AuthRequired,
+                "session is not authenticated",
+                gate.close_after_auth_required,
+                requestHeader.command);
+            co_return;
+        }
 
-            // Устанавливаем размер вручную — получим размер файла
+        if (const auto rejection = archiveCommandRejection(
+                requestHeader.command,
+                Interface::isArchiveMode(),
+                admin_session_))
+        {
+            co_await queueError(
+                *rejection,
+                "archive mode permits START_UPDATE_BASE only for local admin",
+                false,
+                requestHeader.command);
+            co_return;
+        }
 
-            std::uintmax_t file_size;
-            if(!exists(file_path))
-            {
-                header_.command = COMMAND::SOMEERROR;
-                write_channel_.try_send(boost::system::error_code{}, header_);
+        if (requestHeader.command == COMMAND::GETBINFILE ||
+            requestHeader.command == COMMAND::FILETEXT)
+        {
+            const auto rejected = GetFileCmd::rejectRawBinFileDownload(requestData);
+            co_await queueError(
+                rejected.error.value_or(
+                    command_execution::ErrorCode::InvalidCommand),
+                std::move(rejected.diagnostic),
+                false,
+                requestHeader.command);
+            co_return;
+        }
+
+        // LOAD_TLG_TO_SEND=15 and LOAD_RAZN=22 are intercepted in readLoop
+        // before the generic requestData allocation. Reaching commandExec
+        // with these commands is a defensive invariant violation.
+        assert(requestHeader.command != COMMAND::LOAD_TLG_TO_SEND);
+        assert(requestHeader.command != COMMAND::LOAD_RAZN);
+
+        if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT ||
+                 requestHeader.command == COMMAND::GET_TELEGA_TEXT ||
+                 requestHeader.command == COMMAND::GET_ISH_PDTV_TEXT)
+        {
+            personalRequest.request = std::string(
+                requestData.begin(),
+                requestData.end());
+            ResolveTelegramFileResult resolved;
+            if (requestHeader.command == COMMAND::GET_SINGLE_ATACHMENT)
+                resolved = TelegramFileResolver::resolveAttachment(requestData);
+            else if (requestHeader.command == COMMAND::GET_TELEGA_TEXT)
+                resolved = TelegramFileResolver::resolveText(requestData);
+            else
+                resolved = PdtvFileResolver::resolve(requestData);
+            if (resolved.failed()) {
+                co_await queueError(
+                    resolved.error.value_or(
+                        command_execution::ErrorCode::InternalError),
+                    std::move(resolved.diagnostic),
+                    false,
+                    requestHeader.command);
                 co_return;
             }
-            else
-            {
 
-                file_size = std::filesystem::file_size(file_path);
-                header_.size = static_cast<std::size_t>(file_size);
-
-                co_await write_channel_.async_send(ec, header_, boost::asio::use_awaitable);
-                co_await write_channel_.async_send(ec, file_path, boost::asio::use_awaitable);
-            }
-
+            requestHeader.size = resolved.file->size;
+            co_await write_channel_.async_send(
+                ec,
+                WriteItem{FileTransfer{
+                    requestHeader,
+                    std::move(resolved.file->stream)}},
+                boost::asio::use_awaitable);
+            responseQueued = true;
         }
         else
         {
 
-            if (header_.command == COMMAND::USER_REGISTRY)
+            if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
             {
-                userName_ = std::string(v_data_.begin(), v_data_.end());
-                std::string answer_str = "OK";
+                search_protocol::ProtocolCapabilitiesV1 capabilities{};
+                capabilities.capabilities =
+                    search_protocol::CAPABILITY_TYPED_ERRORS_V1 |
+                    search_protocol::CAPABILITY_CLIENT_AUTH_V1;
+                answer.resize(sizeof(capabilities));
+                std::memcpy(answer.data(), &capabilities, sizeof(capabilities));
+                enableTypedErrorsAfterResponse = true;
+            }
+            else if (requestHeader.command == COMMAND::USER_REGISTRY)
+            {
+                // Legacy admin: payload "admin" AND TCP peer exactly 127.0.0.1.
+                // Arbitrary usernames and non-localhost peers must not authorize.
+                const std::string requestedName(
+                    requestData.begin(),
+                    requestData.end());
+                if (!isLegacyAdminUserRegistryPayload(requestedName)) {
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "USER_REGISTRY allows only legacy admin session",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+                if (!isLocalAdminPeer()) {
+                    search_server::addToLog(
+                        "legacy admin authorization rejected: remote peer is not 127.0.0.1, remote="
+                        + getRemoteIP());
+                    co_await queueError(
+                        command_execution::ErrorCode::AuthFailed,
+                        "legacy admin authorization requires TCP peer 127.0.0.1",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                std::lock_guard<std::mutex> lock(user_name_mutex_);
+                userName_ = "admin";
+                authenticated_ = true;
+                admin_session_ = true;
+                const std::string answer_str = "OK";
                 answer = std::vector<BYTE>(answer_str.begin(), answer_str.end());
             }
+            else if (requestHeader.command == COMMAND::AUTHENTICATE_V1)
+            {
+                // Failed AUTHENTICATE_V1 is terminal: send ERROR_RESPONSE, then
+                // close. The client must not keep a half-open unauthenticated
+                // TCP session after an explicit auth rejection.
+                if (!auth::AuthRuntime::instance().isInitialized()) {
+                    co_await queueError(
+                        command_execution::ErrorCode::ConfigurationError,
+                        "AuthClientStore is not initialized",
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                AuthenticateCmd command(
+                    auth::AuthRuntime::instance().store(),
+                    auth::AuthRuntime::instance().verifier());
+                auto result = command.executeResult(requestData);
+                if (result.failed()) {
+                    co_await queueError(
+                        *result.error,
+                        std::move(result.diagnostic),
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                std::optional<command_execution::CommandResult> authSessionError;
+                try {
+                    const nlohmann::json response = nlohmann::json::parse(
+                        result.payload.begin(),
+                        result.payload.end());
+                    const auto client_name =
+                        response.at("client_name").get<std::string>();
+                    const auto client_id =
+                        response.at("client_id").get<std::string>();
+                    std::string device_type;
+                    std::string device_id;
+                    try {
+                        const nlohmann::json request = nlohmann::json::parse(
+                            requestData.begin(),
+                            requestData.end());
+                        if (request.contains("device_type") &&
+                            request.at("device_type").is_string())
+                        {
+                            device_type =
+                                request.at("device_type").get<std::string>();
+                        }
+                        if (request.contains("device_id") &&
+                            request.at("device_id").is_string())
+                        {
+                            device_id =
+                                request.at("device_id").get<std::string>();
+                        }
+                    } catch (...) {
+                    }
+                    if (client_name == "admin" && !isLocalAdminPeer()) {
+                        authSessionError =
+                            command_execution::CommandResult::failure(
+                                command_execution::ErrorCode::AuthFailed,
+                                "admin authorization requires TCP peer 127.0.0.1");
+                    } else {
+                        std::lock_guard<std::mutex> lock(user_name_mutex_);
+                        userName_ = client_name;
+                        clientId_ = client_id;
+                        deviceType_ = std::move(device_type);
+                        deviceId_ = std::move(device_id);
+                        authenticated_ = true;
+                        admin_session_ = client_name == "admin";
+                    }
+                } catch (const std::exception& ex) {
+                    authSessionError = command_execution::CommandResult::failure(
+                        command_execution::ErrorCode::SerializationFailed,
+                        std::string("AUTHENTICATE_V1 response parse failed: ") +
+                            ex.what());
+                }
+
+                if (authSessionError && authSessionError->error) {
+                    co_await queueError(
+                        *authSessionError->error,
+                        std::move(authSessionError->diagnostic),
+                        true,
+                        requestHeader.command);
+                    co_return;
+                }
+
+                answer = std::move(result.payload);
+            }
             else
             {
-                answer = Interface::execCommand(header_.command, v_data_);
+                auto result = Interface::execCommand(
+                    requestHeader.command,
+                    requestData);
+                if (result.failed()) {
+                    co_await queueError(
+                        *result.error,
+                        std::move(result.diagnostic),
+                        false,
+                        requestHeader.command);
+                    co_return;
+                }
+                answer = std::move(result.payload);
             }
 
-            auto request = std::string(v_data_.begin(), v_data_.end());
-            if(header_.command == COMMAND::LOAD_TLG_TO_SEND || header_.command == COMMAND::LOAD_RAZN)
-                personalRequest.request = getTextCommand(header_.command);
-            else
-                personalRequest.request  = request.empty() ? "EMPTY" : request;
+            auto request = std::string(requestData.begin(), requestData.end());
+            personalRequest.request = request.empty() ? "EMPTY" : request;
 
-            header_.size = answer.size();
+            requestHeader.size = answer.size();
 
-            co_await write_channel_.async_send(ec, header_, boost::asio::use_awaitable);
-            co_await write_channel_.async_send(ec, std::make_shared<std::vector<BYTE>>(answer), boost::asio::use_awaitable);
+            co_await write_channel_.async_send(
+                ec,
+                WriteItem{ResponseWrite{
+                    requestHeader,
+                    std::make_shared<std::vector<BYTE>>(std::move(answer))}},
+                boost::asio::use_awaitable);
+            responseQueued = true;
+            if (enableTypedErrorsAfterResponse)
+                typed_errors_enabled_.store(true, std::memory_order_release);
         }
 
-        personalRequest.user_name = userName_;
+        {
+            std::lock_guard<std::mutex> lock(user_name_mutex_);
+            personalRequest.user_name = userName_;
+        }
         logutil::log(personalRequest);
 
-        v_data_.clear();
     } catch (const std::exception& e) {
-        search_server::addToLog(std::string("Exception in commandExec: ") + e.what());
-        header_.command = COMMAND::SOMEERROR;
-        write_channel_.try_send(boost::system::error_code{}, header_); // сначала заголовок
+        if (responseQueued) {
+            search_server::addToLog(
+                std::string("Post-response command failure: ") + e.what());
+        } else {
+            unexpectedFailure = command_execution::CommandResult::failure(
+                command_execution::ErrorCode::InternalError,
+                e.what());
+        }
+    } catch (...) {
+        if (responseQueued) {
+            search_server::addToLog("Unknown post-response command failure");
+        } else {
+            unexpectedFailure = command_execution::CommandResult::failure(
+                command_execution::ErrorCode::InternalError,
+                "unknown exception in commandExec");
+        }
+    }
+
+    if (unexpectedFailure && unexpectedFailure->error) {
+        co_await queueError(
+            *unexpectedFailure->error,
+            std::move(unexpectedFailure->diagnostic),
+            false,
+            requestHeader.command);
+    }
+}
+
+bool asio_server::session::isLocalAdminPeer() const
+{
+    // Fail closed: any remote_endpoint error/exception means not local admin.
+    try {
+        boost::system::error_code ec;
+        const boost::asio::ip::tcp::endpoint remote_ep =
+            socket_.remote_endpoint(ec);
+        if (ec)
+            return false;
+        return isLegacyAdminPeerAddress(remote_ep.address());
+    } catch (...) {
+        return false;
     }
 }
 
 std::string asio_server::session::getRemoteIP() const {
-    boost::asio::ip::tcp::endpoint remote_ep = socket_.remote_endpoint();
+    if (!remoteIP_.empty())
+        return remoteIP_;
+
+    boost::system::error_code ec;
+    boost::asio::ip::tcp::endpoint remote_ep = socket_.remote_endpoint(ec);
+    if (ec)
+        return "<disconnected>";
     boost::asio::ip::address remote_ad = remote_ep.address();
 
     return remote_ad.to_string();
 }
 
-bool asio_server::session::trustCommand() {
+bool asio_server::session::trustCommand(
+    Header& requestHeader)
+{
     try {
-        if (header_.command > COMMAND::SOMEERROR && header_.command < COMMAND::END_COMMAND)
+        if (requestHeader.command == COMMAND::NEGOTIATE_PROTOCOL_V1)
+            return requestHeader.size == 0;
+
+        if (isRequestCommand(requestHeader.command))
             return true;
 
-        if (static_cast<COMMAND>(static_cast<uint64_t>(header_.command) >> 32) == COMMAND::SAVE_MESSAGE_TO) {
-            userId_ = static_cast<uint32_t>(static_cast<uint64_t>(header_.command) & 0xFFFFFFFF);
-            header_.command = COMMAND::SAVE_MESSAGE_TO;
-            Interface::setCommand(COMMAND::SAVE_MESSAGE_TO, std::make_unique<SaveMessageCmd>(userId_));
-            return true;
-        }
-
-        header_.command = COMMAND::SOMEERROR;
         return false;
     } catch (const std::exception& e) {
         search_server::addToLog(std::string("Exception in trustCommand: ") + e.what());
-        header_.command = COMMAND::SOMEERROR;
         return false;
     }
 }
 
-void asio_server::Interface::setSearchServer(search_server::SearchServer *_server) {
+void asio_server::Interface::setSearchServer(
+    search_server::SearchServer *_server,
+    const ProductionCommandPaths& paths)
+{
     searchServer_ = _server;
+    opis_base_dir_ = paths.opis_base_dir;
+    tlg_send_root_ = paths.tlg_send_root;
+    razn_output_dir_ = paths.razn_output_dir;
+    const std::filesystem::path& attachmentsConfigPath =
+        paths.attachmentsConfigPath;
 
     cmdMap[COMMAND::SOLOREQUEST] = std::make_unique<SoloRequestCmd>(searchServer_);
-    cmdMap[COMMAND::LOAD_TLG_TO_SEND] = std::make_unique<SaveTlgToSendCmd>(L"D:\\");
-    cmdMap[COMMAND::LOAD_RAZN] = std::make_unique<SaveFileDefaultCmd>("D:\\OPIS_ADMIN\\РАЗНОСКА_ДЛЯ_ПРОСТАВЛЕНИЯ\\");
-    cmdMap[COMMAND::FILETEXT] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileByPath(v);});
-    cmdMap[COMMAND::GETBINFILE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>& v){ return GetFileCmd::downloadFileByPath(v);});
     cmdMap[COMMAND::GET_VH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaVhCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGI_FROM_SQL] = std::make_unique<GetJsonTelegaIshCmd>();
     cmdMap[COMMAND::GETSQLJSONANSWEAR] = std::make_unique<GetSqlJsonAnswearCmd>(searchServer_);
     cmdMap[COMMAND::START_UPDATE_BASE] = std::make_unique<StartDictionaryUpdateCmd>(searchServer_);
     cmdMap[COMMAND::USER_REGISTRY] = std::make_unique<RegisterUserCmd>();
     cmdMap[COMMAND::PING] = std::make_unique<PingCmd>();
-    cmdMap[COMMAND::GET_MESSAGE] = std::make_unique<GetMessageCmd>();
     cmdMap[COMMAND::GET_ISH_TELEGA_WAY] = std::make_unique<GetTelegaWayIshCmd>();
     cmdMap[COMMAND::GET_VH_TELEGA_WAY] = std::make_unique<GetTelegaWayVhCmd>();
-    cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){ return GetFileCmd::downloadFileByPath("D:\\OPIS_ADMIN\\" + year_ + ".db"); });
-    cmdMap[COMMAND::GET_ATTACHMENTS] = std::make_unique<GetAttachmentsCmd>();
+    cmdMap[COMMAND::GET_OPIS_BASE] = std::make_unique<GetFileCmd>([] (const std::vector<uint8_t>&){
+        const std::filesystem::path file =
+            encoding::utf8_to_path(opis_base_dir_) /
+            encoding::utf8_to_wstring(year_ + ".db");
+        return GetFileCmd::downloadFileResultByPath(file);
+    });
+    cmdMap[COMMAND::GET_ATTACHMENTS] =
+        std::make_unique<GetAttachmentsCmd>(attachmentsConfigPath);
     cmdMap[COMMAND::GET_ISH_PDTV] = std::make_unique<GetIshTelegaPdtvCommand>();
     cmdMap[COMMAND::GET_TELEGA_ATACHMENTS] = std::make_unique<GetTelegaAttachmentsCmd>();
-    cmdMap[COMMAND::GET_SINGLE_ATACHMENT] = std::make_unique<GetTelegaSingleAttachmentCmd>();
 }
 
-std::vector<uint8_t> asio_server::Interface::execCommand(asio_server::COMMAND _command, std::vector<uint8_t> &_request) {
-    return cmdMap.at(_command)->execute(_request);
-}
+command_execution::CommandResult asio_server::Interface::execCommand(
+    asio_server::COMMAND _command,
+    std::vector<uint8_t>& _request)
+{
+    const auto command = cmdMap.find(_command);
+    if (command == cmdMap.end() || !command->second) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::CommandNotRegistered,
+            getTextCommand(_command));
+    }
 
-void asio_server::Interface::setCommand(asio_server::COMMAND _command, std::unique_ptr<Command> _myCmd) {
-    cmdMap[_command] = std::move(_myCmd);
+    try {
+        return command->second->executeResult(_request);
+    } catch (const std::exception& e) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::CommandExecutionFailed,
+            e.what());
+    } catch (...) {
+        return command_execution::CommandResult::failure(
+            command_execution::ErrorCode::CommandExecutionFailed,
+            "unknown command exception");
+    }
 }
 
 void asio_server::Interface::setYear(const std::string &_year) {
@@ -416,13 +1271,56 @@ std::string asio_server::Interface::getYear() {
 }
 
 void asio_server::AsioServer::do_accept() {
+    if (stopping_.load(std::memory_order_acquire))
+        return;
+
     acceptor_.async_accept(
             [this](boost::system::error_code ec, tcp::socket socket) {
-                if (!ec)
-                    std::make_shared<session>(std::move(socket), cpu_pool_)->start();
+                if (!ec && !stopping_.load(std::memory_order_acquire)) {
+                    if (activity_->tryStartSession()) {
+                        bool session_created = false;
+                        try {
+                            auto new_session = std::make_shared<session>(
+                                std::move(socket),
+                                cpu_pool_,
+                                activity_
+                            );
+                            session_created = true;
+                            {
+                                std::lock_guard<std::mutex> lock(sessions_mutex_);
+                                std::erase_if(sessions_, [](const auto& item) {
+                                    return item.expired();
+                                });
+                                sessions_.push_back(new_session);
+                            }
+                            new_session->start();
+                        } catch (...) {
+                            if (!session_created)
+                                activity_->finishSession();
+                            search_server::addToLog(
+                                "failed to create or start client session"
+                            );
+                        }
+                    }
+                } else if (ec != boost::asio::error::operation_aborted &&
+                           !stopping_.load(std::memory_order_acquire)) {
+                    search_server::addToLog(
+                        std::string("accept failed: ") + ec.message()
+                    );
+                }
 
-                do_accept();
+                if (!stopping_.load(std::memory_order_acquire))
+                    do_accept();
             });
+}
+
+void asio_server::session::finishSession() noexcept
+{
+    if (!session_finished_.exchange(true, std::memory_order_acq_rel) &&
+        activity_)
+    {
+        activity_->finishSession();
+    }
 }
 
 asio_server::AsioServer::AsioServer(
@@ -433,39 +1331,52 @@ asio_server::AsioServer::AsioServer(
         : net_io_(net_io)
         , cpu_pool_(cpu_pool)
         , acceptor_(net_io_, tcp::endpoint(tcp::v4(), port))
+        , activity_(std::make_shared<ServerActivity>())
 {
     do_accept();
 }
 
-
-boost::asio::awaitable<bool> asio_server::session::openFileStream(const std::filesystem::path& file_path)
+asio_server::AsioServer::~AsioServer()
 {
-    try {
-        file_stream = std::make_unique<std::ifstream>(file_path, std::ios::binary);
-        if (!file_stream->is_open()) {
-            search_server::addToLog("Не удалось открыть файл: " + file_path.string());
-          //  socket_.close();
-            co_return false;
-        }
-        search_server::addToLog("Начинаем потоковую отправку: " + file_path.string());
-        co_return true;
-    }
-    catch (const std::exception& ex) {
-        search_server::addToLog(std::string("Ошибка при открытии файла: ") + ex.what());
-       // socket_.close();
-        co_return false;
-    }
-
+    stop();
 }
 
-template<typename T>
-bool asio_server::session::safe_send_to_channel(T&& item) {
-    if (!write_channel_.try_send(boost::system::error_code{}, std::forward<T>(item))) {
-        asio_server::Header error_header;
-        error_header.command = asio_server::COMMAND::SOMEERROR;
-        error_header.size = 0;
-        write_channel_.try_send(boost::system::error_code{}, error_header);
-        return false;
+void asio_server::AsioServer::stop()
+{
+    if (stopping_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    activity_->stopAccepting();
+
+    boost::system::error_code ec;
+    acceptor_.cancel(ec);
+    acceptor_.close(ec);
+
+    std::vector<std::shared_ptr<session>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions.reserve(sessions_.size());
+        for (auto& item : sessions_)
+            if (auto active = item.lock())
+                sessions.push_back(std::move(active));
+        sessions_.clear();
     }
-    return true;
+    for (auto& active : sessions)
+        active->stop("server shutdown");
+}
+
+void asio_server::AsioServer::wait()
+{
+    activity_->wait();
+}
+
+void asio_server::Interface::shutdown()
+{
+    cmdMap.clear();
+    searchServer_ = nullptr;
+    archive_mode_ = false;
+    year_.clear();
+    opis_base_dir_.clear();
+    tlg_send_root_.clear();
+    razn_output_dir_.clear();
 }
