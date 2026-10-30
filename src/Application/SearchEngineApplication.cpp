@@ -261,17 +261,21 @@ bool SearchEngineApplication::start()
 
         throwIfStopRequested();
         SqlLogger::instance(paths_.log_database.string());
-        try {
-            auth::AuthRuntime::instance().initialize(paths_.auth_clients);
-            LG("Auth client store opened; path=", paths_.auth_clients.string());
-            LG(
-                "Auth issuer public key; path=",
-                auth::ResolveIssuerPublicPemPath(paths_.auth_clients).string()
-            );
-        } catch (const std::exception& ex) {
-            throw StartupError(
-                ERROR_OPEN_FAILED,
-                std::string("failed to open auth_clients.sqlite: ") + ex.what());
+        if (pending->settings.authenticationMode == auth::AuthenticationMode::Required) {
+            try {
+                auth::AuthRuntime::instance().initialize(paths_.auth_clients);
+                LG("Auth client store opened; path=", paths_.auth_clients.string());
+                LG(
+                    "Auth issuer public key; path=",
+                    auth::ResolveIssuerPublicPemPath(paths_.auth_clients).string()
+                );
+            } catch (const std::exception& ex) {
+                throw StartupError(
+                    ERROR_OPEN_FAILED,
+                    std::string("failed to open auth_clients.sqlite: ") + ex.what());
+            }
+        } else {
+            LG("Authentication disabled; requests use unauthenticated_user and TCP peer IP");
         }
 
         pending->search_server =
@@ -374,7 +378,8 @@ bool SearchEngineApplication::start()
                     std::make_shared<asio_server::AsioServer>(
                         pending->contexts->net(),
                         pending->contexts->cpu_pool(),
-                        static_cast<unsigned short>(pending->settings.port)
+                        static_cast<unsigned short>(pending->settings.port),
+                        pending->settings.authenticationMode
                     );
             } catch (const boost::system::system_error& exception) {
                 const unsigned long native_error =

@@ -423,6 +423,7 @@ void search_server::Settings::show() const
     std::cout << "Index database update period:\t" << indTime << " seconds" << std::endl;
     std::cout << "Scan on startup:\t\t" << std::boolalpha << scanOnStartup << std::endl;
     std::cout << "Asio port:\t\t\t" << port << std::endl;
+    std::cout << "Authentication mode:\t\t" << auth::toString(authenticationMode) << std::endl;
     std::cout << "Query word match:\t\t"
               << search_server::toString(queryWordMatch) << std::endl;
     std::cout << "Hide console window:\t\t" << std::boolalpha << hideConsoleWindow << std::endl << std::endl;

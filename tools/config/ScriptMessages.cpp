@@ -1034,6 +1034,20 @@ constexpr Message kMessages[] = {
         L"Startup scan: DISABLED (scan_on_startup=false).\n"
     },
     {
+        L"install.authentication_mode",
+        L"Режим доступа: {1} (required — с авторизацией; none — без ключей).\n",
+        L"Access mode: {1} (required — authentication; none — no keys).\n"
+    },
+    {
+        L"install.local_success_no_auth",
+        L"Режим: БЕЗ АВТОРИЗАЦИИ. Ключи и токен не создавались.\n"
+        L"В клиенте выберите «Без авторизации» и подключитесь к серверу.\n"
+        L"Первоначальная индексация: ВЫПОЛНЕНА УСПЕШНО.\n",
+        L"Mode: NO AUTHENTICATION. No keys or token were created.\n"
+        L"Select No authentication in the client and connect to the server.\n"
+        L"Initial indexing: COMPLETED SUCCESSFULLY.\n"
+    },
+    {
         L"install.local_initial_update_failed",
         L"ПРЕДУПРЕЖДЕНИЕ: Служба установлена и работает, но первоначальная "
         L"индексация завершилась с кодом {1}.\n"

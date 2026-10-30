@@ -129,6 +129,22 @@ TEST(SessionAuthGate, UnauthenticatedDataCommandIsRejectedAndCloses)
     EXPECT_FALSE(asio_server::isSessionBootstrapCommand(COMMAND::SOLOREQUEST));
 }
 
+TEST(SessionAuthGate, AnonymousModeAllowsDataWithoutAuthenticatingTheSession)
+{
+    using asio_server::COMMAND;
+    for (const auto command : {COMMAND::SOLOREQUEST,
+             COMMAND::GETSQLJSONANSWEAR, COMMAND::GET_TELEGA_TEXT,
+             COMMAND::UPLOAD_TLG_TO_SEND_V1, COMMAND::UPLOAD_RAZN_V1,
+             COMMAND::GET_ATTACHMENTS, COMMAND::START_UPDATE_BASE}) {
+        EXPECT_TRUE(asio_server::evaluateSessionCommandGate(
+            command, false, auth::AuthenticationMode::None).allow_execute);
+        EXPECT_FALSE(asio_server::evaluateSessionCommandGate(
+            command, false).allow_execute);
+    }
+    EXPECT_EQ(asio_server::search_protocol::CAPABILITY_ANONYMOUS_ACCESS_V1, 4u);
+    EXPECT_EQ(sizeof(asio_server::search_protocol::ProtocolCapabilitiesV1), 8u);
+}
+
 TEST(SessionAuthGate, NonAdminUserRegistryPayloadIsRejected)
 {
     // TEST 2: arbitrary legacy usernames must not authorize.

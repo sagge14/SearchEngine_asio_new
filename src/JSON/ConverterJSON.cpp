@@ -60,6 +60,8 @@ void ConverterJSON::setSettings(const search_server::Settings &val, const std::s
     jsonSettings["config"]["year"] = val.year;
     jsonSettings["config"]["server_mode"] =
         std::string(search_server::toString(val.serverMode));
+    jsonSettings["config"]["authentication_mode"] =
+        std::string(auth::toString(val.authenticationMode));
     jsonSettings["config"]["hide_console_window"] = val.hideConsoleWindow;
     jsonSettings["config"]["excluded_subtrees"] = val.excludedSubtrees;
     jsonSettings["config"]["prm_base_dir"] = val.prm_base_dir;
@@ -283,6 +285,18 @@ search_server::Settings ConverterJSON::getSettings(const std::string& jsonPath) 
             "prd_monthly_bases_dir",
             s.prd_monthly_bases_dir,
             s.prd_base_dir);
+
+        s.authenticationMode = auth::AuthenticationMode::Required;
+        if (config.contains("authentication_mode")) {
+            const auto& value = config.at("authentication_mode");
+            if (!value.is_string() ||
+                (value != "required" && value != "none")) {
+                throw std::invalid_argument(
+                    "config.authentication_mode must be required or none");
+            }
+            if (value == "none")
+                s.authenticationMode = auth::AuthenticationMode::None;
+        }
 
         if (config.contains("server_mode")) {
             if (!config["server_mode"].is_string()) {

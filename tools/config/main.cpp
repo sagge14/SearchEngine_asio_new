@@ -1426,6 +1426,13 @@ std::vector<std::string> validateJson(const json& root, bool checkDirectories)
         }
     }
 
+    if (config.contains("authentication_mode") &&
+        (!config["authentication_mode"].is_string() ||
+         (config["authentication_mode"] != "required" &&
+          config["authentication_mode"] != "none"))) {
+        errors.emplace_back("config.authentication_mode must be required or none");
+    }
+
     if (config.contains("server_mode")) {
         if (!config["server_mode"].is_string()) {
             errors.emplace_back("config.server_mode must be active or archive");
@@ -1945,6 +1952,8 @@ int inspectCommand(const std::vector<std::wstring>& args)
                     "document_catalog_storage", std::string("memory")) << '\n'
               << "server_mode="
               << config.value("server_mode", std::string("active")) << '\n'
+              << "authentication_mode="
+              << config.value("authentication_mode", std::string("required")) << '\n'
               << "batch_reader_threads="
               << config.value("batch_reader_threads", 1) << '\n'
               << "batch_indexer_threads="
@@ -2035,6 +2044,8 @@ int configureCommand(const std::vector<std::wstring>& args)
         result["config"] = json::object();
     }
     json& config = result["config"];
+    if (const auto value = option(args, L"--authentication-mode"))
+        config["authentication_mode"] = utf8(*value);
     std::string documentCatalogStorage = config.value(
         "document_catalog_storage", std::string("memory"));
     if (const auto value = option(args, L"--document-catalog-storage")) {
@@ -2159,6 +2170,25 @@ std::string chooseDocumentCatalogStorage(
             return "memory";
         if (answer == L"2")
             return "sqlite";
+        writeInteractive(language == UiLanguage::Russian
+            ? L"Введите 1 или 2.\n" : L"Enter 1 or 2.\n");
+    }
+}
+
+std::string chooseAuthenticationMode(UiLanguage language, std::string current)
+{
+    if (current != "none") current = "required";
+    const std::wstring defaultChoice = current == "none" ? L"2" : L"1";
+    for (;;) {
+        writeInteractive(language == UiLanguage::Russian
+            ? L"\nДоступ к серверу:\n  1 - С авторизацией (токены USB/ПК)\n"
+              L"  2 - Без авторизации и ключей (общий доступ)\nВаш выбор [" + defaultChoice + L"]: "
+            : L"\nServer access:\n  1 - Authentication required (USB/PC tokens)\n"
+              L"  2 - No authentication or keys (shared access)\nSelect [" + defaultChoice + L"]: ");
+        const auto answer = trim(readInteractiveLine());
+        if (answer.empty()) return current;
+        if (answer == L"1") return "required";
+        if (answer == L"2") return "none";
         writeInteractive(language == UiLanguage::Russian
             ? L"Введите 1 или 2.\n" : L"Enter 1 or 2.\n");
     }
@@ -2330,10 +2360,14 @@ int configureInteractiveCommand(const std::vector<std::wstring>& args)
         L"<directory>\\<year>.db and <directory>\\base.db.",
         defaultF12BaseDir);
 
+    const std::string authenticationMode = chooseAuthenticationMode(
+        language, defaults.value("config", json::object()).value(
+            "authentication_mode", std::string("required")));
     std::vector<std::wstring> configureArgs{
         L"--template", templatePath.wstring(),
         L"--output", outputPath.wstring(),
         L"--port", std::to_wstring(port),
+        L"--authentication-mode", utf16(authenticationMode),
         L"--year", std::to_wstring(year),
         L"--threads", std::to_wstring(threads),
         L"--file-timeout", std::to_wstring(timeout),
@@ -2645,10 +2679,16 @@ int configureLocalMachineCommand(const std::vector<std::wstring>& args)
             "no free ASIO port was found for local-machine setup");
     }
 
+    std::string authenticationMode = "required";
+    if (const auto value = option(args, L"--authentication-mode"))
+        authenticationMode = utf8(*value);
+    if (std::find(args.begin(), args.end(), L"--choose-authentication") != args.end())
+        authenticationMode = chooseAuthenticationMode(interactiveLanguage(args), authenticationMode);
     std::vector<std::wstring> configureArgs{
         L"--template", templatePath.wstring(),
         L"--output", outputPath.wstring(),
         L"--port", std::to_wstring(selectedPort),
+        L"--authentication-mode", utf16(authenticationMode),
         L"--year", std::to_wstring(system.currentYear),
         L"--threads", std::to_wstring(system.recommendedThreads),
         L"--file-timeout", std::to_wstring(kRecommendedFileTimeout),
@@ -2796,6 +2836,7 @@ void printUsage()
         << "            [--import-settings FILE] [--parallel-readers N]\n"
         << "            [--sqlite-load-threads N]\n"
         << "            [--document-catalog-storage memory|sqlite]\n"
+        << "            [--authentication-mode required|none]\n"
         << "            [--scan-on-startup 0|1]\n"
         << "            [--tlg-send-root PATH] [--razn-output-dir PATH]\n"
         << "            [--opis-base-dir PATH] [--f12-base-dir PATH]\n"

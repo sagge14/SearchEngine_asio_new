@@ -163,7 +163,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
                 // Auth gate stays strict: unauthenticated data access is terminal.
                 const auto gate = evaluateSessionCommandGate(
                     normalizedDisabledLegacyMessageCommand,
-                    authenticated_);
+                    authenticated_, authentication_mode_);
                 if (!gate.allow_execute)
                 {
                     co_await queueError(
@@ -227,7 +227,7 @@ boost::asio::awaitable<void> asio_server::session::readLoop()
             {
                 // Auth gate: must fire before touching any body bytes.
                 const auto legacyGate = evaluateSessionCommandGate(
-                    requestHeader.command, authenticated_);
+                    requestHeader.command, authenticated_, authentication_mode_);
                 if (!legacyGate.allow_execute)
                 {
                     co_await queueError(
@@ -378,7 +378,7 @@ void asio_server::session::stopOnExecutor(const std::string& why)
         std::lock_guard<std::mutex> lock(user_name_mutex_);
         userName = userName_;
     }
-    logutil::log(userName, "EMPTY", "DISCONNECT");
+    logutil::log(userName, "EMPTY", "DISCONNECT", getRemoteIP());
     finishSession();
 }
 
@@ -532,6 +532,14 @@ boost::asio::awaitable<bool> asio_server::session::queueError(
     if (!diagnostic.empty())
         logMessage += ", diagnostic=" + diagnostic;
     search_server::addToLog(logMessage);
+    std::string auditUser;
+    {
+        std::lock_guard<std::mutex> lock(user_name_mutex_);
+        auditUser = userName_;
+    }
+    logutil::log(auditUser,
+        std::string(command_execution::toString(error)),
+        std::string("ERROR:") + getTextCommand(requestCommand), getRemoteIP());
 
     boost::system::error_code sendError;
     Header errorHeader{};
@@ -617,7 +625,7 @@ boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
 
     const auto gate = evaluateSessionCommandGate(
         requestHeader.command,
-        authenticated_);
+        authenticated_, authentication_mode_);
     if (!gate.allow_execute) {
         co_await queueError(
             command_execution::ErrorCode::AuthRequired,
@@ -807,7 +815,7 @@ boost::asio::awaitable<bool> asio_server::session::handleStreamingUpload(
             std::lock_guard<std::mutex> lock(user_name_mutex_);
             personalRequest.user_name = userName_;
         }
-        logutil::log(personalRequest);
+        logutil::log(personalRequest, getRemoteIP());
         finishCommandIfStarted();
         co_return true;
     }
@@ -884,7 +892,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
         // Unauthenticated data access fails closed.
         const auto gate = evaluateSessionCommandGate(
             requestHeader.command,
-            authenticated_);
+            authenticated_, authentication_mode_);
         if (!gate.allow_execute)
         {
             co_await queueError(
@@ -898,7 +906,9 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
         if (const auto rejection = archiveCommandRejection(
                 requestHeader.command,
                 Interface::isArchiveMode(),
-                admin_session_))
+                admin_session_ ||
+                    (authentication_mode_ == auth::AuthenticationMode::None &&
+                     isLocalAdminPeer())))
         {
             co_await queueError(
                 *rejection,
@@ -968,10 +978,28 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
                 search_protocol::ProtocolCapabilitiesV1 capabilities{};
                 capabilities.capabilities =
                     search_protocol::CAPABILITY_TYPED_ERRORS_V1 |
-                    search_protocol::CAPABILITY_CLIENT_AUTH_V1;
+                    (authentication_mode_ == auth::AuthenticationMode::None
+                        ? search_protocol::CAPABILITY_ANONYMOUS_ACCESS_V1
+                        : search_protocol::CAPABILITY_CLIENT_AUTH_V1);
                 answer.resize(sizeof(capabilities));
                 std::memcpy(answer.data(), &capabilities, sizeof(capabilities));
                 enableTypedErrorsAfterResponse = true;
+            }
+            else if (authentication_mode_ == auth::AuthenticationMode::None &&
+                     (requestHeader.command == COMMAND::USER_REGISTRY ||
+                      requestHeader.command == COMMAND::AUTHENTICATE_V1))
+            {
+                // Compatibility handshake only: anonymous peers never become admin
+                // and cannot replace the server-owned audit identity.
+                if (requestHeader.command == COMMAND::USER_REGISTRY)
+                    answer = {'O', 'K'};
+                else {
+                    const auto json = nlohmann::json{
+                        {"ok", true},
+                        {"authentication_mode", "none"},
+                        {"client_name", auth::kAnonymousUser}}.dump();
+                    answer.assign(json.begin(), json.end());
+                }
             }
             else if (requestHeader.command == COMMAND::USER_REGISTRY)
             {
@@ -1097,6 +1125,11 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             }
             else
             {
+                // The personal buffer in anonymous mode is explicitly shared and
+                // must have its own unauthenticated_user mapping in prefix_map.
+                if (authentication_mode_ == auth::AuthenticationMode::None &&
+                    requestHeader.command == COMMAND::GET_ATTACHMENTS)
+                    requestData.assign(auth::kAnonymousUser.begin(), auth::kAnonymousUser.end());
                 auto result = Interface::execCommand(
                     requestHeader.command,
                     requestData);
@@ -1131,7 +1164,7 @@ boost::asio::awaitable<void> asio_server::session::commandExec(
             std::lock_guard<std::mutex> lock(user_name_mutex_);
             personalRequest.user_name = userName_;
         }
-        logutil::log(personalRequest);
+        logutil::log(personalRequest, getRemoteIP());
 
     } catch (const std::exception& e) {
         if (responseQueued) {
@@ -1283,7 +1316,7 @@ void asio_server::AsioServer::do_accept() {
                             auto new_session = std::make_shared<session>(
                                 std::move(socket),
                                 cpu_pool_,
-                                activity_
+                                activity_, authentication_mode_
                             );
                             session_created = true;
                             {
@@ -1326,11 +1359,13 @@ void asio_server::session::finishSession() noexcept
 asio_server::AsioServer::AsioServer(
         boost::asio::io_context& net_io,
         boost::asio::thread_pool& cpu_pool,
-        unsigned short port
+        unsigned short port,
+        auth::AuthenticationMode mode
 )
         : net_io_(net_io)
         , cpu_pool_(cpu_pool)
         , acceptor_(net_io_, tcp::endpoint(tcp::v4(), port))
+        , authentication_mode_(mode)
         , activity_(std::make_shared<ServerActivity>())
 {
     do_accept();

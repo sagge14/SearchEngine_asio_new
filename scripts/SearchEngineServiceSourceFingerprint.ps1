@@ -33,14 +33,17 @@ function Get-SearchEngineServiceSourceFingerprint {
         'scripts/SearchEngineServiceSourceFingerprint.ps1'
     )
 
-    $trackedFiles = @(& git -c "safe.directory=$ProjectRoot" `
+    # Git must return literal UTF-8 paths, including Cyrillic tutorial names.
+    # Quoted octal paths bypass the tutorials/ filter and are invalid on Windows.
+    $trackedFiles = @(& git -c "safe.directory=$ProjectRoot" -c core.quotepath=false `
         -C $ProjectRoot ls-files -- @pathSpecs)
     if ($LASTEXITCODE -ne 0) {
         throw 'Cannot enumerate SearchEngineService source fingerprint inputs.'
     }
     $trackedFiles = @($trackedFiles | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_) -and
-        -not ([string]$_).Replace('\', '/').StartsWith('tutorials/', [StringComparison]::OrdinalIgnoreCase)
+        -not ([string]$_).Replace('\', '/').StartsWith('tutorials/', [StringComparison]::OrdinalIgnoreCase) -and
+        -not ([string]$_).Replace('\', '/').StartsWith('deployment/SearchEngineServicePortable/', [StringComparison]::OrdinalIgnoreCase)
     })
 
     # Tutorials are copied into the portable package even for a dirty candidate
@@ -55,8 +58,14 @@ function Get-SearchEngineServiceSourceFingerprint {
             })
     }
 
+    # Package templates also follow the working tree: removed wrappers are not
+    # release inputs, and new wrappers must be fingerprinted before a commit.
+    $templateRoot = Join-Path $ProjectRoot 'deployment\SearchEngineServicePortable'
+    $templateFiles = @(Get-ChildItem -LiteralPath $templateRoot -Recurse -File -Force |
+        ForEach-Object { $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/') })
+
     $accessFiles = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'tools\access_setup') -File | ForEach-Object { $_.FullName.Substring($ProjectRoot.Length + 1).Replace('\', '/') })
-    $sourceFiles = @($trackedFiles + $tutorialFiles + $accessFiles + @(
+    $sourceFiles = @($trackedFiles + $tutorialFiles + $templateFiles + $accessFiles + @(
         'tools/token_issuer/AuthorityRecovery.cpp',
         'tools/token_issuer/AuthorityRecovery.hpp',
         'deployment/SearchEngineServicePortable/Resolve-ServiceInstance.cmd',

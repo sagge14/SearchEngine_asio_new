@@ -50,10 +50,19 @@ void SqlLogger::initializeDatabase() {
             time TIME,
             request_type VARCHAR,
             request_text VARCHAR,
-            user_name VARCHAR
+            user_name VARCHAR,
+            remote_ip VARCHAR NOT NULL DEFAULT ''
         );
     )";
     db.execSql(createTableSQL);
+    const auto columns = db.queryRows("PRAGMA table_info(logs)");
+    const bool hasRemoteIp = std::any_of(columns.begin(), columns.end(),
+        [](const auto& row) {
+            const auto name = row.find("name");
+            return name != row.end() && name->second == "remote_ip";
+        });
+    if (!hasRemoteIp)
+        db.execSql("ALTER TABLE logs ADD COLUMN remote_ip VARCHAR NOT NULL DEFAULT ''");
 }
 
 
@@ -87,7 +96,7 @@ std::string summarizeSql(const std::string& sql) {
 
 
 // Асинхронное добавление логов
-void SqlLogger::logRequest(const PersonalRequest& request) {
+void SqlLogger::logRequest(const PersonalRequest& request, const std::string& remoteIp) {
     if (stopWorker.load(std::memory_order_acquire))
         return;
     // Добавляем лог в очередь и уведомляем поток
@@ -95,7 +104,7 @@ void SqlLogger::logRequest(const PersonalRequest& request) {
         std::lock_guard<std::mutex> lock(queueMutex);
         if (stopWorker.load(std::memory_order_acquire))
             return;
-        logQueue.push(request);
+        logQueue.push(LogEntry{request, remoteIp});
     }
     queueCondVar.notify_one();
 }
@@ -118,7 +127,8 @@ void SqlLogger::processQueue() {
         queueCondVar.wait(lock, [this] { return !logQueue.empty() || stopWorker; });
 
         while (!logQueue.empty()) {
-            PersonalRequest request = logQueue.front();
+            auto entry = std::move(logQueue.front());
+            PersonalRequest request = std::move(entry.request);
             logQueue.pop();
             lock.unlock();
 
@@ -147,11 +157,12 @@ void SqlLogger::processQueue() {
             std::string escapedRequestText = escapeQuotes(request.request);
             std::string escapedUser = escapeQuotes(request.user_name);
             std::string escapedType = escapeQuotes(request.request_type);
+            std::string escapedIp = escapeQuotes(entry.remoteIp);
 
             std::string insertSQL =
-                    "INSERT INTO logs (date, time, request_type, request_text, user_name) "
+                    "INSERT INTO logs (date, time, request_type, request_text, user_name, remote_ip) "
                     "VALUES ('" + date + "', '" + time + "', '" +
-                    escapedType + "', '" + escapedRequestText + "', '" + escapedUser + "');";
+                    escapedType + "', '" + escapedRequestText + "', '" + escapedUser + "', '" + escapedIp + "');";
 
             try {
                 db.execSql(insertSQL);

@@ -1604,6 +1604,18 @@ if(TARGET SearchEngineConfig)
     )
     if(SEARCHENGINE_POWERSHELL_EXECUTABLE)
         add_test(
+                NAME ServicePackageVerification_test
+                COMMAND "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
+                -NoProfile -ExecutionPolicy Bypass -File
+                "${PROJECT_SOURCE_DIR}/scripts/tests/ServicePackageVerification.Tests.ps1"
+        )
+        add_test(
+                NAME ServiceInstallerSafety_test
+                COMMAND "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
+                -NoProfile -ExecutionPolicy Bypass -File
+                "${PROJECT_SOURCE_DIR}/scripts/tests/ServiceInstallerSafety.Tests.ps1"
+        )
+        add_test(
                 NAME ServiceControlBatch_test
                 COMMAND "${SEARCHENGINE_POWERSHELL_EXECUTABLE}"
                 -NoProfile -ExecutionPolicy Bypass -File

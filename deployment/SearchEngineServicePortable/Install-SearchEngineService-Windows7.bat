@@ -2,12 +2,21 @@
 setlocal EnableExtensions DisableDelayedExpansion
 
 set "PACKAGE_ROOT=%~dp0"
+REM Every exit path owns its temp files, including failures before instance setup.
+REM DEL with an empty quoted path deletes files in the current directory.
+set "INSTANCE_TEMP=%TEMP%\SearchEngineService-Instance-%RANDOM%-%RANDOM%.txt"
+set "CONFIG_TEMP=%TEMP%\SearchEngineService-Settings-%RANDOM%-%RANDOM%.json"
+set "ENDPOINT_TEMP=%TEMP%\SearchEngineService-Endpoint-%RANDOM%-%RANDOM%.txt"
+set "HELPER_OUTPUT=%TEMP%\SearchEngineService-Helper-%RANDOM%-%RANDOM%.txt"
+set "HELPER=%PACKAGE_ROOT%tools\SearchEngineConfig.exe"
 set "SERVICE_INSTANCE=default"
 if exist "%PACKAGE_ROOT%ServiceInstance.cmd" call "%PACKAGE_ROOT%ServiceInstance.cmd"
 set "VALIDATE_ONLY=0"
 set "SKIP_VC_REDIST=0"
 set "INSTANCE_FROM_ARGS=0"
 set "LOCAL_MACHINE_INSTALL=0"
+set "LOCAL_AUTH_MODE=required"
+set "LOCAL_AUTH_SELECTED=0"
 set "LOCAL_INITIAL_UPDATE_EXIT=0"
 set "CRT_READY=0"
 set "UI_LANGUAGE=auto"
@@ -15,6 +24,20 @@ set "BAD_ARG="
 
 :PARSE_ARGS
 if "%~1"=="" goto :ARGS_DONE
+if /I "%~1"=="/AuthRequired" (
+    if "%LOCAL_AUTH_SELECTED%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
+    set "LOCAL_AUTH_MODE=required"
+    set "LOCAL_AUTH_SELECTED=1"
+    shift
+    goto :PARSE_ARGS
+)
+if /I "%~1"=="/NoAuth" (
+    if "%LOCAL_AUTH_SELECTED%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
+    set "LOCAL_AUTH_MODE=none"
+    set "LOCAL_AUTH_SELECTED=1"
+    shift
+    goto :PARSE_ARGS
+)
 if /I "%~1"=="/validate" (
     set "VALIDATE_ONLY=1"
     shift
@@ -45,12 +68,11 @@ shift
 goto :PARSE_ARGS
 
 :ARGS_DONE
+if "%LOCAL_AUTH_SELECTED%"=="1" if not "%LOCAL_MACHINE_INSTALL%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
 if "%LOCAL_MACHINE_INSTALL%"=="1" if "%VALIDATE_ONLY%"=="1" goto :LOCAL_MACHINE_ARGUMENT_CONFLICT
 set "TARGET_ARCH={{ARCHITECTURE}}"
-set "HELPER=%PACKAGE_ROOT%tools\SearchEngineConfig.exe"
 set "SETTINGS_TEMPLATE=%PACKAGE_ROOT%data\Settings.json"
 set "VC_REDIST=%PACKAGE_ROOT%prerequisites\{{VC_REDIST_FILE}}"
-set "INSTANCE_TEMP=%TEMP%\SearchEngineService-Instance-%RANDOM%-%RANDOM%.txt"
 
 if not exist "%PACKAGE_ROOT%app\SearchEngine.exe" goto :PACKAGE_MISSING
 if not exist "%HELPER%" goto :PACKAGE_MISSING
@@ -120,9 +142,6 @@ if /I "%SERVICE_INSTANCE%"=="default" (
 )
 set "FIREWALL_RULE=%SERVICE_NAME% TCP"
 set "DATA_DIR=%ProgramData%\%SERVICE_NAME%"
-set "CONFIG_TEMP=%TEMP%\%SERVICE_NAME%-Settings-%RANDOM%-%RANDOM%.json"
-set "ENDPOINT_TEMP=%TEMP%\%SERVICE_NAME%-Endpoint-%RANDOM%-%RANDOM%.txt"
-set "HELPER_OUTPUT=%TEMP%\%SERVICE_NAME%-Helper-%RANDOM%-%RANDOM%.txt"
 set "APP_ROLLBACK_READY=0"
 set "RUNTIME_TX_READY=0"
 set "RUNTIME_TX_APPLIED=0"
@@ -204,7 +223,7 @@ if errorlevel 1 goto :HELPER_FAILED
 goto :CONFIGURED
 
 :CONFIGURE_LOCAL_MACHINE
-"%HELPER%" configure-local-machine --template "%SETTINGS_TEMPLATE%" --output "%CONFIG_TEMP%"
+"%HELPER%" configure-local-machine --template "%SETTINGS_TEMPLATE%" --output "%CONFIG_TEMP%" --authentication-mode "%LOCAL_AUTH_MODE%" --language "%UI_LANGUAGE%"
 if errorlevel 1 goto :HELPER_FAILED
 goto :CONFIGURED
 
@@ -235,6 +254,8 @@ set "SERVICE_THREADS=%CFG_threads%"
 set "FILE_TIMEOUT=%CFG_file_timeout_sec%"
 set "PRM_AUTODETECT=%CFG_prm_short_content_autodetect%"
 set "DOCUMENT_CATALOG_STORAGE=%CFG_document_catalog_storage%"
+if not defined CFG_authentication_mode set "CFG_authentication_mode=required"
+call :UI install.authentication_mode "%CFG_authentication_mode%"
 "%HELPER%" validate --settings "%CONFIG_TEMP%" >nul
 if errorlevel 1 goto :HELPER_FAILED
 
@@ -399,9 +420,11 @@ if errorlevel 1 goto :SERVICE_SETUP_FAILED
 
 :LOCAL_MACHINE_POST_SETUP
 if not "%LOCAL_MACHINE_INSTALL%"=="1" goto :START_SERVICE
+if /I "%CFG_authentication_mode%"=="none" goto :LOCAL_MACHINE_INITIAL_UPDATE
 call :UI install.local_auth
 call :PROVISION_LOCAL_MACHINE_AUTH
 if errorlevel 1 goto :LOCAL_MACHINE_AUTH_FAILED
+:LOCAL_MACHINE_INITIAL_UPDATE
 call :UI install.local_initial_update
 call :RUN_LOCAL_INITIAL_UPDATE
 set "LOCAL_INITIAL_UPDATE_EXIT=%ERRORLEVEL%"
@@ -432,7 +455,8 @@ del /Q "%CONFIG_TEMP%" >nul 2>&1
 del /Q "%ENDPOINT_TEMP%" >nul 2>&1
 del /Q "%HELPER_OUTPUT%" >nul 2>&1
 call :UI install.success "%SERVICE_NAME%" "%INSTALL_ROOT%" "%DATA_DIR%" "%SERVICE_YEAR%" "%SERVICE_PORT%" "%COMPUTERNAME%"
-if "%LOCAL_MACHINE_INSTALL%"=="1" if "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" call :UI install.local_success "%TOKEN_PATH%"
+if "%LOCAL_MACHINE_INSTALL%"=="1" if "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" if /I not "%CFG_authentication_mode%"=="none" call :UI install.local_success "%TOKEN_PATH%"
+if "%LOCAL_MACHINE_INSTALL%"=="1" if "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" if /I "%CFG_authentication_mode%"=="none" call :UI install.local_success_no_auth
 if not "%LOCAL_INITIAL_UPDATE_EXIT%"=="0" goto :LOCAL_INITIAL_UPDATE_FAILED_AFTER_INSTALL
 call :PAUSE_UI
 exit /b 0
@@ -547,7 +571,7 @@ exit /b 0
 
 :PROBE_VC_RUNTIME
 REM Prefer CRT DLLs beside the helper so a failed vc_redist.exe still lets
-REM Local-Machine-Install start. Do not launch the helper until those files
+REM the quick local installers start. Do not launch the helper until those files
 REM exist somewhere, or Windows shows a blocking missing-DLL dialog.
 for %%I in ("%HELPER%") do set "HELPER_DIR=%%~dpI"
 if not exist "%HELPER_DIR%vcruntime140.dll" goto :PROBE_VC_SYSTEM
@@ -960,10 +984,7 @@ goto :FAILED
 :FAILED_WITH_FILES
 call :UI install.partial_files "%INSTALL_ROOT%" "%DATA_DIR%"
 :FAILED
-del /Q "%INSTANCE_TEMP%" >nul 2>&1
-del /Q "%CONFIG_TEMP%" >nul 2>&1
-del /Q "%ENDPOINT_TEMP%" >nul 2>&1
-del /Q "%HELPER_OUTPUT%" >nul 2>&1
+call :CLEANUP_TEMPS
 if /I "%UI_LANGUAGE%"=="auto" set "UI_LANGUAGE=en"
 if not "%CRT_READY%"=="1" goto :FAILED_ASCII
 if not exist "%HELPER%" goto :FAILED_ASCII
@@ -976,13 +997,18 @@ echo Installation failed. Read the error above.
 if not "%LOCAL_MACHINE_INSTALL%"=="1" pause
 exit /b 1
 :CANCELLED
-del /Q "%INSTANCE_TEMP%" >nul 2>&1
-del /Q "%CONFIG_TEMP%" >nul 2>&1
-del /Q "%ENDPOINT_TEMP%" >nul 2>&1
-del /Q "%HELPER_OUTPUT%" >nul 2>&1
+call :CLEANUP_TEMPS
 call :UI install.cancelled
 call :PAUSE_UI
 exit /b 1
+
+:CLEANUP_TEMPS
+REM Guard both empty variables and directory targets; DEL accepts directories.
+if defined INSTANCE_TEMP if not exist "%INSTANCE_TEMP%\" del /Q "%INSTANCE_TEMP%" >nul 2>&1
+if defined CONFIG_TEMP if not exist "%CONFIG_TEMP%\" del /Q "%CONFIG_TEMP%" >nul 2>&1
+if defined ENDPOINT_TEMP if not exist "%ENDPOINT_TEMP%\" del /Q "%ENDPOINT_TEMP%" >nul 2>&1
+if defined HELPER_OUTPUT if not exist "%HELPER_OUTPUT%\" del /Q "%HELPER_OUTPUT%" >nul 2>&1
+exit /b 0
 
 :CHOICE
 call :UI common.select

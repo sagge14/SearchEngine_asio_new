@@ -724,7 +724,7 @@ try {
     Copy-Item -LiteralPath $opensslDll `
         -Destination (Join-Path $stagingDirectory ("tools\" + $opensslFileName))
     # App-local VC++ CRT (and UCRT on x86/Win7) next to each EXE. Windows loads
-    # these from the EXE directory first, so Local-Machine-Install can still
+    # these from the EXE directory first, so the quick local installers can still
     # start SearchEngineConfig/TokenIssuer when vc_redist.exe cannot run.
     $crtDirectory = Get-VCRuntimeCrtDirectory $VCRedistPath $vcRedistArch $expectedToolset
     Copy-SideBySideRuntimeDlls `
@@ -760,16 +760,14 @@ try {
     )
 
     $portableBatchFiles = @(
+        @{ Source = 'Local-Install-With-Auth.bat'; Destination = 'Local-Install-With-Auth.bat' },
+        @{ Source = 'Local-Install-Without-Auth.bat'; Destination = 'Local-Install-Without-Auth.bat' },
         @{ Source = 'Resolve-ServiceInstance.cmd'; Destination = 'Resolve-ServiceInstance.cmd' },
         @{ Source = 'Setup-Access.bat'; Destination = 'Setup-Access.bat' },
         @{ Source = 'Remove-SearchEngineAuthKeys.bat'; Destination = 'Remove-SearchEngineAuthKeys.bat' },
         @{
             Source = 'Install-SearchEngineService-Windows7.bat'
             Destination = 'Install-SearchEngineService.bat'
-        },
-        @{
-            Source = 'Local-Machine-Install-Windows7.bat'
-            Destination = 'Local-Machine-Install.bat'
         },
         @{
             Source = 'Stop-SearchEngineService-Windows7.bat'
@@ -904,7 +902,8 @@ try {
     foreach ($name in @(
         'Install-SearchEngineService.bat',
         'Resolve-ServiceInstance.cmd',
-        'Local-Machine-Install.bat',
+        'Local-Install-With-Auth.bat',
+        'Local-Install-Without-Auth.bat',
         'Stop-SearchEngineService.bat',
         'Start-SearchEngineService.bat',
         'Restart-SearchEngineService.bat',

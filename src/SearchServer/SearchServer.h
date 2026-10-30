@@ -107,6 +107,7 @@ namespace search_server {
 
         std::string year;
         ServerMode serverMode = ServerMode::Active;
+        auth::AuthenticationMode authenticationMode = auth::AuthenticationMode::Required;
         std::string prm_base_dir = {};
         std::string prd_base_dir = {};
         /// Explicit monthly AutoPad database roots. Empty keeps the legacy

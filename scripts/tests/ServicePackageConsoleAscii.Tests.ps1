@@ -626,13 +626,13 @@ Assert-True ($protectedSection.Contains("'Remove-SearchEngineAuthKeys.bat'")) (
 )
 
 # 9e. Zero-click local-machine installation contract.
-$localInstallBat = Join-Path $projectRoot `
-    'deployment\SearchEngineServicePortable\Local-Machine-Install-Windows7.bat'
+foreach ($fast in @(@{Name='Local-Install-With-Auth.bat'; Flag='/AuthRequired'}, @{Name='Local-Install-Without-Auth.bat'; Flag='/NoAuth'})) {
+$localInstallBat = Join-Path $projectRoot ('deployment\SearchEngineServicePortable\' + $fast.Name)
 Assert-True (Test-Path -LiteralPath $localInstallBat -PathType Leaf) (
-    '9e. Local-Machine-Install.bat template exists'
+    '9e. Quick local install wrapper template exists'
 )
 Assert-True (Test-StrictAsciiBytes -Path $localInstallBat) (
-    '9e. Local-Machine-Install.bat template is strict ASCII'
+    '9e. Quick local install wrapper template is strict ASCII'
 )
 $localInstallText = [IO.File]::ReadAllText($localInstallBat)
 Assert-True ($localInstallText.Contains('/LocalMachine')) (
@@ -641,7 +641,7 @@ Assert-True ($localInstallText.Contains('/LocalMachine')) (
 Assert-True ($localInstallText.Contains('pause >nul')) (
     '9e. Local-machine wrapper keeps the final result visible'
 )
-Assert-True (-not $localInstallText.ToLowerInvariant().Contains('choice')) (
+Assert-True ($localInstallText -notmatch '(?im)^\s*@?choice(?:\.exe)?(?:\s|$)') (
     '9e. Local-machine wrapper never asks a choice'
 )
 Assert-True (-not $localInstallText.ToLowerInvariant().Contains('set /p')) (
@@ -653,6 +653,8 @@ Assert-True ($localInstallText.Contains('set "INSTALL_EXIT=%ERRORLEVEL%"')) (
 Assert-True ($localInstallText.Contains('exit /b %INSTALL_EXIT%')) (
     '9e. Local-machine wrapper returns the preserved installer exit status'
 )
+Assert-True ($localInstallText.Contains($fast.Flag)) ('9e. Wrapper fixes its authentication mode: ' + $fast.Name)
+}
 Assert-True ($installText.Contains(
     'call :UI install.success "%SERVICE_NAME%" "%INSTALL_ROOT%" "%DATA_DIR%" "%SERVICE_YEAR%" "%SERVICE_PORT%" "%COMPUTERNAME%"'
 )) '9e. Final install summary receives actual paths, year, port, and host'
@@ -774,12 +776,10 @@ Assert-True (
     $authPosition -ge 0 -and $updatePosition -gt $authPosition -and
     $startPosition -gt $updatePosition
 ) '9e. Token registration and completed one-shot indexing precede service start'
-Assert-True ($packagerText.Contains("Source = 'Local-Machine-Install-Windows7.bat'")) (
-    '9e. Packager copies the local-machine wrapper'
-)
-Assert-True ($protectedSection.Contains("'Local-Machine-Install.bat'")) (
-    '9e. Package checksum manifest protects Local-Machine-Install.bat'
-)
+foreach ($fastName in @('Local-Install-With-Auth.bat', 'Local-Install-Without-Auth.bat')) {
+    Assert-True ($packagerText.Contains("Source = '$fastName'")) ('9e. Packager copies ' + $fastName)
+    Assert-True ($protectedSection.Contains("'$fastName'")) ('9e. Package checksum manifest protects ' + $fastName)
+}
 
 $defaultSettingsPath = Join-Path $projectRoot `
     'deployment\SearchEngineServicePortable\source-data\Settings.json'
@@ -1004,10 +1004,10 @@ function Test-PackageDataLayout {
             "8. $ArchitectureLabel data\$name absent"
         )
     }
-    Assert-True (
-        Test-Path -LiteralPath (Join-Path $PackageDirectory 'Local-Machine-Install.bat') `
-            -PathType Leaf
-    ) "8. $ArchitectureLabel Local-Machine-Install.bat exists"
+    foreach ($fastName in @('Local-Install-With-Auth.bat', 'Local-Install-Without-Auth.bat')) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $PackageDirectory $fastName) -PathType Leaf) "8. $ArchitectureLabel $fastName exists"
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $PackageDirectory 'Local-Machine-Install.bat'))) "8. $ArchitectureLabel retired wrapper is absent"
 }
 
 $packageArchCases = @(

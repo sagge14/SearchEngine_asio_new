@@ -51,6 +51,7 @@
     "sqlite_precount_postings": false,
     "thread_count": 4,
     "year": "2026",
-    "server_mode": "active"
+    "server_mode": "active",
+    "authentication_mode": "required"
   }
 }

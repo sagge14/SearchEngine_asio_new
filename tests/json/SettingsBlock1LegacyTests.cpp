@@ -69,6 +69,37 @@ namespace
     }
 }
 
+TEST(SettingsBlock1LegacyTest, AuthenticationDefaultsToRequiredAndAcceptsExplicitNone)
+{
+    TemporaryDirectory temporary;
+    const auto path = temporary.path() / "Settings.json";
+    auto root = minimalConfig();
+    writeUtf8(path, root);
+    EXPECT_EQ(ConverterJSON::getSettings(path.string()).authenticationMode,
+        auth::AuthenticationMode::Required);
+    root["config"]["authentication_mode"] = "none";
+    writeUtf8(path, root);
+    EXPECT_EQ(ConverterJSON::getSettings(path.string()).authenticationMode,
+        auth::AuthenticationMode::None);
+    root["config"]["authentication_mode"] = "required";
+    writeUtf8(path, root);
+    EXPECT_EQ(ConverterJSON::getSettings(path.string()).authenticationMode,
+        auth::AuthenticationMode::Required);
+}
+
+TEST(SettingsBlock1LegacyTest, InvalidAuthenticationModeNeverFallsBackToAnonymous)
+{
+    TemporaryDirectory temporary;
+    const auto path = temporary.path() / "Settings.json";
+    for (const auto& value : {nh::json("optional"), nh::json("NONE"),
+            nh::json(false), nh::json(nullptr), nh::json(0)}) {
+        auto root = minimalConfig();
+        root["config"]["authentication_mode"] = value;
+        writeUtf8(path, root);
+        EXPECT_THROW(ConverterJSON::getSettings(path.string()), std::invalid_argument);
+    }
+}
+
 TEST(SettingsBlock1LegacyTest, LegacyHideModeMapsToHideConsoleWindow)
 {
     TemporaryDirectory temporary;

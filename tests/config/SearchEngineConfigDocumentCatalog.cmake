@@ -8,7 +8,7 @@ file(READ "${TEMPLATE}" template_json)
 
 set(old_settings "${TEST_ROOT}/old-settings.json")
 string(REGEX REPLACE
-    "[ \t]*\"document_catalog_storage\"[ \t]*:[ \t]*\"memory\"[ \t]*,?\r?\n"
+    "[ \t]*\"document_catalog_storage\"[ \t]*:[ \t]*\"(memory|sqlite)\"[ \t]*,?\r?\n"
     ""
     old_json
     "${template_json}")
@@ -78,12 +78,12 @@ endforeach()
 
 # The interactive installer path must always ask the question. Empty input
 # keeps memory for a new install and keeps sqlite from imported Settings.json.
-file(WRITE "${TEST_ROOT}/interactive-input.txt" "\n\n\n\n\n\n\n\n\n\n")
+file(WRITE "${TEST_ROOT}/interactive-input.txt" "\n\n\n\n\n\n\n\n\n\n\n")
 foreach(case IN ITEMS new imported)
     set(interactive_output "${TEST_ROOT}/interactive-${case}.json")
     set(interactive_args
         configure-interactive
-        --template "${TEMPLATE}"
+        --template "${old_settings}"
         --output "${interactive_output}"
         --language en)
     if(case STREQUAL "imported")
@@ -125,8 +125,8 @@ foreach(case IN ITEMS new imported)
 endforeach()
 
 set(invalid "${TEST_ROOT}/invalid.json")
-string(REPLACE
-    "\"document_catalog_storage\": \"memory\""
+string(REGEX REPLACE
+    "\"document_catalog_storage\"[ \t]*:[ \t]*\"(memory|sqlite)\""
     "\"document_catalog_storage\": \"invalid\""
     invalid_json
     "${template_json}")

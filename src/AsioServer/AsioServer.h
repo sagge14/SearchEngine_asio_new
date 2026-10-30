@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <vector>
 #include "Commands/Command.h"
+#include "Auth/AuthenticationMode.h"
 
 
 namespace search_server
@@ -123,6 +124,8 @@ namespace asio_server
         inline constexpr std::uint32_t PROTOCOL_CAPABILITIES_VERSION = 1;
         inline constexpr std::uint32_t CAPABILITY_TYPED_ERRORS_V1 = 1u << 0;
         inline constexpr std::uint32_t CAPABILITY_CLIENT_AUTH_V1 = 1u << 1;
+        inline constexpr std::uint32_t CAPABILITY_ANONYMOUS_ACCESS_V1 = 1u << 2;
+        static_assert(CAPABILITY_ANONYMOUS_ACCESS_V1 == 4u);
 
         struct ErrorResponseV1
         {
@@ -259,9 +262,11 @@ namespace asio_server
     [[nodiscard]] inline constexpr SessionCommandGateDecision
     evaluateSessionCommandGate(
         COMMAND command,
-        bool authenticated) noexcept
+        bool authenticated,
+        auth::AuthenticationMode mode = auth::AuthenticationMode::Required) noexcept
     {
-        if (isSessionBootstrapCommand(command) || authenticated)
+        if (isSessionBootstrapCommand(command) || authenticated ||
+            mode == auth::AuthenticationMode::None)
             return {true, true};
         return {false, true};
     }
@@ -395,6 +400,7 @@ namespace asio_server
         /// Session gate: set by local USER_REGISTRY("admin") or successful
         /// AUTHENTICATE_V1. AUTHENTICATE_V1 name "admin" is also local-only.
         bool authenticated_{false};
+        const auth::AuthenticationMode authentication_mode_;
         /// Exact authenticated user name is "admin"; every such authorization
         /// is additionally restricted to TCP peer 127.0.0.1.
         bool admin_session_{false};
@@ -442,12 +448,17 @@ namespace asio_server
         void stop(const char* why);
         explicit session(tcp::socket socket,
                          boost::asio::thread_pool& cpu_pool,
-                         std::shared_ptr<ServerActivity> activity)
+                         std::shared_ptr<ServerActivity> activity,
+                         auth::AuthenticationMode mode = auth::AuthenticationMode::Required)
             :socket_(std::move(socket))
             ,strand_(boost::asio::make_strand(socket_.get_executor()))
             ,cpu_pool_(cpu_pool)
+            ,authentication_mode_(mode)
             ,activity_(std::move(activity))
-            ,write_channel_(strand_, kWriteChannelCapacity){};
+            ,write_channel_(strand_, kWriteChannelCapacity){
+                if (mode == auth::AuthenticationMode::None)
+                    userName_ = std::string(auth::kAnonymousUser);
+            };
        ~session();
 
     };
@@ -458,7 +469,8 @@ namespace asio_server
             AsioServer(
                     boost::asio::io_context& net_io,
                     boost::asio::thread_pool& cpu_pool,
-                    unsigned short port
+                    unsigned short port,
+                    auth::AuthenticationMode mode = auth::AuthenticationMode::Required
             );
             ~AsioServer();
 
@@ -472,6 +484,7 @@ namespace asio_server
             boost::asio::io_context& net_io_;
             boost::asio::thread_pool& cpu_pool_;
             tcp::acceptor acceptor_;
+            const auth::AuthenticationMode authentication_mode_;
             std::atomic<bool> stopping_{false};
             std::shared_ptr<ServerActivity> activity_;
             std::mutex sessions_mutex_;
