@@ -2,45 +2,15 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ПК-токен для удалённого компьютера</title>
-<style>
-  body { font-family: "Segoe UI", Calibri, sans-serif; line-height: 1.5; max-width: 920px; margin: 2rem auto 3rem; padding: 0 1.2rem; color: #1f1f1f; background: #fafafa; }
-  h1 { font-size: 1.7rem; margin-bottom: 0.4rem; }
-  h2 { margin-top: 1.8rem; border-bottom: 2px solid #3498db; padding-bottom: 0.2rem; }
-  nav { margin: 0.6rem 0 1.2rem; }
-  nav a { margin-right: 1rem; }
-  code { font-family: Consolas, Monaco, "Courier New", monospace; }
-  pre { background: #fff; border: 1px solid #d0d7de; border-left: 4px solid #3498db; padding: 15px; overflow-x: auto; font-size: 0.95em; }
-  pre code { font-family: Consolas, Monaco, "Courier New", monospace; }
-  ol li { margin: 0.35rem 0; }
-  .note { background: #e8f4fd; border-left: 4px solid #3498db; padding: 0.75rem 1rem; margin: 0.9rem 0; }
-/* Keep field names readable; narrow screens scroll the table. */
-.table-scroll { max-width: 100%; overflow-x: auto; }
-table th:first-child, table td:first-child {
-  width: 22%;
-  min-width: 12rem;
-  overflow-wrap: normal;
-  word-break: normal;
-}
-table th:first-child code, table td:first-child code {
-  overflow-wrap: normal;
-  word-break: normal;
-}
-@media print {
-  table th:first-child, table td:first-child { min-width: 0; }
-  table th:first-child code, table td:first-child code { overflow-wrap: anywhere; }
-}
-</style>
+<link rel="stylesheet" href="../Оформление.css">
 </head>
 <body>
-<nav>
-  <a href="Настройки_сервера.html">Настройки сервера</a>
-  <a href="Общий_доступ_к_серверам.html">Общий доступ</a>
-  <a href="Токен_удалённого_ПК.html">ПК-токен</a>
-  <a href="Заморозка_и_архивация_сервера.html">Заморозка</a>
-  <a href="Разморозка_сервера.html">Разморозка</a>
-</nav>
+<nav aria-label="Руководства"><a href="../00_Все_руководства.html">Все руководства</a> <a href="../00_Все_руководства.html#quick">Быстрые действия</a> <a href="../00_Все_руководства.html#settings">Настройки</a> <a href="../00_Все_руководства.html#bats">Батники</a> <a href="../00_Все_руководства.html#detailed">Подробные руководства</a></nav>
+<main>
 <h1>ПК-токен для удалённого компьютера</h1>
+<p class="note">Это руководство относится к серверам <code>authentication_mode=required</code>. Для режима <code>none</code> выпуск ключей и токенов не требуется: <a href="Работа_без_авторизации.html">работа без авторизации</a>.</p><p class="note">Быстрый маршрут: <a href="../Быстрые_действия/Подключить_дополнительный_ПК.html">Подключить дополнительный ПК</a></p>
 <p>Для новой общей системы используйте <a href="Общий_доступ_к_серверам.html">мастер Setup-Access.bat</a>. Он переносит открытый ключ, устанавливает местный токен и регистрирует клиентов через интерактивные меню. Ниже оставлен отдельный способ для уже настроенного сервера.</p>
 <p>На удалённом ПК создаётся неподписанная заявка. Администратор переносит её на компьютер с ключом подписи, подписывает и возвращает готовый токен. Для создания заявки ключ и пароль не нужны.</p>
 <p>При запуске выберите язык: <strong>Enter или 1 — русский</strong>, <strong>2 — английский</strong>. Имя и вводимый вручную идентификатор обязательны: пустая строка и одни пробелы не принимаются, образцы автоматически не подставляются. Пароль тоже не может быть пустым. Издатель и примечание отмечены как необязательные поля. Имена и идентификаторы в токене вводятся латиницей при любом языке интерфейса.</p>
@@ -92,5 +62,9 @@ table th:first-child code, table td:first-child code {
 <p>При обновлении перенесите существующий токен из <code>%ProgramData%\SearchEngine\searchclient-auth-token.json</code> или из папки клиента в указанную пользовательскую папку. Переподписывать и заново регистрировать этот файл не требуется. Новый клиент не использует общие пути автоматически. Для изменения поведения нужны обновлённые утилита выпуска и SearchClient.</p>
 <div class="note">Для входа используется подписанный токен. UUID в нём должен совпадать с UUID компьютера пользователя. Изменение имени, идентификатора или UUID после подписи делает подпись недействительной: создайте и подпишите новую заявку.</div>
 <h2>Если издатель сменил ключ</h2><p>При утрате пароля прежнего ключа сохраните существующий токен ПК на месте и создайте новую заявку. Администратор выдаст новый ответ, сохранив идентификатор и привязку. Примените ответ и согласуйте момент переключения серверов: новый токен подходит к новому открытому ключу. Удалять базу разрешённых устройств не требуется.</p><p><a href="Утрачен_пароль_ключа_издателя.html">Порядок перевыпуска ключей и токенов</a>.</p>
+<h2 id="fields">Поля токена и проверка</h2>
+<p>В именах клиента и идентификаторах токена используются печатные латинские символы, цифры и допустимые ASCII-знаки; кириллица в этих полях не поддерживается. Имя/идентификатор и пароль подписи не могут быть пустыми; поля издателя и примечания необязательны. Нажатие Enter не принимает учебное имя за пользователя. Поле срока действия токена в текущей реализации не обеспечивает автоматическую блокировку по времени: отключение доступа выполняйте через разрешения сервера.</p>
+</main>
+<footer class="meta">Для SearchEngineService 0.1.99. Редакция 30 октября 2026 года. Все примеры учебные.</footer>
 </body>
 </html>

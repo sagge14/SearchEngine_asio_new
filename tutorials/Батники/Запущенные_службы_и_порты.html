@@ -4,32 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Запущенные службы SearchEngine: годы и порты</title>
-<style>
-body { font-family: "Segoe UI", Calibri, sans-serif; line-height: 1.5; max-width: 920px; margin: 2rem auto; padding: 0 1.2rem; color: #1f1f1f; background: #fafafa; }
-h2 { border-bottom: 2px solid #3498db; padding-bottom: .2rem; }
-code { font-family: Consolas, monospace; overflow-wrap: anywhere; }
-li { margin: .4rem 0; }
-/* Keep field names readable; narrow screens scroll the table. */
-.table-scroll { max-width: 100%; overflow-x: auto; }
-table th:first-child, table td:first-child {
-  width: 22%;
-  min-width: 12rem;
-  overflow-wrap: normal;
-  word-break: normal;
-}
-table th:first-child code, table td:first-child code {
-  overflow-wrap: normal;
-  word-break: normal;
-}
-@media print {
-  table th:first-child, table td:first-child { min-width: 0; }
-  table th:first-child code, table td:first-child code { overflow-wrap: anywhere; }
-}
-</style>
+<link rel="stylesheet" href="../Оформление.css">
 </head>
 <body>
-<nav><a href="00_Батники_серверного_пакета.html">Все батники</a> · <a href="Настройки_сервера.html">Настройки сервера</a> · <a href="Заморозка_и_архивация_сервера.html">Заморозка</a></nav>
-<h1>Запущенные службы SearchEngine: годы и порты</h1>
+<nav aria-label="Руководства"><a href="../00_Все_руководства.html">Все руководства</a> <a href="../00_Все_руководства.html#quick">Быстрые действия</a> <a href="../00_Все_руководства.html#settings">Настройки</a> <a href="../00_Все_руководства.html#bats">Батники</a> <a href="../00_Все_руководства.html#detailed">Подробные руководства</a></nav>
+<main>
+<h1>Запущенные службы SearchEngine: годы и порты</h1><p class="note">Быстрый маршрут: <a href="../Быстрые_действия/Проверить_и_перезапустить_сервер.html">Проверить и перезапустить сервер</a></p>
 <p><code>List-SearchEngineServices.bat</code> показывает работающие службы поиска на компьютере, где он запущен. Данные берутся из Windows и рабочих настроек каждой службы, включая архивные экземпляры.</p>
 <h2>Как пользоваться</h2>
 <ol>
@@ -47,7 +27,7 @@ table th:first-child code, table td:first-child code {
 </ul>
 <p>Если настройки менялись после запуска, сохранённый порт может отличаться от открытого. Для подключения проверяйте фактически открытый порт. Год из файла тоже является сохранённой настройкой, а не ответом работающего сервера.</p>
 <p>Остановленные службы, обычные консольные запуски программы и серверы других компьютеров в список не входят. Батник не запускает, не останавливает и не перенастраивает службы. Если работающих служб нет, он прямо сообщает об этом.</p>
-<h2>Пример для видео</h2>
-<p>На учебном компьютере с уже работающими службами 2025 и 2026 годов запустите батник. Покажите оба блока, их годы, фактические порты и разные пути настроек. Затем объясните, какой адрес компьютера и порт нужно указать в клиенте для каждого источника.</p>
+<h2>Проверка результата</h2><p>Сопоставьте фактический порт нужной службы с подключением в клиенте. Для нескольких служб проверьте каждый источник отдельно; год из файла не подтверждает полноту его данных.</p></main>
+<footer class="meta">Для SearchEngineService 0.1.99. Редакция 30 октября 2026 года. Все примеры учебные.</footer>
 </body>
 </html>

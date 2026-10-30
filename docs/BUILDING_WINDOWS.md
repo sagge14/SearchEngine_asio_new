@@ -8,6 +8,16 @@
 Для каждой архитектуры есть отдельные Debug и Release build presets.
 Старые тесты по умолчанию отключены (`BUILD_TESTS=OFF`).
 
+## Режим доступа
+
+`config.authentication_mode` принимает `required` (по умолчанию, включая старые
+конфигурации без поля) или `none`. В `none` процесс не открывает auth store и
+ключ издателя. Сессия остаётся анонимной; capability `1u << 2` объявляет доступ
+без `AUTHENTICATE_V1`. Payload negotiation по-прежнему занимает 8 байт, существующие
+команды и ошибки не перенумеровываются. Изменение требует перезапуска экземпляра.
+IP добавляется только в серверную запись журнала; wire-структура `PersonalRequest`
+сохранена. Пользовательский порядок — в `tutorials/Подробные_руководства/Работа_без_авторизации.html`.
+
 ## Полная пакетная индексация
 
 Параметр `config.full_index_strategy` принимает `legacy` или `batch`.
@@ -190,10 +200,11 @@ Fresh template по умолчанию хранит каталог докуме�
 (`document_catalog_storage=sqlite`), не обновляет краткое содержание PRM
 (`enable_prm_short_content_autodetect=false`) и не сканирует при каждом старте
 (`scan_on_startup=false`). Portable-пакет также включает
-`Local-Machine-Install.bat`: fresh-only установку без вопросов с instance id
-текущего года, проверкой/тихой установкой VC++ Runtime до helper, автоматическим
-свободным портом, provisioning локального токена и синхронным
-`SearchEngine.exe --initial-update` до запуска службы.
+`Local-Install-With-Auth.bat` и `Local-Install-Without-Auth.bat`: fresh-only
+установку текущего года с автоматическим свободным портом, проверкой VC++ Runtime
+до helper и синхронным `SearchEngine.exe --initial-update` до запуска службы.
+Режим задаётся именем BAT, дополнительного выбора нет; Windows может запросить
+права администратора. Локальный токен создаётся только в варианте With-Auth.
 
 Локальный пакет и ZIP на Drive:
 

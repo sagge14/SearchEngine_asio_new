@@ -1,5 +1,7 @@
 # SearchEngine как Windows-служба
 
+Этот файл — инженерный контракт lifecycle и сборки. Актуальные пользовательские действия: [быстрые действия](../tutorials/00_Все_руководства.html#quick), [оглавление](../tutorials/00_Все_руководства.html), [установка и управление](../tutorials/Батники/Установка_обновление_и_удаление.html), [настройки](../tutorials/Настройки/Настройки_сервера.html).
+
 `SearchEngine.exe` поддерживает общий lifecycle для консоли и Windows Service:
 
 ```powershell
@@ -281,32 +283,35 @@ SCM `RUNNING`.
 
 ### Локальная установка без вопросов
 
-`Local-Machine-Install.bat` — отдельный fresh-only entrypoint portable-пакета.
-Он не читает stdin, не вызывает `choice`, `set /p` или `pause` и сам выполняет
-весь сценарий:
+`Local-Install-With-Auth.bat` и `Local-Install-Without-Auth.bat` — два
+entrypoint для новой местной установки. Они задают `/LocalMachine` и соответственно
+`/AuthRequired` либо `/NoAuth`; имя файла определяет режим без дополнительных
+вопросов. Если прав недостаточно, оболочка вызывает стандартный UAC Windows;
+после установки показывает результат и ждёт клавишу. Общий сценарий:
 
 1. Проверяет права администратора и Microsoft Visual C++ Runtime. Если
    системных `vcruntime140.dll` / `msvcp140.dll` нет (на x64 также
    `vcruntime140_1.dll`), тихо ставит комплектный `vc_redist`. Если этот
    установщик на старой Windows не запускается, helper и служба используют
-   DLL из комплекта рядом с EXE, и локальный operator-токен всё равно
+   DLL из комплекта рядом с EXE, и в варианте With-Auth локальный operator-токен всё равно
    выпускается. `/LocalMachine` сам `/SkipVcRedist` не подставляет.
 2. Берёт текущий системный год и задаёт instance id равным этому году. Поэтому
    имя службы всегда имеет вид `SearchEngineService-YYYY`.
 3. Выбирает первый свободный TCP-порт, начиная с годового порта шаблона,
    рассчитывает рекомендуемые потоки и создаёт fresh `Settings.json` с SQLite,
    отключённым PRM short-content update и `scan_on_startup=false`.
-4. Выпускает привязанный к SMBIOS computer-токен
-   `client_id=local-machine`, `client_name=operator` в
+4. Только With-Auth выпускает привязанный к SMBIOS computer-токен
+   `client_id=PC-<SMBIOS UUID>`, `client_name=operator` в
    `%LOCALAPPDATA%\SearchEngine\searchclient-auth-token.json`, экспортирует
    `issuer-public.pem` и регистрирует токен enabled в `auth_clients.sqlite`.
+   Without-Auth пропускает этот этап и сохраняет `authentication_mode=none`.
 5. Запускает официальный одноразовый режим
    `SearchEngine.exe --initial-update --data-dir <data-dir>`. Этот режим не
    поднимает TCP listener, watcher или scheduler, синхронно вызывает production
    update pipeline и возвращается только после сохранения индекса.
 6. Запускает службу и проверяет `RUNNING` + PING/PONG.
 
-Пароль machine-wide keystore `%ProgramData%\SearchClientTokenIssuer\keys` в
+В варианте With-Auth пароль machine-wide keystore `%ProgramData%\SearchClientTokenIssuer\keys` в
 этом упрощённом сценарии фиксирован как `12345678` и передаётся issuer через
 environment variable. Это осознанный default локальной установки; значение
 открыто находится в BAT-файле. Stdout issuer подавлен, поэтому token preview и
