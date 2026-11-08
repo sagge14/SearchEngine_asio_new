@@ -1,0 +1,719 @@
+{
+  "root": "W:\\Projects\\SS_ClientServerBackup\\SearchEngine_asio_new",
+  "version": "0.1.96",
+  "head": "1b421234526aa88b8dfee151f98ea8e7751e976e",
+  "links": {
+    "html": 21,
+    "md": 0,
+    "files": 22,
+    "references": 249,
+    "errors": [],
+    "external": [],
+    "directoryReferences": []
+  },
+  "tutorialHashes": {
+    "tutorials/00_Все_руководства.html": "4119E9535CB3E67B070A8567F8E227F86BD7B12F6087A8B6B3345FFC1F276A1E",
+    "tutorials/Оформление.css": "01CEDF811C63D68F8A94DC070A0E910CC66FCA7B48F10C549440BC719B48AF25",
+    "tutorials/Батники/Батники_серверного_пакета.html": "061F9C6632634E93E88F2C0D892B84F6B7A75F130D6C18FB079BB04457798E0D",
+    "tutorials/Батники/Запущенные_службы_и_порты.html": "CC1233A9A1E854B61DB4E1E204935E841C23B693317DA3527B4272BCEFCE7BBC",
+    "tutorials/Батники/Установка_обновление_и_удаление.html": "2912E791DBB673F69326A682D4DBB69D70B6478B3FF10598C4F9D23D28A7D4F9",
+    "tutorials/Быстрые_действия/Вернуть_сервер_из_архива.html": "7E221650B212EA11285263DB425486490982093C67455586DB1C8956C002D952",
+    "tutorials/Быстрые_действия/Изменить_настройки.html": "E2F2B483DA5B941A4295EE8F83C256FA9FF238547BF6115D1440620EDC6BC41B",
+    "tutorials/Быстрые_действия/Обновить_сервер.html": "AFF66A9AB809ABEA9BD265254E05F2EA3167153E32CE8B391A7385C3F7521D50",
+    "tutorials/Быстрые_действия/Перенести_год_в_архив.html": "900509DB57258447D35C27943FE57718151EECD2B4659C457124960DA7968168",
+    "tutorials/Быстрые_действия/Подключить_дополнительный_ПК.html": "79B3453DFCA72E78F6F841A3FCD5561700381015B2E33102A18B40540E8A59E4",
+    "tutorials/Быстрые_действия/Проверить_и_перезапустить_сервер.html": "E63D55D1FDAEE295918DBBFCE2086668D68BFF570905431C4880F9F81787041E",
+    "tutorials/Быстрые_действия/Удалить_сервер.html": "4BB3F566C8A67EDFA088BC9C606256E008ACA729AFBC30DBAE41D477FA3EB0E9",
+    "tutorials/Быстрые_действия/Установить_сервер.html": "C50C692449D6CA81AB36C930D416054CF0AFA3E0735DCDB2830DD3AB178538FD",
+    "tutorials/Настройки/Настройки_сервера.html": "E79D8FBB474E6A25890F1137E83E22CCB4CD97B7440BBC94CE422D82F5A51266",
+    "tutorials/Настройки/Связанные_файлы_и_доступ.html": "777FE40A814D42BF857D367419BF0748C4395D7B95A95A7BFB3950B107286A6F",
+    "tutorials/Настройки/Совместимость_старых_настроек.html": "D382616CA70A9CB09F87BFC486B23EE5C84A1AF7F85D5265A5202AB1EAFF3CD4",
+    "tutorials/Подробные_руководства/Заморозка_и_архивация_сервера.html": "A52C044250755B92D81A42939AA6AB0492C1A3AD56A3FFBE8B67332953C1E976",
+    "tutorials/Подробные_руководства/Общий_доступ_к_серверам.html": "863116FFD13E15C246C4831336EDCD327816EBBE6722941CB263B138D0F22391",
+    "tutorials/Подробные_руководства/Примеры_настройки_сервера.html": "2FCA8F5A5E375368C57DA083C352B32B290E8B2ECEB501AE1485A2C93B8ACE48",
+    "tutorials/Подробные_руководства/Разморозка_сервера.html": "E3F48B05CECE6FCA61B7373BEB6143BC3E6A013360CEC597E41F3B021C888806",
+    "tutorials/Подробные_руководства/Токен_удалённого_ПК.html": "D5778D2FF73EEA1510BD349F9FE48A25B341FCE9120C7F64767DAB7E206D94F9",
+    "tutorials/Подробные_руководства/Утрачен_пароль_ключа_издателя.html": "BA427489D8BDFFF38A914EC5A7A9497CAEB339136B90527BCDF199736E13A5EE"
+  },
+  "packages": [
+    {
+      "path": "out/package/0.1.96/SearchEngineService-x64",
+      "manifestSha256": "42002159DF3335AA762BFE17091E52D425D53A2C1005ED6E5D0AD16B127E6D5F",
+      "metadata": {
+        "formatVersion": 2,
+        "product": "SearchEngineService",
+        "architecture": "x64",
+        "applicationVersion": "0.1.96",
+        "fileVersion": "0.1.96.0",
+        "releaseId": "0.1.96",
+        "minimumWindowsVersion": "10.0",
+        "toolset": "v143",
+        "vcRuntimeFile": "vc_redist.x64.exe",
+        "createdUtc": "2026-10-16T20:04:44.5478584Z",
+        "sourceFingerprintAlgorithm": "searchengine-service-source-v1",
+        "sourceFingerprint": "a854d2c33b923523e3a35479d399e4c86826f85a86eedadf1d8501ac3dfe6050",
+        "sourceFingerprintFileCount": 293
+      },
+      "tutorials": [
+        {
+          "path": "tutorials/00_Все_руководства.html",
+          "hash": "4119E9535CB3E67B070A8567F8E227F86BD7B12F6087A8B6B3345FFC1F276A1E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Батники_серверного_пакета.html",
+          "hash": "061F9C6632634E93E88F2C0D892B84F6B7A75F130D6C18FB079BB04457798E0D",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Запущенные_службы_и_порты.html",
+          "hash": "CC1233A9A1E854B61DB4E1E204935E841C23B693317DA3527B4272BCEFCE7BBC",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Установка_обновление_и_удаление.html",
+          "hash": "2912E791DBB673F69326A682D4DBB69D70B6478B3FF10598C4F9D23D28A7D4F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Вернуть_сервер_из_архива.html",
+          "hash": "7E221650B212EA11285263DB425486490982093C67455586DB1C8956C002D952",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Изменить_настройки.html",
+          "hash": "E2F2B483DA5B941A4295EE8F83C256FA9FF238547BF6115D1440620EDC6BC41B",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Обновить_сервер.html",
+          "hash": "AFF66A9AB809ABEA9BD265254E05F2EA3167153E32CE8B391A7385C3F7521D50",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Перенести_год_в_архив.html",
+          "hash": "900509DB57258447D35C27943FE57718151EECD2B4659C457124960DA7968168",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Подключить_дополнительный_ПК.html",
+          "hash": "79B3453DFCA72E78F6F841A3FCD5561700381015B2E33102A18B40540E8A59E4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+          "hash": "E63D55D1FDAEE295918DBBFCE2086668D68BFF570905431C4880F9F81787041E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Удалить_сервер.html",
+          "hash": "4BB3F566C8A67EDFA088BC9C606256E008ACA729AFBC30DBAE41D477FA3EB0E9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Установить_сервер.html",
+          "hash": "C50C692449D6CA81AB36C930D416054CF0AFA3E0735DCDB2830DD3AB178538FD",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Настройки_сервера.html",
+          "hash": "E79D8FBB474E6A25890F1137E83E22CCB4CD97B7440BBC94CE422D82F5A51266",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Связанные_файлы_и_доступ.html",
+          "hash": "777FE40A814D42BF857D367419BF0748C4395D7B95A95A7BFB3950B107286A6F",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Совместимость_старых_настроек.html",
+          "hash": "D382616CA70A9CB09F87BFC486B23EE5C84A1AF7F85D5265A5202AB1EAFF3CD4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Оформление.css",
+          "hash": "01CEDF811C63D68F8A94DC070A0E910CC66FCA7B48F10C549440BC719B48AF25",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Заморозка_и_архивация_сервера.html",
+          "hash": "A52C044250755B92D81A42939AA6AB0492C1A3AD56A3FFBE8B67332953C1E976",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Общий_доступ_к_серверам.html",
+          "hash": "863116FFD13E15C246C4831336EDCD327816EBBE6722941CB263B138D0F22391",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Примеры_настройки_сервера.html",
+          "hash": "2FCA8F5A5E375368C57DA083C352B32B290E8B2ECEB501AE1485A2C93B8ACE48",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Разморозка_сервера.html",
+          "hash": "E3F48B05CECE6FCA61B7373BEB6143BC3E6A013360CEC597E41F3B021C888806",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Токен_удалённого_ПК.html",
+          "hash": "D5778D2FF73EEA1510BD349F9FE48A25B341FCE9120C7F64767DAB7E206D94F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+          "hash": "BA427489D8BDFFF38A914EC5A7A9497CAEB339136B90527BCDF199736E13A5EE",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        }
+      ],
+      "docsEntries": [],
+      "links": {
+        "html": 21,
+        "md": 0,
+        "files": 22,
+        "references": 249,
+        "errors": [],
+        "external": [],
+        "directoryReferences": []
+      }
+    },
+    {
+      "path": "out/package/0.1.96/SearchEngineService-x86",
+      "manifestSha256": "96DAE7162313D2130387F461B65859E78A665D5F39840480FE7EC53C14760297",
+      "metadata": {
+        "formatVersion": 2,
+        "product": "SearchEngineService",
+        "architecture": "x86-modern",
+        "applicationVersion": "0.1.96",
+        "fileVersion": "0.1.96.0",
+        "releaseId": "0.1.96",
+        "minimumWindowsVersion": "10.0",
+        "toolset": "v143",
+        "vcRuntimeFile": "vc_redist.x86.exe",
+        "createdUtc": "2026-10-16T20:05:47.4220963Z",
+        "sourceFingerprintAlgorithm": "searchengine-service-source-v1",
+        "sourceFingerprint": "a854d2c33b923523e3a35479d399e4c86826f85a86eedadf1d8501ac3dfe6050",
+        "sourceFingerprintFileCount": 293
+      },
+      "tutorials": [
+        {
+          "path": "tutorials/00_Все_руководства.html",
+          "hash": "4119E9535CB3E67B070A8567F8E227F86BD7B12F6087A8B6B3345FFC1F276A1E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Батники_серверного_пакета.html",
+          "hash": "061F9C6632634E93E88F2C0D892B84F6B7A75F130D6C18FB079BB04457798E0D",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Запущенные_службы_и_порты.html",
+          "hash": "CC1233A9A1E854B61DB4E1E204935E841C23B693317DA3527B4272BCEFCE7BBC",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Установка_обновление_и_удаление.html",
+          "hash": "2912E791DBB673F69326A682D4DBB69D70B6478B3FF10598C4F9D23D28A7D4F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Вернуть_сервер_из_архива.html",
+          "hash": "7E221650B212EA11285263DB425486490982093C67455586DB1C8956C002D952",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Изменить_настройки.html",
+          "hash": "E2F2B483DA5B941A4295EE8F83C256FA9FF238547BF6115D1440620EDC6BC41B",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Обновить_сервер.html",
+          "hash": "AFF66A9AB809ABEA9BD265254E05F2EA3167153E32CE8B391A7385C3F7521D50",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Перенести_год_в_архив.html",
+          "hash": "900509DB57258447D35C27943FE57718151EECD2B4659C457124960DA7968168",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Подключить_дополнительный_ПК.html",
+          "hash": "79B3453DFCA72E78F6F841A3FCD5561700381015B2E33102A18B40540E8A59E4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+          "hash": "E63D55D1FDAEE295918DBBFCE2086668D68BFF570905431C4880F9F81787041E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Удалить_сервер.html",
+          "hash": "4BB3F566C8A67EDFA088BC9C606256E008ACA729AFBC30DBAE41D477FA3EB0E9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Установить_сервер.html",
+          "hash": "C50C692449D6CA81AB36C930D416054CF0AFA3E0735DCDB2830DD3AB178538FD",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Настройки_сервера.html",
+          "hash": "E79D8FBB474E6A25890F1137E83E22CCB4CD97B7440BBC94CE422D82F5A51266",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Связанные_файлы_и_доступ.html",
+          "hash": "777FE40A814D42BF857D367419BF0748C4395D7B95A95A7BFB3950B107286A6F",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Совместимость_старых_настроек.html",
+          "hash": "D382616CA70A9CB09F87BFC486B23EE5C84A1AF7F85D5265A5202AB1EAFF3CD4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Оформление.css",
+          "hash": "01CEDF811C63D68F8A94DC070A0E910CC66FCA7B48F10C549440BC719B48AF25",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Заморозка_и_архивация_сервера.html",
+          "hash": "A52C044250755B92D81A42939AA6AB0492C1A3AD56A3FFBE8B67332953C1E976",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Общий_доступ_к_серверам.html",
+          "hash": "863116FFD13E15C246C4831336EDCD327816EBBE6722941CB263B138D0F22391",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Примеры_настройки_сервера.html",
+          "hash": "2FCA8F5A5E375368C57DA083C352B32B290E8B2ECEB501AE1485A2C93B8ACE48",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Разморозка_сервера.html",
+          "hash": "E3F48B05CECE6FCA61B7373BEB6143BC3E6A013360CEC597E41F3B021C888806",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Токен_удалённого_ПК.html",
+          "hash": "D5778D2FF73EEA1510BD349F9FE48A25B341FCE9120C7F64767DAB7E206D94F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+          "hash": "BA427489D8BDFFF38A914EC5A7A9497CAEB339136B90527BCDF199736E13A5EE",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        }
+      ],
+      "docsEntries": [],
+      "links": {
+        "html": 21,
+        "md": 0,
+        "files": 22,
+        "references": 249,
+        "errors": [],
+        "external": [],
+        "directoryReferences": []
+      }
+    },
+    {
+      "path": "out/package/0.1.96/SearchEngineService-x86-Windows7",
+      "manifestSha256": "3305CB7C72E32DD76965CBAFF13108D9630E8394085E32EA79D8BED864E22344",
+      "metadata": {
+        "formatVersion": 2,
+        "product": "SearchEngineService",
+        "architecture": "x86",
+        "applicationVersion": "0.1.96",
+        "fileVersion": "0.1.96.0",
+        "releaseId": "0.1.96",
+        "minimumWindowsVersion": "6.1",
+        "toolset": "v142",
+        "vcRuntimeFile": "vc_redist.x86.exe",
+        "createdUtc": "2026-10-16T20:06:46.2069177Z",
+        "sourceFingerprintAlgorithm": "searchengine-service-source-v1",
+        "sourceFingerprint": "a854d2c33b923523e3a35479d399e4c86826f85a86eedadf1d8501ac3dfe6050",
+        "sourceFingerprintFileCount": 293
+      },
+      "tutorials": [
+        {
+          "path": "tutorials/00_Все_руководства.html",
+          "hash": "4119E9535CB3E67B070A8567F8E227F86BD7B12F6087A8B6B3345FFC1F276A1E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Батники_серверного_пакета.html",
+          "hash": "061F9C6632634E93E88F2C0D892B84F6B7A75F130D6C18FB079BB04457798E0D",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Запущенные_службы_и_порты.html",
+          "hash": "CC1233A9A1E854B61DB4E1E204935E841C23B693317DA3527B4272BCEFCE7BBC",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Батники/Установка_обновление_и_удаление.html",
+          "hash": "2912E791DBB673F69326A682D4DBB69D70B6478B3FF10598C4F9D23D28A7D4F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Вернуть_сервер_из_архива.html",
+          "hash": "7E221650B212EA11285263DB425486490982093C67455586DB1C8956C002D952",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Изменить_настройки.html",
+          "hash": "E2F2B483DA5B941A4295EE8F83C256FA9FF238547BF6115D1440620EDC6BC41B",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Обновить_сервер.html",
+          "hash": "AFF66A9AB809ABEA9BD265254E05F2EA3167153E32CE8B391A7385C3F7521D50",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Перенести_год_в_архив.html",
+          "hash": "900509DB57258447D35C27943FE57718151EECD2B4659C457124960DA7968168",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Подключить_дополнительный_ПК.html",
+          "hash": "79B3453DFCA72E78F6F841A3FCD5561700381015B2E33102A18B40540E8A59E4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+          "hash": "E63D55D1FDAEE295918DBBFCE2086668D68BFF570905431C4880F9F81787041E",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Удалить_сервер.html",
+          "hash": "4BB3F566C8A67EDFA088BC9C606256E008ACA729AFBC30DBAE41D477FA3EB0E9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Быстрые_действия/Установить_сервер.html",
+          "hash": "C50C692449D6CA81AB36C930D416054CF0AFA3E0735DCDB2830DD3AB178538FD",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Настройки_сервера.html",
+          "hash": "E79D8FBB474E6A25890F1137E83E22CCB4CD97B7440BBC94CE422D82F5A51266",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Связанные_файлы_и_доступ.html",
+          "hash": "777FE40A814D42BF857D367419BF0748C4395D7B95A95A7BFB3950B107286A6F",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Настройки/Совместимость_старых_настроек.html",
+          "hash": "D382616CA70A9CB09F87BFC486B23EE5C84A1AF7F85D5265A5202AB1EAFF3CD4",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Оформление.css",
+          "hash": "01CEDF811C63D68F8A94DC070A0E910CC66FCA7B48F10C549440BC719B48AF25",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Заморозка_и_архивация_сервера.html",
+          "hash": "A52C044250755B92D81A42939AA6AB0492C1A3AD56A3FFBE8B67332953C1E976",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Общий_доступ_к_серверам.html",
+          "hash": "863116FFD13E15C246C4831336EDCD327816EBBE6722941CB263B138D0F22391",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Примеры_настройки_сервера.html",
+          "hash": "2FCA8F5A5E375368C57DA083C352B32B290E8B2ECEB501AE1485A2C93B8ACE48",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Разморозка_сервера.html",
+          "hash": "E3F48B05CECE6FCA61B7373BEB6143BC3E6A013360CEC597E41F3B021C888806",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Токен_удалённого_ПК.html",
+          "hash": "D5778D2FF73EEA1510BD349F9FE48A25B341FCE9120C7F64767DAB7E206D94F9",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        },
+        {
+          "path": "tutorials/Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+          "hash": "BA427489D8BDFFF38A914EC5A7A9497CAEB339136B90527BCDF199736E13A5EE",
+          "manifestMatches": true,
+          "checksumMatches": true,
+          "sourceMatches": true,
+          "role": "tutorial"
+        }
+      ],
+      "docsEntries": [],
+      "links": {
+        "html": 21,
+        "md": 0,
+        "files": 22,
+        "references": 249,
+        "errors": [],
+        "external": [],
+        "directoryReferences": []
+      }
+    }
+  ],
+  "date": "2026-10-18",
+  "timezone": "Asia/Yekaterinburg",
+  "method": "partial independent static/delta audit; full tutorial links and selected package tutorial bytes",
+  "preExistingTrackedDirty": [
+    "app-version.json",
+    "deployment/SearchEngineServicePortable/INSTALLATION_GUIDE_RU.txt",
+    "deployment/SearchEngineServicePortable/README.txt",
+    "docs/TUTORIAL_PLAN_RU.md",
+    "docs/WINDOWS_SERVICE.md",
+    "docs/lecture-server-settings.html",
+    "docs/lecture-server-settings.md",
+    "scripts/SearchEngineServiceSourceFingerprint.ps1",
+    "tools/token_issuer/README.md",
+    "\"tutorials/00_\\320\\221\\320\\260\\321\\202\\320\\275\\320\\270\\320\\272\\320\\270_\\321\\201\\320\\265\\321\\200\\320\\262\\320\\265\\321\\200\\320\\275\\320\\276\\320\\263\\320\\276_\\320\\277\\320\\260\\320\\272\\320\\265\\321\\202\\320\\260.html\"",
+    "\"tutorials/\\320\\227\\320\\260\\320\\274\\320\\276\\321\\200\\320\\276\\320\\267\\320\\272\\320\\260_\\320\\270_\\320\\260\\321\\200\\321\\205\\320\\270\\320\\262\\320\\260\\321\\206\\320\\270\\321\\217_\\321\\201\\320\\265\\321\\200\\320\\262\\320\\265\\321\\200\\320\\260.html\"",
+    "\"tutorials/\\320\\227\\320\\260\\320\\277\\321\\203\\321\\211\\320\\265\\320\\275\\320\\275\\321\\213\\320\\265_\\321\\201\\320\\273\\321\\203\\320\\266\\320\\261\\321\\213_\\320\\270_\\320\\277\\320\\276\\321\\200\\321\\202\\321\\213.html\"",
+    "\"tutorials/\\320\\235\\320\\260\\321\\201\\321\\202\\321\\200\\320\\276\\320\\271\\320\\272\\320\\270_\\321\\201\\320\\265\\321\\200\\320\\262\\320\\265\\321\\200\\320\\260.html\"",
+    "\"tutorials/\\320\\236\\320\\261\\321\\211\\320\\270\\320\\271_\\320\\264\\320\\276\\321\\201\\321\\202\\321\\203\\320\\277_\\320\\272_\\321\\201\\320\\265\\321\\200\\320\\262\\320\\265\\321\\200\\320\\260\\320\\274.html\"",
+    "\"tutorials/\\320\\240\\320\\260\\320\\267\\320\\274\\320\\276\\321\\200\\320\\276\\320\\267\\320\\272\\320\\260_\\321\\201\\320\\265\\321\\200\\320\\262\\320\\265\\321\\200\\320\\260.html\"",
+    "\"tutorials/\\320\\242\\320\\276\\320\\272\\320\\265\\320\\275_\\321\\203\\320\\264\\320\\260\\320\\273\\321\\221\\320\\275\\320\\275\\320\\276\\320\\263\\320\\276_\\320\\237\\320\\232.html\"",
+    "\"tutorials/\\320\\243\\321\\202\\321\\200\\320\\260\\321\\207\\320\\265\\320\\275_\\320\\277\\320\\260\\321\\200\\320\\276\\320\\273\\321\\214_\\320\\272\\320\\273\\321\\216\\321\\207\\320\\260_\\320\\270\\320\\267\\320\\264\\320\\260\\321\\202\\320\\265\\320\\273\\321\\217.html\""
+  ],
+  "sourceSnapshot": {
+    "src/Application/SearchEngineApplication.cpp": "15E84F1E96DAE4704833A8CAEE40543CB3F5A13C8455D99A84A1AF04A124FC74",
+    "src/JSON/ConverterJSON.cpp": "EEE130B444C20B45C1F2EC387D1F55CBF7A806902A55EED9FD158DED4E20FCE6",
+    "src/Commands/GetAttachments/GetAttachmentsCmd.cpp": "DAAE5D96D216EA6C037F1C39450B905160209BE8E1CDCB6B2862DBF8E0555804",
+    "tools/config/main.cpp": "FC6A9862476AFFC3824B53ED9874B7A0507A1F1CA9CC54EE2543767CB1F0BAEC",
+    "tools/archive/ServiceArchive.cpp": "F5E8D00509E03FD0A93398A3ABE292FC9D163E20A0293FC8D25A833519E58344",
+    "tools/access_setup/main.cpp": "90DA7019DDFC3FDB6479F31F0CA7DC4AD4A1B8729E9DDD6E6377DB5630BCEB10",
+    "scripts/New-SearchEngineServicePackage.ps1": "4E645DC11C464C56FF37B2E5BDFF91C4B1DE142C68A749F3659C5E2DA1895B71",
+    "deployment/SearchEngineServicePortable/Install-SearchEngineService-Windows7.bat": "537DB684F5F7A113B460BFA79987C7F04ED559FCB0FD5591EFD8CB10650D167B",
+    "deployment/SearchEngineServicePortable/Restart-SearchEngineService-Windows7.bat": "D09F0DE8A20EA72CAAEB6C64A0C1F5FE5AE021605450BEB4DCE36A6B71C41121"
+  },
+  "qa17HashMatches": {
+    "00_Все_руководства.html": true,
+    "Оформление.css": true,
+    "Батники/Батники_серверного_пакета.html": true,
+    "Батники/Запущенные_службы_и_порты.html": true,
+    "Батники/Установка_обновление_и_удаление.html": true,
+    "Быстрые_действия/Вернуть_сервер_из_архива.html": true,
+    "Быстрые_действия/Изменить_настройки.html": true,
+    "Быстрые_действия/Обновить_сервер.html": true,
+    "Быстрые_действия/Перенести_год_в_архив.html": true,
+    "Быстрые_действия/Подключить_дополнительный_ПК.html": true,
+    "Быстрые_действия/Проверить_и_перезапустить_сервер.html": true,
+    "Быстрые_действия/Удалить_сервер.html": true,
+    "Быстрые_действия/Установить_сервер.html": true,
+    "Настройки/Настройки_сервера.html": true,
+    "Настройки/Связанные_файлы_и_доступ.html": true,
+    "Настройки/Совместимость_старых_настроек.html": true,
+    "Подробные_руководства/Заморозка_и_архивация_сервера.html": true,
+    "Подробные_руководства/Общий_доступ_к_серверам.html": true,
+    "Подробные_руководства/Примеры_настройки_сервера.html": true,
+    "Подробные_руководства/Разморозка_сервера.html": true,
+    "Подробные_руководства/Токен_удалённого_ПК.html": true,
+    "Подробные_руководства/Утрачен_пароль_ключа_издателя.html": true
+  },
+  "stagedTutorialChanges": []
+}

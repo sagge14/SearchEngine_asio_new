@@ -23,8 +23,23 @@ SQLiteConnectionManager::getConnection(const std::string& dbPath)
     return conn;
 }
 
+std::shared_ptr<mySQLite>
+SQLiteConnectionManager::getReadOnlyConnection(const std::string& dbPath)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto it = readOnlyConnections_.find(dbPath);
+    if (it != readOnlyConnections_.end())
+        return it->second;
+
+    auto conn = std::make_shared<mySQLite>(dbPath, mySQLite::OpenMode::ReadOnly);
+    readOnlyConnections_[dbPath] = conn;
+    return conn;
+}
+
 void SQLiteConnectionManager::closeConnection(const std::string& dbPath)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connections_.erase(dbPath);
+    readOnlyConnections_.erase(dbPath);
 }

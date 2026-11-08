@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: C++ Core Guidelines</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 25px;
+        }
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 20px;
+            font-weight: 600;
+        }
+        pre {
+            background: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+        }
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        hr {
+            border: none;
+            border-top: 2px solid #ddd;
+            margin: 30px 0;
+        }
+        .toc {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .toc ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .toc li {
+            margin: 8px 0;
+        }
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>C++ Core Guidelines - Конспект</h1>
+    
+    <div class="note">
+        <strong>О документе:</strong> C++ Core Guidelines — это набор рекомендаций по написанию современного C++ кода, 
+        разработанный Bjarne Stroustrup и Herb Sutter. Документ помогает писать более безопасный, эффективный и 
+        поддерживаемый код.
+    </div>
+
+    <div class="toc">
+        <h3>Содержание</h3>
+        <ul>
+            <li><a href="#philosophy">P: Философия</a></li>
+            <li><a href="#interfaces">I: Интерфейсы</a></li>
+            <li><a href="#functions">F: Функции</a></li>
+            <li><a href="#classes">C: Классы и иерархии классов</a></li>
+            <li><a href="#resources">R: Управление ресурсами</a></li>
+            <li><a href="#expressions">ES: Выражения и операторы</a></li>
+            <li><a href="#performance">Per: Производительность</a></li>
+            <li><a href="#concurrency">CP: Параллелизм</a></li>
+            <li><a href="#errors">E: Обработка ошибок</a></li>
+            <li><a href="#constants">Con: Константы и неизменяемость</a></li>
+            <li><a href="#templates">T: Шаблоны и обобщённое программирование</a></li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <h2 id="philosophy">P: Философия</h2>
+    
+    <h3>Основные принципы</h3>
+    
+    <h4>P.1: Выражайте идеи напрямую в коде</h4>
+    <p><strong>Причина:</strong> Компиляторы не читают комментарии. То, что выражено в коде, имеет определённую семантику 
+    и может быть проверено компилятором и инструментами.</p>
+    
+    <pre><code class="language-cpp">// Плохо: неясно, что возвращается
+int month();  
+
+// Хорошо: явно указан тип возврата и константность
+Month month() const;</code></pre>
+
+    <h4>P.2: Пишите на стандартном ISO C++</h4>
+    <p><strong>Причина:</strong> Это набор рекомендаций для написания стандартного ISO C++.</p>
+    
+    <div class="warning">
+        <strong>Внимание:</strong> Используйте современный компилятор C++ (C++20 или C++17) с опциями, которые не принимают расширения.
+    </div>
+
+    <h4>P.3: Выражайте намерения</h4>
+    <p><strong>Причина:</strong> Если намерение кода не указано, невозможно понять, делает ли код то, что должен.</p>
+    
+    <pre><code class="language-cpp">// Плохо: неясно намерение
+gsl::index i = 0;
+while (i < v.size()) {
+    // ... работа с v[i] ...
+}
+
+// Хорошо: явно выражено намерение пройти по элементам
+for (const auto& x : v) { 
+    /* работа со значением x */ 
+}</code></pre>
+
+    <h4>P.4: В идеале программа должна быть статически типобезопасной</h4>
+    <p><strong>Причина:</strong> Статическая типобезопасность предотвращает множество ошибок на этапе компиляции.</p>
+    
+    <div class="note">
+        <strong>Проблемные области:</strong> union, приведения типов, распад массивов, ошибки диапазона, сужающие преобразования.
+    </div>
+
+    <h4>P.5: Предпочитайте проверки на этапе компиляции проверкам во время выполнения</h4>
+    <p><strong>Причина:</strong> Ясность кода и производительность. Вам не нужно писать обработчики ошибок для ошибок, 
+    пойманных на этапе компиляции.</p>
+    
+    <pre><code class="language-cpp">// Плохо: проверка во время выполнения
+int bits = 0;
+for (Int i = 1; i; i <<= 1)
+    ++bits;
+if (bits < 32)
+    cerr << "Int слишком мал\n";
+
+// Хорошо: проверка на этапе компиляции
+static_assert(sizeof(Int) >= 4);  // проверка на этапе компиляции</code></pre>
+
+    <h4>P.8: Не допускайте утечек ресурсов</h4>
+    <p><strong>Причина:</strong> Даже медленный рост ресурсов со временем исчерпает их доступность.</p>
+    
+    <pre><code class="language-cpp">// Плохо: возможна утечка файлового дескриптора
+void f(const char* name)
+{
+    FILE* input = fopen(name, "r");
+    // ...
+    if (something) return;   // плохо: утечка дескриптора
+    // ...
+    fclose(input);
+}
+
+// Хорошо: RAII автоматически закрывает файл
+void f(const char* name)
+{
+    ifstream input {name};
+    // ...
+    if (something) return;   // ОК: нет утечки
+    // ...
+}</code></pre>
+
+    <hr>
+
+    <h2 id="interfaces">I: Интерфейсы</h2>
+    
+    <h3>Основные правила для интерфейсов</h3>
+    
+    <h4>I.1: Делайте интерфейсы явными</h4>
+    <p><strong>Причина:</strong> Правильность. Предположения, не указанные в интерфейсе, легко упустить и сложно протестировать.</p>
+    
+    <pre><code class="language-cpp">// Плохо: неявная зависимость от глобальной переменной
+int round(double d)
+{
+    return (round_up) ? ceil(d) : d;  // неочевидная зависимость
+}
+
+// Хорошо: явный параметр
+int round(double d, bool round_up)
+{
+    return round_up ? ceil(d) : d;
+}</code></pre>
+
+    <h4>I.2: Избегайте неконстантных глобальных переменных</h4>
+    <p><strong>Причина:</strong> Неконстантные глобальные переменные скрывают зависимости и делают их подверженными 
+    непредсказуемым изменениям.</p>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Инициализация глобальных объектов не полностью упорядочена. Если вы используете глобальный объект, 
+        инициализируйте его константой.
+    </div>
+
+    <h4>I.4: Делайте интерфейсы точно и строго типизированными</h4>
+    <p><strong>Причина:</strong> Типы — это простейшая и лучшая документация, улучшают читаемость и проверяются на этапе компиляции.</p>
+    
+    <pre><code class="language-cpp">// Плохо: что означают числа?
+draw_rect(100, 200, 100, 500);
+
+// Хорошо: явные типы
+void draw_rectangle(Point top_left, Point bottom_right);
+void draw_rectangle(Point top_left, Size height_width);
+
+draw_rectangle(p, Point{10, 20});  // два угла
+draw_rectangle(p, Size{10, 20});    // угол и размер</code></pre>
+
+    <h4>I.10: Используйте исключения для сигнализации о невозможности выполнить требуемую задачу</h4>
+    <p><strong>Причина:</strong> Невозможно игнорировать исключение. Это может привести к неверным результатам или неопределённому состоянию системы.</p>
+    
+    <pre><code class="language-cpp">// Плохо: возврат отрицательного числа при ошибке
+int printf(const char* ...);  
+
+// Хорошо: исключение при ошибке
+template&lt;class F, class ...Args&gt;
+explicit thread(F&& f, Args&&... args);  // выбрасывает system_error</code></pre>
+
+    <h4>I.11: Никогда не передавайте владение через сырой указатель (T*) или ссылку (T&)</h4>
+    <p><strong>Причина:</strong> Если есть сомнения относительно того, кто владеет объектом, произойдут утечки или преждевременное уничтожение.</p>
+    
+    <pre><code class="language-cpp">// Плохо: кто удаляет возвращённый X?
+X* compute(args)
+{
+    X* res = new X{};
+    // ...
+    return res;
+}
+
+// Хорошо: возврат по значению (используется move semantics)
+vector&lt;double&gt; compute(args)
+{
+    vector&lt;double&gt; res(10000);
+    // ...
+    return res;
+}</code></pre>
+
+    <hr>
+
+    <h2 id="functions">F: Функции</h2>
+    
+    <h3>Определение функций</h3>
+    
+    <h4>F.1: "Упаковывайте" осмысленные операции в тщательно названные функции</h4>
+    <p><strong>Причина:</strong> Вынесение общего кода делает код более читаемым, более вероятным для повторного использования 
+    и ограничивает ошибки от сложного кода.</p>
+    
+    <h4>F.2: Функция должна выполнять одну логическую операцию</h4>
+    <p><strong>Причина:</strong> Функция, выполняющая одну операцию, проще для понимания, тестирования и повторного использования.</p>
+    
+    <pre><code class="language-cpp">// Плохо: монолит
+void read_and_print()
+{
+    int x;
+    cin >> x;
+    // проверка ошибок
+    cout << x << "\n";
+}
+
+// Хорошо: разделение на логические части
+int read(istream& is)
+{
+    int x;
+    is >> x;
+    // проверка ошибок
+    return x;
+}
+
+void print(ostream& os, int x)
+{
+    os << x << "\n";
+}</code></pre>
+
+    <h4>F.3: Держите функции короткими и простыми</h4>
+    <p><strong>Причина:</strong> Большие функции сложно читать, более склонны содержать сложный код и более склонны иметь переменные 
+    в больших, чем минимальные, областях видимости.</p>
+    
+    <div class="note">
+        <strong>Правило:</strong> "Не помещается на экран" часто является хорошим практическим определением "слишком большой". 
+        Функции от одной до пяти строк должны считаться нормальными.
+    </div>
+
+    <h4>F.6: Если ваша функция не должна выбрасывать исключения, объявите её noexcept</h4>
+    <p><strong>Причина:</strong> Если исключение не должно выбрасываться, программа не может справиться с ошибкой и должна быть 
+    завершена как можно скорее. Объявление функции noexcept помогает оптимизаторам.</p>
+    
+    <pre><code class="language-cpp">// Хорошо: деструктор не должен выбрасывать исключения
+class X {
+public:
+    ~X() noexcept;
+    // ...
+};</code></pre>
+
+    <h3>Передача параметров</h3>
+    
+    <h4>F.16: Для "входных" параметров передавайте дешёвые для копирования типы по значению, остальные — по ссылке на const</h4>
+    <p><strong>Причина:</strong> Оба способа дают вызывающему знать, что функция не будет изменять аргумент.</p>
+    
+    <pre><code class="language-cpp">void f1(const string& s);  // ОК: передача по ссылке на const; всегда дёшево
+void f2(string s);         // плохо: потенциально дорого
+void f3(int x);            // ОК: непревзойдённо
+void f4(const int& x);     // плохо: накладные расходы на доступ</code></pre>
+
+    <h4>F.17: Для "входно-выходных" параметров передавайте по ссылке на неконстанту</h4>
+    <p><strong>Причина:</strong> Это делает очевидным для вызывающих, что объект предполагается изменяемым.</p>
+    
+    <pre><code class="language-cpp">void update(Record& r);  // предполагается, что update записывает в r</code></pre>
+
+    <h4>F.20: Для "выходных" значений предпочитайте возвращаемые значения выходным параметрам</h4>
+    <p><strong>Причина:</strong> Возвращаемое значение самодокументируемо, тогда как & может быть либо входно-выходным, либо только выходным.</p>
+    
+    <pre><code class="language-cpp">// ОК: возврат указателей на элементы со значением x
+vector&lt;const int*&gt; find_all(const vector&lt;int&gt;&, int x);
+
+// Плохо: размещение указателей в выходном параметре
+void find_all(const vector&lt;int&gt;&, vector&lt;const int*&gt;& out, int x);</code></pre>
+
+    <hr>
+
+    <h2 id="classes">C: Классы и иерархии классов</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>C.1: Организуйте связанные данные в структуры (struct или class)</h4>
+    <p><strong>Причина:</strong> Упрощение понимания. Если данные связаны (по фундаментальным причинам), этот факт должен 
+    отражаться в коде.</p>
+    
+    <pre><code class="language-cpp">// Плохо: неявные связи
+void draw(int x, int y, int x2, int y2);
+
+// Хорошо: явные связи
+void draw(Point from, Point to);</code></pre>
+
+    <h4>C.2: Используйте class, если класс имеет инвариант; используйте struct, если члены данных могут изменяться независимо</h4>
+    <p><strong>Причина:</strong> Читаемость. Использование class предупреждает программиста о необходимости инварианта.</p>
+    
+    <pre><code class="language-cpp">// struct: члены могут изменяться независимо
+struct Pair {
+    string name;
+    int volume;
+};
+
+// class: есть инвариант (валидная дата)
+class Date {
+public:
+    Date(int yy, Month mm, char dd);
+    // ...
+private:
+    int y;
+    Month m;
+    char d;
+};</code></pre>
+
+    <h4>C.9: Минимизируйте открытость членов</h4>
+    <p><strong>Причина:</strong> Инкапсуляция. Сокрытие информации. Минимизация шанса непреднамеренного доступа.</p>
+    
+    <div class="note">
+        <strong>Примечание:</strong> Предпочитайте порядок: public члены перед protected членами перед private членами.
+    </div>
+
+    <h3>Конкретные типы</h3>
+    
+    <h4>C.10: Предпочитайте конкретные типы иерархиям классов</h4>
+    <p><strong>Причина:</strong> Конкретный тип принципиально проще типа в иерархии классов: проще проектировать, реализовывать, 
+    использовать, рассуждать о нём, он меньше и быстрее.</p>
+    
+    <pre><code class="language-cpp">// Конкретный тип: можно разместить на стеке
+class Point1 {
+    int x, y;
+    // ... операции ...
+    // ... нет виртуальных функций ...
+};
+
+// Использование
+Point1 p11 {1, 2};   // создание объекта на стеке
+Point1 p12 {p11};    // копия</code></pre>
+
+    <h3>Конструкторы, присваивания и деструкторы</h3>
+    
+    <h4>C.20: Если можете избежать определения операций по умолчанию, делайте это</h4>
+    <p><strong>Причина:</strong> Это самое простое и даёт самую чистую семантику.</p>
+    
+    <pre><code class="language-cpp">struct Named_map {
+public:
+    explicit Named_map(const string& n) : name(n) {}
+    // нет конструкторов копирования/перемещения
+    // нет операторов присваивания
+    // нет деструктора
+private:
+    string name;
+    map&lt;int, int&gt; rep;
+};</code></pre>
+    
+    <div class="success">
+        <strong>Правило нуля:</strong> Если все члены класса имеют все специальные функции, дальнейшая работа не нужна.
+    </div>
+
+    <h4>C.21: Если вы определяете или =delete любую операцию копирования, перемещения или деструктор, 
+    определите или =delete их все</h4>
+    <p><strong>Причина:</strong> Семантика копирования, перемещения и уничтожения тесно связана.</p>
+    
+    <div class="success">
+        <strong>Правило пяти:</strong> Если вы определяете одну из этих операций, определите или =delete все пять.
+    </div>
+
+    <h4>C.30: Определите деструктор, если классу нужно явное действие при уничтожении объекта</h4>
+    <p><strong>Причина:</strong> Деструктор неявно вызывается в конце времени жизни объекта. Если деструктор по умолчанию достаточен, 
+    используйте его.</p>
+    
+    <pre><code class="language-cpp">template&lt;typename A&gt;
+struct final_action {   // упрощённая версия
+    A act;
+    final_action(A a) : act{a} {}
+    ~final_action() { act(); }
+};
+
+template&lt;typename A&gt;
+final_action&lt;A&gt; finally(A act)
+{
+    return final_action&lt;A&gt;{act};
+}
+
+void test()
+{
+    auto act = finally([] { cout << "Выход из test\n"; });
+    // ...
+    if (something) return;   // act выполнен здесь
+    // ...
+} // act выполнен здесь</code></pre>
+
+    <h4>C.42: Если конструктор не может создать валидный объект, выбросьте исключение</h4>
+    <p><strong>Причина:</strong> Оставить невалидный объект — это просить неприятностей.</p>
+    
+    <pre><code class="language-cpp">class X2 {
+    FILE* f;
+    // ...
+public:
+    X2(const string& name)
+        :f{fopen(name.c_str(), "r")}
+    {
+        if (!f) throw runtime_error{"не удалось открыть " + name};
+        // ...
+    }
+    // ...
+};</code></pre>
+
+    <hr>
+
+    <h2 id="resources">R: Управление ресурсами</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>R.1: Управляйте ресурсами автоматически, используя дескрипторы ресурсов и RAII</h4>
+    <p><strong>Причина:</strong> Чтобы избежать утечек и сложности ручного управления ресурсами.</p>
+    
+    <div class="success">
+        <strong>RAII (Resource Acquisition Is Initialization):</strong> Идиома, при которой ресурс приобретается в конструкторе 
+        и освобождается в деструкторе.
+    </div>
+    
+    <pre><code class="language-cpp">// Плохо: возможны утечки
+void send(X* x, string_view destination)
+{
+    auto port = open_port(destination);
+    my_mutex.lock();
+    // ...
+    send(port, x);
+    // ...
+    my_mutex.unlock();
+    close_port(port);
+    delete x;
+}
+
+// Хорошо: автоматическая очистка ресурсов
+void send(unique_ptr&lt;X&gt; x, string_view destination)
+{
+    Port port{destination};            // port владеет PortHandle
+    lock_guard&lt;mutex&gt; guard{my_mutex}; // guard владеет блокировкой
+    // ...
+    send(port, x);
+    // ...
+} // автоматически разблокирует my_mutex и удаляет указатель в x</code></pre>
+
+    <h4>R.3: Сырой указатель (T*) не владеет</h4>
+    <p><strong>Причина:</strong> Нет ничего (в стандарте C++ или в большинстве кода), что говорит об обратном, и большинство 
+    сырых указателей не владеют.</p>
+    
+    <pre><code class="language-cpp">void f()
+{
+    int* p1 = new int{7};           // плохо: сырой владеющий указатель
+    auto p2 = make_unique&lt;int&gt;(7);  // ОК: int принадлежит unique_ptr
+    // ...
+}</code></pre>
+
+    <h4>R.5: Предпочитайте объекты с ограниченной областью видимости, не выделяйте память в куче без необходимости</h4>
+    <p><strong>Причина:</strong> Объект с ограниченной областью видимости — это локальный объект, глобальный объект или член. 
+    Это подразумевает, что нет отдельных затрат на выделение и освобождение.</p>
+    
+    <pre><code class="language-cpp">// Плохо: ненужное выделение и освобождение
+void f(int n)
+{
+    auto p = new Gadget{n};
+    // ...
+    delete p;
+}
+
+// Хорошо: локальная переменная
+void f(int n)
+{
+    Gadget g{n};
+    // ...
+}</code></pre>
+
+    <h3>Умные указатели</h3>
+    
+    <h4>R.20: Используйте unique_ptr или shared_ptr для представления владения</h4>
+    <p><strong>Причина:</strong> Они могут предотвратить утечки ресурсов.</p>
+    
+    <pre><code class="language-cpp">void f()
+{
+    X* p1 { new X };              // плохо, p1 будет утекать
+    auto p2 = make_unique&lt;X&gt;();   // хорошо, уникальное владение
+    auto p3 = make_shared&lt;X&gt;();   // хорошо, разделяемое владение
+}</code></pre>
+
+    <h4>R.21: Предпочитайте unique_ptr над shared_ptr, если вам не нужно разделять владение</h4>
+    <p><strong>Причина:</strong> unique_ptr концептуально проще и более предсказуем (вы знаете, когда происходит уничтожение) 
+    и быстрее (вы не поддерживаете неявно счётчик использования).</p>
+    
+    <h4>R.22: Используйте make_shared() для создания shared_ptr</h4>
+    <p><strong>Причина:</strong> make_shared даёт более краткое выражение построения. Также даёт возможность устранить отдельное 
+    выделение для счётчиков ссылок.</p>
+    
+    <pre><code class="language-cpp">shared_ptr&lt;X&gt; p1 { new X{2} }; // плохо
+auto p = make_shared&lt;X&gt;(2);     // хорошо</code></pre>
+
+    <h4>R.23: Используйте make_unique() для создания unique_ptr</h4>
+    <p><strong>Причина:</strong> make_unique даёт более краткое выражение построения. Также обеспечивает безопасность исключений 
+    в сложных выражениях.</p>
+    
+    <pre><code class="language-cpp">unique_ptr&lt;Foo&gt; p {new Foo{7}};    // ОК: но повторяющееся
+auto q = make_unique&lt;Foo&gt;(7);      // Лучше: нет повторения Foo</code></pre>
+
+    <hr>
+
+    <h2 id="expressions">ES: Выражения и операторы</h2>
+    
+    <h3>Объявления</h3>
+    
+    <h4>ES.5: Держите области видимости маленькими</h4>
+    <p><strong>Причина:</strong> Читаемость. Минимизация удержания ресурсов. Избежание непреднамеренного неправильного использования значения.</p>
+    
+    <pre><code class="language-cpp">void use()
+{
+    int i;    // плохо: i излишне доступен после цикла
+    for (i = 0; i < 20; ++i) { /* ... */ }
+    // нет предполагаемого использования i здесь
+    
+    for (int i = 0; i < 20; ++i) { /* ... */ }  // хорошо: i локальна для цикла
+}</code></pre>
+
+    <h4>ES.20: Всегда инициализируйте объект</h4>
+    <p><strong>Причина:</strong> Избегайте ошибок "использовано до установки" и связанного с ними неопределённого поведения.</p>
+    
+    <pre><code class="language-cpp">void use(int arg)
+{
+    int i;   // плохо: неинициализированная переменная
+    // ...
+    i = 7;   // инициализация i
+}
+
+// Хорошо:
+void use(int arg)
+{
+    int i = 7;   // ОК: инициализирована
+    string s;    // ОК: инициализирована по умолчанию
+    // ...
+}</code></pre>
+
+    <h4>ES.23: Предпочитайте синтаксис инициализации {}</h4>
+    <p><strong>Причина:</strong> Правила для {} инициализации проще, более общие, менее двусмысленные и безопаснее, 
+    чем для других форм инициализации.</p>
+    
+    <pre><code class="language-cpp">int x {f(99)};  // хорошо
+int y = x;      // хорошо
+vector&lt;int&gt; v = {1, 2, 3, 4, 5, 6};  // хорошо
+
+int x {7.9};   // ошибка: сужающее преобразование
+int y = 7.9;   // ОК: y становится 7. Надеемся на предупреждение компилятора</code></pre>
+
+    <h4>ES.47: Используйте nullptr, а не 0 или NULL</h4>
+    <p><strong>Причина:</strong> Читаемость. nullptr не может быть спутан с int. nullptr также имеет хорошо определённый 
+    (очень ограничительный) тип.</p>
+    
+    <pre><code class="language-cpp">void f(int);
+void f(char*);
+f(0);         // вызов f(int)
+f(nullptr);   // вызов f(char*)</code></pre>
+
+    <h4>ES.48: Избегайте приведений типов</h4>
+    <p><strong>Причина:</strong> Приведения типов — хорошо известный источник ошибок и делают некоторые оптимизации ненадёжными.</p>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Приведения типов необходимы в системном программировании, но они серьёзно переиспользуются 
+        и являются основным источником ошибок.
+    </div>
+
+    <h4>ES.56: Пишите std::move() только когда вам нужно явно переместить объект в другую область видимости</h4>
+    <p><strong>Причина:</strong> Мы перемещаем, а не копируем, чтобы избежать дублирования и для улучшения производительности.</p>
+    
+    <pre><code class="language-cpp">// Плохо: ненужный move
+vector&lt;int&gt; make_vector()
+{
+    vector&lt;int&gt; result;
+    // ... загрузка result данными
+    return std::move(result);  // плохо; просто напишите "return result;"
+}
+
+// Хорошо: язык уже знает, что переменная является кандидатом на перемещение
+vector&lt;int&gt; make_vector()
+{
+    vector&lt;int&gt; result;
+    // ... загрузка result данными
+    return result;  // хорошо: RVO или перемещение
+}</code></pre>
+
+    <h3>Операторы</h3>
+    
+    <h4>ES.70: Предпочитайте switch-оператор if-оператору, когда есть выбор</h4>
+    <p><strong>Причина:</strong> Читаемость. Эффективность. switch сравнивает с константами и обычно лучше оптимизируется, 
+    чем серия проверок в if-then-else цепочке.</p>
+    
+    <pre><code class="language-cpp">void use(int n)
+{
+    switch (n) {   // хорошо
+    case 0:
+        // ...
+        break;
+    case 7:
+        // ...
+        break;
+    default:
+        // ...
+        break;
+    }
+}</code></pre>
+
+    <h4>ES.71: Предпочитайте range-for оператор for-оператору, когда есть выбор</h4>
+    <p><strong>Причина:</strong> Читаемость. Предотвращение ошибок. Эффективность.</p>
+    
+    <pre><code class="language-cpp">// Плохо
+for (gsl::index i = 0; i < v.size(); ++i)
+    cout << v[i] << '\n';
+
+// Хорошо
+for (const auto& x : v)
+    cout << x << '\n';</code></pre>
+
+    <hr>
+
+    <h2 id="performance">Per: Производительность</h2>
+    
+    <h3>Основные принципы</h3>
+    
+    <h4>Per.1: Не оптимизируйте без причины</h4>
+    <p><strong>Причина:</strong> Если нет необходимости в оптимизации, главный результат усилий будет больше ошибок и более высокие 
+    затраты на поддержку.</p>
+    
+    <h4>Per.2: Не оптимизируйте преждевременно</h4>
+    <p><strong>Причина:</strong> Тщательно оптимизированный код обычно больше и сложнее изменять, чем неоптимизированный код.</p>
+    
+    <h4>Per.6: Не делайте заявлений о производительности без измерений</h4>
+    <p><strong>Причина:</strong> Поле производительности завалено мифами и ложным фольклором. Современное оборудование и оптимизаторы 
+    опровергают наивные предположения.</p>
+    
+    <div class="note">
+        <strong>Важно:</strong> Получение хороших измерений производительности может быть сложным и требует специализированных инструментов.
+    </div>
+
+    <h4>Per.11: Переместите вычисления из времени выполнения в время компиляции</h4>
+    <p><strong>Причина:</strong> Чтобы уменьшить размер кода и время выполнения.</p>
+    
+    <pre><code class="language-cpp">// Старый стиль: динамическая инициализация
+double square(double d) { return d*d; }
+static double s2 = square(2);
+
+// Современный стиль: вычисление на этапе компиляции
+constexpr double ntimes(double d, int n)
+{
+    double m = 1;
+    while (n--) m *= d;
+    return m;
+}
+constexpr double s3 {ntimes(2, 3)};  // вычисление на этапе компиляции</code></pre>
+
+    <hr>
+
+    <h2 id="concurrency">CP: Параллелизм и параллельное выполнение</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>CP.1: Предполагайте, что ваш код будет выполняться как часть многопоточной программы</h4>
+    <p><strong>Причина:</strong> Трудно быть уверенным, что параллелизм не используется сейчас или не будет использоваться в будущем.</p>
+    
+    <pre><code class="language-cpp">// Плохо: эти статические переменные вызывают гонки данных
+double cached_computation(int x)
+{
+    static int cached_x = 0.0;
+    static double cached_result = COMPUTATION_OF_ZERO;
+    
+    if (cached_x != x) {
+        cached_x = x;
+        cached_result = computation(x);
+    }
+    return cached_result;
+}
+
+// Хорошо: кэш хранится как данные-члены объекта
+struct ComputationCache {
+    int cached_x = 0;
+    double cached_result = COMPUTATION_OF_ZERO;
+    
+    double compute(int x) {
+        if (cached_x != x) {
+            cached_x = x;
+            cached_result = computation(x);
+        }
+        return cached_result;
+    }
+};</code></pre>
+
+    <h4>CP.2: Избегайте гонок данных</h4>
+    <p><strong>Причина:</strong> Если вы этого не сделаете, ничего не гарантировано работать, и тонкие ошибки будут сохраняться.</p>
+    
+    <div class="warning">
+        <strong>Важно:</strong> Если два потока могут обращаться к одному объекту одновременно (без синхронизации), и хотя бы один 
+        является писателем (выполняет неконстантную операцию), у вас есть гонка данных.
+    </div>
+
+    <h4>CP.20: Используйте RAII, никогда не используйте простые lock()/unlock()</h4>
+    <p><strong>Причина:</strong> Избегает неприятных ошибок от неосвобождённых блокировок.</p>
+    
+    <pre><code class="language-cpp">mutex mtx;
+
+// Плохо
+void do_stuff()
+{
+    mtx.lock();
+    // ... делаем что-то ...
+    mtx.unlock();  // легко забыть
+}
+
+// Хорошо
+void do_stuff()
+{
+    unique_lock&lt;mutex&gt; lck {mtx};
+    // ... делаем что-то ...
+} // автоматически разблокирует</code></pre>
+
+    <h4>CP.21: Используйте std::lock() или std::scoped_lock для захвата нескольких mutex</h4>
+    <p><strong>Причина:</strong> Чтобы избежать взаимоблокировок на нескольких mutex.</p>
+    
+    <pre><code class="language-cpp">// Плохо: просит взаимоблокировку
+// поток 1
+lock_guard&lt;mutex&gt; lck1(m1);
+lock_guard&lt;mutex&gt; lck2(m2);
+
+// поток 2
+lock_guard&lt;mutex&gt; lck2(m2);
+lock_guard&lt;mutex&gt; lck1(m1);
+
+// Хорошо: используйте lock()
+// поток 1
+lock(m1, m2);
+lock_guard&lt;mutex&gt; lck1(m1, adopt_lock);
+lock_guard&lt;mutex&gt; lck2(m2, adopt_lock);
+
+// Или лучше (C++17):
+scoped_lock&lt;mutex, mutex&gt; lck1(m1, m2);</code></pre>
+
+    <hr>
+
+    <h2 id="errors">E: Обработка ошибок</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>E.2: Выбросьте исключение, чтобы сигнализировать, что функция не может выполнить свою задачу</h4>
+    <p><strong>Причина:</strong> Чтобы сделать обработку ошибок систематической, надёжной и не повторяющейся.</p>
+    
+    <pre><code class="language-cpp">struct Foo {
+    vector&lt;Thing&gt; v;
+    File_handle f;
+    string s;
+};
+
+void use()
+{
+    Foo bar { {Thing{1}, Thing{2}, Thing{monkey}}, {"my_file", "r"}, "Here we go!"};
+    // ...
+}</code></pre>
+    
+    <p>Здесь конструкторы vector и string могут не выделить достаточную память, File_handle может не открыть файл. 
+    В каждом случае они выбрасывают исключение для обработки вызывающим use().</p>
+
+    <h4>E.3: Используйте исключения только для обработки ошибок</h4>
+    <p><strong>Причина:</strong> Чтобы держать обработку ошибок отделённой от "обычного кода".</p>
+    
+    <pre><code class="language-cpp">// Плохо: исключение не используется для обработки ошибок
+int find_index(vector&lt;string&gt;& vec, const string& x)
+{
+    try {
+        for (gsl::index i = 0; i < vec.size(); ++i)
+            if (vec[i] == x) throw i;  // найдено x
+    }
+    catch (int i) {
+        return i;
+    }
+    return -1;   // не найдено
+}
+
+// Хорошо: используйте стандартный алгоритм
+auto it = find(vec.begin(), vec.end(), x);
+if (it != vec.end()) return distance(vec.begin(), it);
+return -1;</code></pre>
+
+    <h4>E.6: Используйте RAII для предотвращения утечек</h4>
+    <p><strong>Причина:</strong> Утечки обычно неприемлемы. Ручное освобождение ресурсов подвержено ошибкам.</p>
+    
+    <div class="success">
+        <strong>RAII:</strong> "Resource Acquisition Is Initialization" — идиома, при которой ресурс приобретается в конструкторе 
+        и освобождается в деструкторе.
+    </div>
+
+    <h4>E.14: Используйте специально разработанные пользовательские типы как исключения (не встроенные типы)</h4>
+    <p><strong>Причина:</strong> Пользовательский тип может лучше передавать информацию об ошибке обработчику.</p>
+    
+    <pre><code class="language-cpp">// Плохо
+throw 7;
+throw "something bad";
+throw std::exception{};
+
+// Хорошо
+class MyException : public std::runtime_error
+{
+public:
+    MyException(const string& msg) : std::runtime_error{msg} {}
+    // ...
+};
+
+throw MyException{"something bad"};  // хорошо</code></pre>
+
+    <h4>E.15: Выбрасывайте по значению, ловите исключения из иерархии по ссылке</h4>
+    <p><strong>Причина:</strong> Выбрасывание по значению (не по указателю) и ловля по ссылке предотвращает копирование, 
+    особенно срезание базовых подобъектов.</p>
+    
+    <pre><code class="language-cpp">// Плохо
+void f()
+{
+    try {
+        throw new widget{};  // не делайте: выбрасывайте по значению
+    }
+    catch (base_class e) {  // не делайте: может срезать
+        // ...
+    }
+}
+
+// Хорошо
+void f()
+{
+    try {
+        throw widget{};  // выбрасываем по значению
+    }
+    catch (const base_class& e) {  // ловим по ссылке на const
+        // ...
+    }
+}</code></pre>
+
+    <hr>
+
+    <h2 id="constants">Con: Константы и неизменяемость</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>Con.1: По умолчанию делайте объекты неизменяемыми</h4>
+    <p><strong>Причина:</strong> Неизменяемые объекты проще для рассуждений, чем переменные.</p>
+    
+    <pre><code class="language-cpp">for (const int i : c) cout << i << '\n';    // просто чтение: const
+
+for (int i : c) cout << i << '\n';          // ПЛОХО: просто чтение</code></pre>
+
+    <h4>Con.2: По умолчанию делайте функции-члены const</h4>
+    <p><strong>Причина:</strong> Функция-член должна быть помечена const, если она не изменяет наблюдаемое состояние объекта.</p>
+    
+    <pre><code class="language-cpp">class Point {
+    int x, y;
+public:
+    int getx() { return x; }    // ПЛОХО, должна быть const
+    
+    int getx() const { return x; }  // ХОРОШО
+};</code></pre>
+
+    <h4>Con.3: По умолчанию передавайте указатели и ссылки на const</h4>
+    <p><strong>Причина:</strong> Чтобы избежать неожиданного изменения значения вызываемой функцией.</p>
+    
+    <pre><code class="language-cpp">void f(char* p);        // изменяет ли f *p? (предполагаем, что да)
+void g(const char* p);  // g не изменяет *p</code></pre>
+
+    <h4>Con.5: Используйте constexpr для значений, которые могут быть вычислены на этапе компиляции</h4>
+    <p><strong>Причина:</strong> Лучшая производительность, лучшая проверка на этапе компиляции, гарантированное вычисление на этапе компиляции, 
+    нет возможности гонок данных.</p>
+    
+    <pre><code class="language-cpp">double x = f(2);            // возможное вычисление во время выполнения
+const double y = f(2);      // возможное вычисление во время выполнения
+constexpr double z = f(2);  // ошибка, если f(2) не может быть вычислено на этапе компиляции</code></pre>
+
+    <hr>
+
+    <h2 id="templates">T: Шаблоны и обобщённое программирование</h2>
+    
+    <h3>Основные правила</h3>
+    
+    <h4>T.1: Используйте шаблоны для повышения уровня абстракции кода</h4>
+    <p><strong>Причина:</strong> Общность. Повторное использование. Эффективность.</p>
+    
+    <h4>T.2: Используйте шаблоны для выражения алгоритмов, применимых ко многим типам аргументов</h4>
+    <p><strong>Причина:</strong> Общность. Минимизация объёма исходного кода.</p>
+    
+    <pre><code class="language-cpp">template&lt;typename Iter, typename Val&gt;
+Iter find(Iter b, Iter e, Val v)
+{
+    // ...
+}</code></pre>
+    
+    <p>Это основа STL. Один алгоритм find легко работает с любым видом входного диапазона.</p>
+
+    <h4>T.10: Указывайте концепты для всех аргументов шаблона</h4>
+    <p><strong>Причина:</strong> Правильность и читаемость. Предполагаемое значение аргумента шаблона фундаментально для интерфейса шаблона.</p>
+    
+    <pre><code class="language-cpp">template&lt;input_iterator Iter, typename Val&gt;
+    requires equality_comparable_with&lt;iter_value_t&lt;Iter&gt;, Val&gt;
+Iter find(Iter b, Iter e, Val v)
+{
+    // ...
+}</code></pre>
+
+    <h4>T.11: Везде, где возможно, используйте стандартные концепты</h4>
+    <p><strong>Причина:</strong> "Стандартные" концепты экономят нам работу по придумыванию собственных концептов.</p>
+    
+    <div class="note">
+        <strong>Примечание:</strong> Если вы не создаёте новую обобщённую библиотеку, большинство концептов, которые вам нужны, 
+        уже будут определены стандартной библиотекой.
+    </div>
+
+    <h4>T.40: Используйте функциональные объекты для передачи операций алгоритмам</h4>
+    <p><strong>Причина:</strong> Функциональные объекты могут нести больше информации через интерфейс, чем "простой" указатель на функцию.</p>
+    
+    <pre><code class="language-cpp">bool greater(double x, double y) { return x > y; }
+sort(v, greater);                                    // указатель на функцию: потенциально медленно
+sort(v, [](double x, double y) { return x > y; });   // функциональный объект
+sort(v, std::greater{});                             // функциональный объект</code></pre>
+
+    <hr>
+
+    <h2>Заключение</h2>
+    
+    <div class="success">
+        <h3>Ключевые принципы C++ Core Guidelines:</h3>
+        <ul>
+            <li><strong>Безопасность типов:</strong> Используйте систему типов для предотвращения ошибок</li>
+            <li><strong>Безопасность ресурсов:</strong> Используйте RAII для автоматического управления ресурсами</li>
+            <li><strong>Безопасность времени жизни:</strong> Избегайте висячих указателей и ссылок</li>
+            <li><strong>Простота:</strong> Предпочитайте простые решения сложным</li>
+            <li><strong>Производительность:</strong> Не жертвуйте производительностью без необходимости</li>
+            <li><strong>Читаемость:</strong> Код должен быть понятным и самодокументируемым</li>
+        </ul>
+    </div>
+
+    <div class="note">
+        <strong>Важно помнить:</strong> Эти рекомендации предназначены для постепенного внедрения. Не пытайтесь применить все правила 
+        сразу к большому кодовому базе. Начните с наиболее критичных правил безопасности и постепенно расширяйте их применение.
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе C++ Core Guidelines (версия от 2025 года). 
+    Полный документ доступен по адресу: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

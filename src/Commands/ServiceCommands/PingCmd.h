@@ -10,6 +10,8 @@
 class PingCmd : public Command {
 public:
     std::vector<uint8_t> execute(const std::vector<uint8_t>& data) override;
+    [[nodiscard]] command_execution::CommandResult executeResult(
+        const std::vector<uint8_t>& data) override;
 };
 
 

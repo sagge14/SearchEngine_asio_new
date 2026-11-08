@@ -1,6 +1,10 @@
+#pragma once
+
 #include <vector>
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
+#include <utility>
 #include <boost/serialization/vector.hpp>
 
 struct Posting {
@@ -52,6 +56,23 @@ public:
     size_t size() const { return data.size(); }
     bool empty()  const { return data.empty(); }
     void clear()        { data.clear(); }
+    void reserve(size_t count) { data.reserve(count); }
+    void shrink_to_fit() { data.shrink_to_fit(); }
+
+    // Быстрый путь для восстановления из хранилища, где fileId уже
+    // отсортированы по возрастанию и уникальны.
+    void appendSorted(uint32_t fileId, uint16_t cnt) {
+        assert(data.empty() || data.back().fileId < fileId);
+        data.push_back({fileId, cnt});
+    }
+
+    void assignSortedUnique(std::vector<Posting>&& postings) noexcept {
+#ifndef NDEBUG
+        for (size_t index = 1; index < postings.size(); ++index)
+            assert(postings[index - 1].fileId < postings[index].fileId);
+#endif
+        data = std::move(postings);
+    }
 
     // Для сериализации Boost
     template<class Archive>

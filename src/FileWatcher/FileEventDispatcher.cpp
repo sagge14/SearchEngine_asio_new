@@ -3,22 +3,22 @@
 //
 
 #include "FileEventDispatcher.h"
-#include <iostream>
-#include <codecvt>
+#include "FileEventFilter.h"
+#include "MyUtils/Encoding.h"
+#include "MyUtils/LogFile.h"
 #include <unordered_set>
+#include <utility>
 
-namespace my_conv2  {
-    // Преобразуем std::wstring в UTF-8 std::string
-    std::string wstringToUtf8(const std::wstring &wstr) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.to_bytes(wstr);
+static const wchar_t* evtToStr(FileEvent e)
+{
+    switch (e) {
+        case FileEvent::Added:       return L"Added";
+        case FileEvent::Removed:     return L"Removed";
+        case FileEvent::Modified:    return L"Modified";
+        case FileEvent::RenamedOld:  return L"RenamedOld";
+        case FileEvent::RenamedNew:  return L"RenamedNew";
     }
-
-    // Преобразуем UTF-8 std::string в std::wstring
-    std::wstring utf8ToWstring(const std::string &str) {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        return conv.from_bytes(str);
-    }
+    return L"?";
 }
 
 FileEvent merge2(FileEvent old, FileEvent neu)
@@ -40,11 +40,28 @@ FileEvent merge2(FileEvent old, FileEvent neu)
 
 void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 {
-    if (!matchByExtensions(path)) return;
+    if (stopping_.load(std::memory_order_acquire))
+        return;
+    if (!file_event_filter::shouldAcceptFileEvent(
+            evt, path, fileTypes_, excludedSubtrees_))
+    {
+        if (!file_event_filter::matchesConfiguredExtension(path, fileTypes_)) {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (ext) path=" + path);
+        } else {
+            LogFile::getWatcher().write(
+                L"[Dispatcher] pushFileEvent SKIP (excluded) path=" + path);
+        }
+        return;
+    }
+    LogFile::getWatcher().write(L"[Dispatcher] pushFileEvent " + std::wstring(evtToStr(evt)) + L" path=" + path);
 
     size_t h = std::hash<std::wstring>{}(path);
 
     std::lock_guard lk(mtx_);
+
+    if (stopping_.load(std::memory_order_acquire))
+        return;
 
     auto& st = evtMap_[h];          // создаётся по необходимости
     st.evt  = (st.queued) ? merge2(st.evt, evt) : evt;
@@ -58,15 +75,22 @@ void FileEventDispatcher::pushFileEvent(FileEvent evt, const std::wstring& path)
 
 void FileEventDispatcher::flushPending()
 {
-   // std::wcout << L" - flushstart " << std::endl;
+    if (stopping_.load(std::memory_order_acquire))
+        return;
     std::queue<size_t> local;
 
     {   std::lock_guard lk(mtx_);
         std::swap(local, pendingQ_);
     }
 
+    const size_t qsize = local.size();
+    if (qsize > 0)
+        LogFile::getWatcher().write(std::string("[Dispatcher] flushPending start queue=") + std::to_string(qsize));
+
     while (!local.empty())
     {
+        if (stopping_.load(std::memory_order_acquire))
+            break;
         size_t h = local.front(); local.pop();
         FileEvent evt; std::wstring path;
 
@@ -78,17 +102,16 @@ void FileEventDispatcher::flushPending()
             evtMap_.erase(it);                      //   ← снимаем блок
         }
 
+        LogFile::getWatcher().write(L"[Dispatcher] flushPending dispatch " + std::wstring(evtToStr(evt)) + L" path=" + path);
+
         switch (evt)
         {
             case FileEvent::Removed:
             case FileEvent::RenamedOld:
-                std::wcout << L" - flushstart dell " << std::endl;
-              //  index->enqueueFileDeletion(path);
-              if(commands_.find(FileEvent::Removed) != commands_.end())
-                  commands_.at(FileEvent::Removed)->execute(path);
+                if(commands_.find(FileEvent::Removed) != commands_.end())
+                    commands_.at(FileEvent::Removed)->execute(path);
                 break;
             default:                                // Added / Modified / Ren.New
-                std::wcout << L" - flushstart add " << std::endl   ;
                 if(commands_.find(FileEvent::Added) != commands_.end())
                     commands_.at(FileEvent::Added)->execute(path);
                 break;
@@ -96,18 +119,18 @@ void FileEventDispatcher::flushPending()
     }
 }
 
-void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
+void FileEventDispatcher::initWatchers(const std::vector<std::string>& _indexRoots)
 {
     /* parent-dir → множество имён нужных подпапок */
     std::unordered_map<std::wstring,
             std::unordered_set<std::wstring>> need;
 
-    for (const auto& d8 : _dirs)
+    for (const auto& d8 : _indexRoots)
     {
-        std::filesystem::path p = my_conv2::utf8ToWstring(d8);
+        std::filesystem::path p = encoding::utf8_to_wstring(d8);
         std::wstring parent = p.parent_path().wstring();   // напр.  L"D:\\"
         std::wstring name   = p.filename().wstring();      // напр.  L"Data"
-        std::wcout << L"    [enqueueUpdate]  " << name << " " << parent  << std::endl;
+        LogFile::getWatcher().write(L"[enqueueUpdate] " + name + L" " + parent);
         need[parent].insert(name);
     }
 
@@ -117,71 +140,36 @@ void FileEventDispatcher::initWatchers(const std::vector<std::string>& _dirs)
         pushFileEvent(evt, full);
     };
 
-    /* создаём по parent-каталогу один MultiDirWatcher */
+    /* создаём по parent-каталогу один MultiDirWatcher; передаём набор kids из конфига */
     for (auto& [parent, kids] : need)
     {
         /* фильтр: интересны только каталоги, имя которых в “kids” */
-        auto dirFilter = [kids](const std::wstring& n) -> bool
-        {
-            return kids.contains(n);
-        };
-
-        auto w = std::make_unique<MultiDirWatcher>(parent, dirFilter, fileCb, &io_);
+        auto w = std::make_unique<MultiDirWatcher>(parent, kids, fileCb, &io_);
         w->start();
         dirWatchers_.emplace_back(std::move(w));
     }
 }
 
-FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& _dirs,
-                                         const std::vector<std::string>& _ext,
-                                         boost::asio::io_context& io) : io_(io), dirs_(_dirs), ext_(_ext)
+FileEventDispatcher::FileEventDispatcher(const std::vector<std::string>& indexRoots,
+                                         file_extension_contract::Selection fileTypes,
+                                         const std::vector<std::string>& excludedSubtrees,
+                                         boost::asio::io_context& io)
+        : io_(io)
+        , indexRoots_(indexRoots)
+        , fileTypes_(std::move(fileTypes))
+        , excludedSubtrees_(excludedSubtrees)
 {
-
-    initWatchers(dirs_);
-
-}
-
-bool FileEventDispatcher::matchByExtensions(const std::wstring& path) const
-{
-    using namespace std::filesystem;
-
-    /* Если список пуст -- фильтра нет → разрешаем всё */
-    if (ext_.empty())
-        return true;
-
-    std::wstring file = std::filesystem::path(path).filename().wstring();
-
-    // позиция последней точки
-    auto pos = file.rfind(L'.');                 // npos ⇒ нет точки
-    bool hasDot   = pos != std::wstring::npos;
-    bool dotAtEnd = hasDot && pos == file.size() - 1;
-    bool noExt    = !hasDot || dotAtEnd;         // «без расширения»
-
-    for (const auto& e8 : ext_)
-    {
-        std::wstring e (e8.begin(), e8.end());   // UTF-8 → UTF-16
-
-        /*  Пустая строка в конфиге значит: «разрешить файлы без расширения» */
-        if (e.empty())
-        {
-            if (noExt)
-                return true;
-            continue;
-        }
-
-        /*  Файл имеет расширение → сравниваем нечувствительно к регистру  */
-        if (!noExt && e.size() <= file.size() - pos - 1 &&
-            std::equal(e.begin(), e.end(),
-                       file.end() - e.size(),
-                       [](wchar_t a, wchar_t b){
-                           return towlower(a) == towlower(b);
-                       }))
-            return true;
-    }
-    return false;
+    initWatchers(indexRoots_);
 }
 
 void FileEventDispatcher::stopAll() {
+    if (stopping_.exchange(true, std::memory_order_acq_rel))
+        return;
     for(auto& w:dirWatchers_)
         w->stop();
+
+    std::lock_guard lk(mtx_);
+    evtMap_.clear();
+    std::queue<size_t> empty;
+    pendingQ_.swap(empty);
 }

@@ -1,0 +1,1676 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: UML и C++ - Применение UML в C++ программировании</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #555;
+            margin-top: 25px;
+        }
+        h4 {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 20px;
+            font-weight: 600;
+        }
+        pre {
+            background: #ffffff;
+            border: 1px solid #ddd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+        }
+        code {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .note {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .uml-diagram {
+            background-color: #fff;
+            border: 2px solid #3498db;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            white-space: pre;
+        }
+        .cpp-example {
+            background-color: #f9f9f9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        hr {
+            border: none;
+            border-top: 2px solid #ddd;
+            margin: 30px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        .principle {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>UML и C++ - Подробный конспект</h1>
+    
+    <div class="note">
+        <strong>О документе:</strong> Unified Modeling Language (UML) - это стандартизированный язык моделирования для визуализации 
+        архитектуры программных систем. В этом конспекте мы рассмотрим применение UML в контексте программирования на C++, 
+        свяжем диаграммы с кодом и покажем, как UML помогает применять принципы и идиомы C++.
+    </div>
+
+    <hr>
+
+    <h2>1. Введение в UML</h2>
+    
+    <h3>1.1. Что такое UML?</h3>
+    <p><strong>UML (Unified Modeling Language)</strong> - это язык визуального моделирования для проектирования программных систем. 
+    UML не является языком программирования, а скорее "чертежами" для программного обеспечения, аналогично тому, как архитекторы 
+    используют чертежи для зданий.</p>
+    
+    <h4>Зачем нужен UML в C++?</h4>
+    <ul>
+        <li><strong>Визуализация архитектуры:</strong> UML помогает понять структуру сложных C++ систем</li>
+        <li><strong>Коммуникация:</strong> UML диаграммы помогают общаться с нетехническими заинтересованными сторонами</li>
+        <li><strong>Документация:</strong> UML служит живой документацией системы</li>
+        <li><strong>Проектирование:</strong> UML помогает спроектировать систему до написания кода</li>
+        <li><strong>Рефакторинг:</strong> UML помогает понять зависимости перед рефакторингом</li>
+    </ul>
+
+    <div class="principle">
+        <strong>Связь с C++ Core Guidelines:</strong> UML помогает применять принципы из раздела <strong>P (Философия)</strong> и 
+        <strong>C (Классы)</strong>, визуализируя структуру классов и их отношения до написания кода.
+    </div>
+
+    <hr>
+
+    <h2>2. Структурные UML диаграммы в C++</h2>
+    
+    <h3>2.1. Диаграмма классов (Class Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма классов - это основа объектно-ориентированного проектирования. Она показывает классы, их атрибуты, методы и 
+    отношения между классами. В C++ это напрямую соответствует объявлениям классов в заголовочных файлах.</p>
+    
+    <h4>Как это работает в C++?</h4>
+    <p>Каждый класс в UML соответствует классу в C++. Атрибуты класса становятся членами данных, методы - функциями-членами. 
+    Отношения (наследование, композиция, агрегация, ассоциация) отражают структуру C++ кода.</p>
+    
+    <div class="uml-diagram">
+┌─────────────────────────────────┐
+│         UserRegistry            │
+├─────────────────────────────────┤
+│ - username_to_id: map           │
+│ - id_to_username: map           │
+│ - next_id: size_t               │
+│ - registry_mutex: mutex         │
+│ - FILENAME: const string        │
+├─────────────────────────────────┤
+│ - UserRegistry()                │
+│ - ~UserRegistry()               │
+│ + getInstance(): UserRegistry&  │
+│ + isValidUsername(): bool       │
+│ + registerUser(): size_t        │
+│ + saveToFile(): void            │
+│ + loadFromFile(): void          │
+└─────────────────────────────────┘
+         ▲
+         │
+         │ Singleton Pattern
+         │
+    ┌────┴────┐
+    │         │
+    │  Uses   │
+    │         │
+    ▼         ▼
+┌─────────┐ ┌──────────┐
+│  mutex  │ │  string  │
+└─────────┘ └──────────┘
+    </div>
+    
+    <div class="cpp-example">
+        <h4>Соответствующий код C++:</h4>
+        <pre><code class="language-cpp">// Пример: Singleton Pattern в C++ (Meyers' Singleton)
+// Соответствует UML диаграмме выше
+
+#include &lt;unordered_map&gt;
+#include &lt;string&gt;
+#include &lt;mutex&gt;
+
+class UserRegistry {
+private:
+    // Приватные члены данных (атрибуты в UML)
+    std::unordered_map&lt;std::string, size_t&gt; username_to_id;
+    std::unordered_map&lt;size_t, std::string&gt; id_to_username;
+    size_t next_id;
+    std::mutex registry_mutex;
+    const std::string FILENAME = "users.dat";
+    
+    // Приватный конструктор (Singleton Pattern)
+    UserRegistry() = default;
+    ~UserRegistry() = default;
+    
+public:
+    // Публичные методы (операции в UML)
+    static UserRegistry& getInstance() {
+        static UserRegistry instance;  // Meyers' Singleton
+        return instance;
+    }
+    
+    // Удаляем копирование и присваивание (C.21: Правило пяти)
+    UserRegistry(const UserRegistry&) = delete;
+    UserRegistry& operator=(const UserRegistry&) = delete;
+    
+    bool isValidUsername(const std::string& username) const;
+    size_t registerUser(const std::string& username);
+    void saveToFile();
+    void loadFromFile();
+};</code></pre>
+    </div>
+    
+    <div class="success">
+        <strong>Связь с C++ Core Guidelines:</strong>
+        <ul>
+            <li><strong>C.1:</strong> Организуем связанные данные в класс (username_to_id, id_to_username)</li>
+            <li><strong>C.2:</strong> Используем class для инварианта (единственный экземпляр)</li>
+            <strong>C.21:</strong> Правило пяти - удаляем копирование и присваивание</li>
+            <li><strong>I.2:</strong> Избегаем глобальных переменных - используем Singleton</li>
+        </ul>
+    </div>
+
+    <h4>Типы отношений в UML и их реализация в C++</h4>
+    
+    <table>
+        <tr>
+            <th>UML Отношение</th>
+            <th>Описание</th>
+            <th>Реализация в C++</th>
+            <th>Пример</th>
+        </tr>
+        <tr>
+            <td><strong>Наследование</strong><br>(Inheritance)</td>
+            <td>Класс наследует от другого класса</td>
+            <td><code>class Derived : public Base</code></td>
+            <td>Полиморфизм, виртуальные функции</td>
+        </tr>
+        <tr>
+            <td><strong>Композиция</strong><br>(Composition)</td>
+            <td>Сильная связь: объект не может существовать без контейнера</td>
+            <td>Член данных (не указатель)<br><code>class Container { Member m; };</code></td>
+            <td>RAII, автоматическое управление жизненным циклом</td>
+        </tr>
+        <tr>
+            <td><strong>Агрегация</strong><br>(Aggregation)</td>
+            <td>Слабая связь: объект может существовать отдельно</td>
+            <td>Указатель или ссылка<br><code>class Container { Member* m; };</code></td>
+            <td>Не владеющий указатель</td>
+        </tr>
+        <tr>
+            <td><strong>Ассоциация</strong><br>(Association)</td>
+            <td>Связь между классами</td>
+            <td>Указатель или ссылка<br><code>class A { B* b; };</code></td>
+            <td>Взаимодействие между объектами</td>
+        </tr>
+        <tr>
+            <td><strong>Зависимость</strong><br>(Dependency)</td>
+            <td>Временная связь (параметр функции)</td>
+            <td>Параметр функции<br><code>void f(const B& b);</code></td>
+            <td>Использование без владения</td>
+        </tr>
+    </table>
+
+    <h4>Пример: Композиция в C++ (RAII)</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│    FileHandler       │
+├──────────────────────┤
+│ - file: ifstream     │ ◄─── Композиция (сильная связь)
+├──────────────────────┤
+│ + FileHandler()      │
+│ + ~FileHandler()     │
+│ + read(): string     │
+└──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Пример композиции: RAII идиома
+#include &lt;fstream&gt;
+#include &lt;string&gt;
+
+class FileHandler {
+private:
+    std::ifstream file;  // Композиция: file не может существовать без FileHandler
+    
+public:
+    explicit FileHandler(const std::string& filename) : file(filename) {
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot open file");
+        }
+    }
+    
+    // Деструктор автоматически закроет файл (R.1: RAII)
+    ~FileHandler() = default;  // ifstream сам закроет файл
+    
+    std::string read() {
+        std::string content;
+        std::string line;
+        while (std::getline(file, line)) {
+            content += line + "\n";
+        }
+        return content;
+    }
+    
+    // Удаляем копирование (C.21: Правило пяти)
+    FileHandler(const FileHandler&) = delete;
+    FileHandler& operator=(const FileHandler&) = delete;
+    
+    // Разрешаем перемещение
+    FileHandler(FileHandler&&) = default;
+    FileHandler& operator=(FileHandler&&) = default;
+};
+
+// Использование:
+void process_file() {
+    FileHandler handler("data.txt");  // файл открыт
+    auto content = handler.read();
+    // файл автоматически закроется при выходе из области видимости
+}</code></pre>
+
+    <div class="principle">
+        <strong>Идиома RAII (Resource Acquisition Is Initialization):</strong> Композиция в UML соответствует RAII в C++. 
+        Ресурс (файл) приобретается в конструкторе и освобождается в деструкторе. Это гарантирует автоматическое управление 
+        ресурсами даже при исключениях (R.1, E.6).
+    </div>
+
+    <h4>Пример: Наследование и полиморфизм</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│      Shape           │ ◄─── Абстрактный класс
+├──────────────────────┤
+│ + area(): double = 0 │
+│ + draw(): void = 0   │
+└──────────────────────┘
+         ▲
+         │
+    ┌────┴────┐
+    │         │
+    │         │
+    ▼         ▼
+┌─────────┐ ┌──────────┐
+│ Circle  │ │ Rectangle│
+├─────────┤ ├──────────┤
+│ -radius │ │ -width   │
+│         │ │ -height  │
+├─────────┤ ├──────────┤
+│ +area() │ │ +area()  │
+│ +draw() │ │ +draw()  │
+└─────────┘ └──────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Пример наследования: полиморфизм в C++
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+#include &lt;cmath&gt;
+
+// Абстрактный базовый класс (C.hier: Иерархии классов)
+class Shape {
+public:
+    virtual ~Shape() = default;  // Виртуальный деструктор (C.35)
+    
+    // Чисто виртуальные функции (интерфейс)
+    virtual double area() const = 0;
+    virtual void draw() const = 0;
+};
+
+// Конкретная реализация: Circle
+class Circle : public Shape {
+private:
+    double radius;
+    
+public:
+    explicit Circle(double r) : radius(r) {
+        if (r < 0) {
+            throw std::invalid_argument("Radius must be positive");
+        }
+    }
+    
+    double area() const override {  // C.128: Используем override
+        return 3.14159 * radius * radius;
+    }
+    
+    void draw() const override {
+        // Реализация отрисовки круга
+    }
+};
+
+// Конкретная реализация: Rectangle
+class Rectangle : public Shape {
+private:
+    double width, height;
+    
+public:
+    Rectangle(double w, double h) : width(w), height(h) {
+        if (w < 0 || h < 0) {
+            throw std::invalid_argument("Dimensions must be positive");
+        }
+    }
+    
+    double area() const override {
+        return width * height;
+    }
+    
+    void draw() const override {
+        // Реализация отрисовки прямоугольника
+    }
+};
+
+// Использование полиморфизма
+void process_shapes() {
+    std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt; shapes;  // R.20: Умные указатели
+    
+    shapes.push_back(std::make_unique&lt;Circle&gt;(5.0));
+    shapes.push_back(std::make_unique&lt;Rectangle&gt;(3.0, 4.0));
+    
+    // Полиморфизм: вызываем методы через базовый указатель
+    for (const auto& shape : shapes) {
+        std::cout << "Area: " << shape->area() << "\n";
+        shape->draw();
+    }
+}</code></pre>
+
+    <div class="success">
+        <strong>Связь с C++ Core Guidelines:</strong>
+        <ul>
+            <li><strong>C.hier:</strong> Используем наследование для представления иерархических концепций</li>
+            <li><strong>C.35:</strong> Виртуальный деструктор для полиморфных базовых классов</li>
+            <li><strong>C.128:</strong> Используем override для виртуальных функций</li>
+            <li><strong>R.20:</strong> Используем unique_ptr для владения полиморфными объектами</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <h3>2.2. Диаграмма компонентов (Component Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма компонентов показывает физическую организацию системы: какие компоненты существуют, как они взаимодействуют 
+    через интерфейсы. В C++ это соответствует модулям, библиотекам и их зависимостям.</p>
+    
+    <div class="uml-diagram">
+┌─────────────────────────────────────┐
+│         SearchEngine System         │
+│                                     │
+│  ┌──────────────┐  ┌─────────────┐ │
+│  │ SearchServer │  │ AsioServer  │ │
+│  └──────┬───────┘  └──────┬──────┘ │
+│         │                 │        │
+│         │                 │        │
+│  ┌──────▼─────────────────▼──────┐ │
+│  │      ContextRuntime           │ │
+│  └──────┬────────────────────────┘ │
+│         │                          │
+│  ┌──────▼──────────┐                │
+│  │ InvertedIndex  │                │
+│  └────────────────┘                │
+│                                     │
+│  ┌──────────────┐  ┌─────────────┐ │
+│  │ ConverterJSON│  │  LogFile    │ │
+│  └──────────────┘  └─────────────┘ │
+└─────────────────────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Пример: Компонентная архитектура в C++
+// Каждый компонент - отдельный модуль/библиотека
+
+// Компонент 1: SearchServer
+// SearchServer/SearchServer.h
+class SearchServer {
+public:
+    void processQuery(const std::string& query);
+    // Использует InvertedIndex и ContextRuntime
+};
+
+// Компонент 2: AsioServer  
+// AsioServer/AsioServer.h
+class AsioServer {
+public:
+    void start();
+    // Использует ContextRuntime
+};
+
+// Компонент 3: ContextRuntime
+// ContextRuntime/ContextRuntime.h
+class ContextRuntime {
+public:
+    boost::asio::io_context& net();
+    boost::asio::io_context& scheduler();
+    // Предоставляет инфраструктуру для других компонентов
+};
+
+// Компонент 4: InvertedIndex
+// Index/InvertedIndex.h
+class InvertedIndex {
+public:
+    void buildIndex(const std::vector&lt;std::string&gt;& documents);
+    std::vector&lt;size_t&gt; search(const std::string& query);
+    // Независимый компонент для индексации
+};
+
+// Компонент 5: ConverterJSON
+// JSON/ConverterJSON.h
+class ConverterJSON {
+public:
+    static nlohmann::json readJSON(const std::string& filename);
+    static void writeJSON(const std::string& filename, const nlohmann::json& data);
+    // Утилитный компонент для работы с JSON
+};
+
+// Компонент 6: LogFile
+// MyUtils/LogFile.h
+class LogFile {
+public:
+    static void write(const std::string& message);
+    // Утилитный компонент для логирования
+};</code></pre>
+
+    <div class="principle">
+        <strong>Принцип разделения ответственности (Separation of Concerns):</strong> Каждый компонент имеет одну ответственность. 
+        Это соответствует принципу из C++ Core Guidelines <strong>F.2</strong> (функция должна выполнять одну логическую операцию), 
+        применённому на уровне архитектуры.
+    </div>
+
+    <hr>
+
+    <h3>2.3. Диаграмма объектов (Object Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма объектов показывает конкретные экземпляры классов в определённый момент времени. Это "снимок" системы во время 
+    выполнения. В C++ это соответствует объектам в памяти.</p>
+    
+    <div class="uml-diagram">
+:UserRegistry (instance)
+├─ username_to_id = {"alice" → 1, "bob" → 2}
+├─ id_to_username = {1 → "alice", 2 → "bob"}
+├─ next_id = 3
+└─ registry_mutex = [locked]
+
+:FileHandler (handler1)
+└─ file = [open: "data.txt"]
+
+:FileHandler (handler2)
+└─ file = [open: "config.json"]
+    </div>
+    
+    <pre><code class="language-cpp">// Соответствующий код C++:
+void demonstrate_objects() {
+    // Объект 1: Singleton instance
+    auto& registry = UserRegistry::getInstance();
+    registry.registerUser("alice");
+    registry.registerUser("bob");
+    // Состояние: username_to_id = {"alice" → 1, "bob" → 2}
+    
+    // Объект 2: FileHandler instance
+    FileHandler handler1("data.txt");
+    // Состояние: file открыт для "data.txt"
+    
+    // Объект 3: Другой FileHandler instance
+    FileHandler handler2("config.json");
+    // Состояние: file открыт для "config.json"
+    
+    // Каждый объект имеет своё состояние в памяти
+}</code></pre>
+
+    <hr>
+
+    <h2>3. Поведенческие UML диаграммы в C++</h2>
+    
+    <h3>3.1. Диаграмма последовательности (Sequence Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма последовательности показывает взаимодействие объектов во времени: какие сообщения передаются между объектами 
+    и в каком порядке. В C++ это соответствует вызовам методов и передаче параметров.</p>
+    
+    <div class="uml-diagram">
+Client    SearchServer    InvertedIndex    ConverterJSON
+  │            │               │                 │
+  │──query()──▶│               │                 │
+  │            │──search()───▶│                 │
+  │            │               │                 │
+  │            │◀──results─────│                 │
+  │            │               │                 │
+  │            │──writeJSON()──┼────────────────▶│
+  │            │               │                 │
+  │◀──response─│               │                 │
+  │            │               │                 │
+    </div>
+    
+    <pre><code class="language-cpp">// Соответствующий код C++:
+class Client {
+public:
+    void performSearch(SearchServer& server, const std::string& query) {
+        // 1. Клиент вызывает query() на SearchServer
+        auto response = server.query(query);
+        // 5. Получает ответ
+    }
+};
+
+class SearchServer {
+private:
+    InvertedIndex index;
+    ConverterJSON jsonConverter;
+    
+public:
+    nlohmann::json query(const std::string& query) {
+        // 2. SearchServer вызывает search() на InvertedIndex
+        auto results = index.search(query);
+        
+        // 3. InvertedIndex возвращает results
+        
+        // 4. SearchServer вызывает writeJSON() на ConverterJSON
+        nlohmann::json response = jsonConverter.writeJSON(results);
+        
+        return response;
+    }
+};
+
+class InvertedIndex {
+public:
+    std::vector&lt;size_t&gt; search(const std::string& query) {
+        // Реализация поиска
+        return {};  // Возвращает результаты
+    }
+};
+
+class ConverterJSON {
+public:
+    static nlohmann::json writeJSON(const std::vector&lt;size_t&gt;& results) {
+        // Преобразует результаты в JSON
+        return nlohmann::json{};
+    }
+};</code></pre>
+
+    <div class="principle">
+        <strong>Связь с принципами C++:</strong> Диаграмма последовательности показывает поток данных через систему. Это помогает 
+        понять, какие объекты взаимодействуют и как передаются данные, что важно для применения принципов из раздела 
+        <strong>I (Интерфейсы)</strong> и <strong>F (Функции)</strong>.
+    </div>
+
+    <hr>
+
+    <h3>3.2. Диаграмма состояний (State Machine Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма состояний показывает, как объект переходит между различными состояниями в ответ на события. В C++ это можно 
+    реализовать через State Pattern или enum class с переходами.</p>
+    
+    <div class="uml-diagram">
+        [Idle] ──start()──▶ [Running] ──stop()──▶ [Stopped]
+         │                      │                    │
+         │                      │                    │
+         │                  error()                  │
+         │                      │                    │
+         │                      ▼                    │
+         │                  [Error]                  │
+         │                      │                    │
+         └──────────────reset()──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Реализация State Machine в C++ с использованием enum class
+#include &lt;stdexcept&gt;
+
+class Server {
+public:
+    enum class State {
+        Idle,
+        Running,
+        Stopped,
+        Error
+    };
+    
+private:
+    State current_state = State::Idle;
+    
+public:
+    void start() {
+        if (current_state != State::Idle) {
+            throw std::logic_error("Server can only start from Idle state");
+        }
+        current_state = State::Running;
+        // Инициализация сервера
+    }
+    
+    void stop() {
+        if (current_state != State::Running) {
+            throw std::logic_error("Server can only stop from Running state");
+        }
+        current_state = State::Stopped;
+        // Остановка сервера
+    }
+    
+    void handleError() {
+        if (current_state == State::Running) {
+            current_state = State::Error;
+            // Обработка ошибки
+        }
+    }
+    
+    void reset() {
+        current_state = State::Idle;
+        // Сброс состояния
+    }
+    
+    State getState() const {
+        return current_state;
+    }
+};
+
+// Более продвинутая реализация с использованием State Pattern
+class ServerState {
+public:
+    virtual ~ServerState() = default;
+    virtual void start(Server& server) = 0;
+    virtual void stop(Server& server) = 0;
+    virtual void handleError(Server& server) = 0;
+    virtual void reset(Server& server) = 0;
+};
+
+class IdleState : public ServerState {
+public:
+    void start(Server& server) override {
+        // Переход в Running
+        server.setState(std::make_unique&lt;RunningState&gt;());
+    }
+    void stop(Server& server) override {
+        throw std::logic_error("Cannot stop from Idle state");
+    }
+    void handleError(Server& server) override {
+        // Нет ошибок в Idle состоянии
+    }
+    void reset(Server& server) override {
+        // Уже в Idle
+    }
+};
+
+class RunningState : public ServerState {
+public:
+    void start(Server& server) override {
+        throw std::logic_error("Already running");
+    }
+    void stop(Server& server) override {
+        server.setState(std::make_unique&lt;StoppedState&gt;());
+    }
+    void handleError(Server& server) override {
+        server.setState(std::make_unique&lt;ErrorState&gt;());
+    }
+    void reset(Server& server) override {
+        server.setState(std::make_unique&lt;IdleState&gt;());
+    }
+};
+
+// Аналогично для StoppedState и ErrorState...</code></pre>
+
+    <div class="success">
+        <strong>State Pattern:</strong> Это классический паттерн проектирования, который позволяет объекту изменять своё поведение 
+        при изменении внутреннего состояния. В C++ это реализуется через полиморфизм и соответствует принципам из раздела 
+        <strong>C.hier</strong> (Иерархии классов).
+    </div>
+
+    <hr>
+
+    <h3>3.3. Диаграмма активности (Activity Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма активности показывает поток выполнения алгоритма или бизнес-процесса. В C++ это соответствует последовательности 
+    операций в функции или методе.</p>
+    
+    <div class="uml-diagram">
+        [Начало]
+          │
+          ▼
+    [Загрузить конфигурацию]
+          │
+          ▼
+    {Конфигурация валидна?}
+          │
+      ┌───┴───┐
+     Да      Нет
+      │       │
+      ▼       ▼
+  [Инициализировать] [Выбросить исключение]
+      │
+      ▼
+  [Запустить сервер]
+      │
+      ▼
+    [Конец]
+    </div>
+    
+    <pre><code class="language-cpp">// Соответствующий код C++:
+#include &lt;stdexcept&gt;
+#include &lt;fstream&gt;
+#include &lt;nlohmann/json.hpp&gt;
+
+class ServerInitializer {
+public:
+    void initialize() {
+        // [Начало]
+        
+        // [Загрузить конфигурацию]
+        auto config = loadConfiguration();
+        
+        // {Конфигурация валидна?}
+        if (!isValid(config)) {
+            // [Выбросить исключение]
+            throw std::runtime_error("Invalid configuration");
+        }
+        
+        // [Инициализировать]
+        initializeComponents(config);
+        
+        // [Запустить сервер]
+        startServer();
+        
+        // [Конец]
+    }
+    
+private:
+    nlohmann::json loadConfiguration() {
+        std::ifstream file("config.json");
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot open config.json");
+        }
+        return nlohmann::json::parse(file);
+    }
+    
+    bool isValid(const nlohmann::json& config) {
+        return config.contains("port") && 
+               config.contains("host") &&
+               config["port"].is_number();
+    }
+    
+    void initializeComponents(const nlohmann::json& config) {
+        // Инициализация компонентов
+    }
+    
+    void startServer() {
+        // Запуск сервера
+    }
+};</code></pre>
+
+    <div class="principle">
+        <strong>Связь с обработкой ошибок:</strong> Диаграмма активности показывает точки принятия решений и обработки ошибок. 
+        Это соответствует принципам из раздела <strong>E (Обработка ошибок)</strong>: использование исключений для сигнализации 
+        об ошибках (E.2).
+    </div>
+
+    <hr>
+
+    <h3>3.4. Диаграмма вариантов использования (Use Case Diagram)</h3>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Диаграмма вариантов использования показывает функциональные требования системы с точки зрения пользователей (акторов). 
+    В C++ это помогает определить интерфейсы классов и их публичные методы.</p>
+    
+    <div class="uml-diagram">
+        ┌─────────────────────┐
+        │   SearchEngine      │
+        │                     │
+        │  ┌──────────────┐  │
+        │  │ Search Query │  │
+        │  └──────────────┘  │
+        │  ┌──────────────┐  │
+        │  │ Build Index  │  │
+        │  └──────────────┘  │
+        │  ┌──────────────┐  │
+        │  │ Save Results │  │
+        │  └──────────────┘  │
+        └─────────────────────┘
+              ▲        ▲
+              │        │
+              │        │
+         ┌────┴───┐ ┌──┴────┐
+         │        │ │       │
+      [User]   [Admin]  [System]
+    </div>
+    
+    <pre><code class="language-cpp">// Соответствующий код C++ - публичные интерфейсы классов:
+
+// Use Case: Search Query
+class SearchServer {
+public:
+    // Публичный интерфейс для пользователя
+    std::vector&lt;SearchResult&gt; searchQuery(const std::string& query) {
+        // Реализация поиска
+        return {};
+    }
+};
+
+// Use Case: Build Index
+class IndexBuilder {
+public:
+    // Публичный интерфейс для администратора
+    void buildIndex(const std::vector&lt;std::string&gt;& documents) {
+        // Построение индекса
+    }
+};
+
+// Use Case: Save Results
+class ResultSaver {
+public:
+    // Публичный интерфейс для пользователя
+    void saveResults(const std::vector&lt;SearchResult&gt;& results, 
+                     const std::string& filename) {
+        // Сохранение результатов
+    }
+};</code></pre>
+
+    <div class="success">
+        <strong>Связь с интерфейсами:</strong> Use Case диаграмма помогает определить публичные интерфейсы классов. Это соответствует 
+        принципам из раздела <strong>I (Интерфейсы)</strong>: делайте интерфейсы явными (I.1) и точно типизированными (I.4).
+    </div>
+
+    <hr>
+
+    <h2>4. UML и идиомы C++</h2>
+    
+    <h3>4.1. RAII (Resource Acquisition Is Initialization)</h3>
+    
+    <p>RAII - это фундаментальная идиома C++, которая гарантирует автоматическое управление ресурсами. В UML это отражается через 
+    композицию и жизненный цикл объектов.</p>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│   ResourceManager    │
+├──────────────────────┤
+│ - resource: Resource │ ◄─── Композиция (RAII)
+├──────────────────────┤
+│ + ResourceManager()  │ ──── Приобретение ресурса
+│ + ~ResourceManager() │ ──── Освобождение ресурса
+│ + use(): void        │
+└──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// RAII в C++: ресурс управляется автоматически
+template&lt;typename Resource&gt;
+class ResourceManager {
+private:
+    Resource resource;  // Композиция: resource не может существовать отдельно
+    
+public:
+    explicit ResourceManager(/* параметры для создания Resource */) 
+        : resource(/* ... */) {
+        // Ресурс приобретается в конструкторе
+    }
+    
+    ~ResourceManager() {
+        // Ресурс автоматически освобождается в деструкторе
+        // Даже при исключениях!
+    }
+    
+    // Удаляем копирование (C.21: Правило пяти)
+    ResourceManager(const ResourceManager&) = delete;
+    ResourceManager& operator=(const ResourceManager&) = delete;
+    
+    // Разрешаем перемещение
+    ResourceManager(ResourceManager&&) = default;
+    ResourceManager& operator=(ResourceManager&&) = default;
+    
+    void use() {
+        // Использование ресурса
+    }
+};
+
+// Примеры RAII в стандартной библиотеке:
+// - std::unique_ptr&lt;T&gt; - управление памятью
+// - std::lock_guard&lt;Mutex&gt; - управление блокировками
+// - std::ifstream - управление файлами
+// - std::vector&lt;T&gt; - управление динамической памятью</code></pre>
+
+    <div class="principle">
+        <strong>R.1: Управляйте ресурсами автоматически, используя RAII</strong> - это основная идиома C++, которая предотвращает 
+        утечки ресурсов и гарантирует их освобождение даже при исключениях.
+    </div>
+
+    <hr>
+
+    <h3>4.2. PIMPL (Pointer to Implementation)</h3>
+    
+    <p>PIMPL - это идиома, которая скрывает детали реализации от клиентов класса, уменьшая зависимости времени компиляции.</p>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│   PublicInterface    │
+├──────────────────────┤
+│ - pimpl: unique_ptr  │ ◄─── Агрегация (слабая связь)
+│                      │
+│ + PublicInterface()  │
+│ + ~PublicInterface() │
+│ + publicMethod()     │
+└──────────────────────┘
+         │
+         │ использует
+         ▼
+┌──────────────────────┐
+│   Implementation     │
+├──────────────────────┤
+│ - private_data       │
+│ - helper_methods()   │
+└──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// PIMPL идиома в C++
+// PublicInterface.h
+#include &lt;memory&gt;
+
+class PublicInterface {
+public:
+    PublicInterface();
+    ~PublicInterface();
+    
+    // Публичные методы
+    void publicMethod();
+    
+    // Удаляем копирование (можно реализовать, если нужно)
+    PublicInterface(const PublicInterface&) = delete;
+    PublicInterface& operator=(const PublicInterface&) = delete;
+    
+    // Разрешаем перемещение
+    PublicInterface(PublicInterface&&) noexcept = default;
+    PublicInterface& operator=(PublicInterface&&) noexcept = default;
+    
+private:
+    class Implementation;  // Предварительное объявление
+    std::unique_ptr&lt;Implementation&gt; pimpl;  // Указатель на реализацию
+};
+
+// PublicInterface.cpp
+class PublicInterface::Implementation {
+private:
+    // Приватные данные
+    int private_data;
+    std::vector&lt;std::string&gt; internal_state;
+    
+    // Приватные методы
+    void helperMethod() {
+        // Вспомогательная логика
+    }
+    
+public:
+    Implementation() : private_data(0) {}
+    
+    void doWork() {
+        helperMethod();
+        // Работа с private_data
+    }
+};
+
+PublicInterface::PublicInterface() 
+    : pimpl(std::make_unique&lt;Implementation&gt;()) {}
+
+PublicInterface::~PublicInterface() = default;  // unique_ptr сам удалит Implementation
+
+void PublicInterface::publicMethod() {
+    pimpl->doWork();
+}</code></pre>
+
+    <div class="success">
+        <strong>Преимущества PIMPL:</strong>
+        <ul>
+            <li>Уменьшение зависимостей времени компиляции</li>
+            <li>Сокрытие деталей реализации (C.9: Минимизируйте открытость членов)</li>
+            <li>Стабильный ABI (Application Binary Interface)</li>
+            <li>Быстрая компиляция при изменении реализации</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <h3>4.3. CRTP (Curiously Recurring Template Pattern)</h3>
+    
+    <p>CRTP - это идиома, при которой класс наследуется от шаблона базового класса, параметризованного самим производным классом.</p>
+    
+    <div class="uml-diagram">
+┌─────────────────────────────┐
+│  Base&lt;Derived&gt;             │ ◄─── Шаблонный базовый класс
+├─────────────────────────────┤
+│ + interface()               │
+│ - implementation()          │
+└─────────────────────────────┘
+         ▲
+         │ наследуется
+         │
+┌─────────────────────────────┐
+│      Derived                │
+├─────────────────────────────┤
+│ + implementation()          │
+└─────────────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// CRTP в C++
+template&lt;typename Derived&gt;
+class Base {
+public:
+    void interface() {
+        // Вызывает реализацию из производного класса
+        static_cast&lt;Derived*&gt;(this)->implementation();
+    }
+    
+private:
+    // Базовый класс может иметь общую логику
+};
+
+class Derived : public Base&lt;Derived&gt; {
+public:
+    void implementation() {
+        // Конкретная реализация
+    }
+};
+
+// Использование:
+void use() {
+    Derived d;
+    d.interface();  // Вызывает Derived::implementation()
+}
+
+// Пример: Singleton с CRTP
+template&lt;typename T&gt;
+class Singleton {
+protected:
+    Singleton() = default;
+    ~Singleton() = default;
+    
+public:
+    static T& getInstance() {
+        static T instance;
+        return instance;
+    }
+    
+    Singleton(const Singleton&) = delete;
+    Singleton& operator=(const Singleton&) = delete;
+};
+
+// Использование:
+class MySingleton : public Singleton&lt;MySingleton&gt; {
+    friend class Singleton&lt;MySingleton&gt;;
+    
+private:
+    MySingleton() = default;
+    
+public:
+    void doSomething() {
+        // Реализация
+    }
+};
+
+// Использование:
+void example() {
+    auto& instance = MySingleton::getInstance();
+    instance.doSomething();
+}</code></pre>
+
+    <div class="principle">
+        <strong>CRTP и статический полиморфизм:</strong> CRTP позволяет достичь полиморфизма без виртуальных функций, что может 
+        быть более эффективно. Это соответствует принципам производительности из раздела <strong>Per</strong>: избегайте виртуальных 
+        вызовов там, где они не нужны.
+    </div>
+
+    <hr>
+
+    <h2>5. UML и принципы проектирования</h2>
+    
+    <h3>5.1. SOLID принципы в UML</h3>
+    
+    <h4>S - Single Responsibility Principle (Принцип единственной ответственности)</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│   FileReader         │ ◄─── Читает файлы
+├──────────────────────┤
+│ + read(): string     │
+└──────────────────────┘
+
+┌──────────────────────┐
+│   DataProcessor      │ ◄─── Обрабатывает данные
+├──────────────────────┤
+│ + process(): void    │
+└──────────────────────┘
+
+┌──────────────────────┐
+│   ResultWriter       │ ◄─── Записывает результаты
+├──────────────────────┤
+│ + write(): void      │
+└──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Каждый класс имеет одну ответственность (F.2: Функция должна выполнять одну операцию)
+class FileReader {
+public:
+    std::string read(const std::string& filename) {
+        std::ifstream file(filename);
+        std::string content;
+        std::string line;
+        while (std::getline(file, line)) {
+            content += line + "\n";
+        }
+        return content;
+    }
+};
+
+class DataProcessor {
+public:
+    std::string process(const std::string& data) {
+        // Обработка данных
+        return processed_data;
+    }
+};
+
+class ResultWriter {
+public:
+    void write(const std::string& filename, const std::string& data) {
+        std::ofstream file(filename);
+        file << data;
+    }
+};
+
+// Использование:
+void pipeline() {
+    FileReader reader;
+    DataProcessor processor;
+    ResultWriter writer;
+    
+    auto data = reader.read("input.txt");
+    auto processed = processor.process(data);
+    writer.write("output.txt", processed);
+}</code></pre>
+
+    <h4>O - Open/Closed Principle (Принцип открытости/закрытости)</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│      Shape           │ ◄─── Открыт для расширения
+├──────────────────────┤
+│ + area(): double = 0 │
+└──────────────────────┘
+         ▲
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌─────────┐ ┌──────────┐
+│ Circle  │ │ Rectangle│ ◄─── Закрыт для модификации
+└─────────┘ └──────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Класс открыт для расширения через наследование, но закрыт для модификации
+class Shape {
+public:
+    virtual ~Shape() = default;
+    virtual double area() const = 0;  // Виртуальная функция для расширения
+};
+
+class Circle : public Shape {
+    double radius;
+public:
+    explicit Circle(double r) : radius(r) {}
+    double area() const override {
+        return 3.14159 * radius * radius;
+    }
+};
+
+class Rectangle : public Shape {
+    double width, height;
+public:
+    Rectangle(double w, double h) : width(w), height(h) {}
+    double area() const override {
+        return width * height;
+    }
+};
+
+// Можно добавить новые типы фигур без изменения существующего кода
+class Triangle : public Shape {
+    double base, height;
+public:
+    Triangle(double b, double h) : base(b), height(h) {}
+    double area() const override {
+        return 0.5 * base * height;
+    }
+};</code></pre>
+
+    <h4>L - Liskov Substitution Principle (Принцип подстановки Лисков)</h4>
+    
+    <p>Производные классы должны быть заменяемы на свои базовые классы без нарушения функциональности программы.</p>
+    
+    <pre><code class="language-cpp">// Правильная реализация LSP
+class Bird {
+public:
+    virtual ~Bird() = default;
+    virtual void fly() = 0;  // Все птицы могут летать?
+};
+
+// Нарушение LSP: пингвин не может летать
+class Penguin : public Bird {
+public:
+    void fly() override {
+        throw std::logic_error("Penguins cannot fly!");
+    }
+};
+
+// Правильная реализация: разделение интерфейсов
+class Bird {
+public:
+    virtual ~Bird() = default;
+};
+
+class FlyingBird : public Bird {
+public:
+    virtual void fly() = 0;
+};
+
+class Sparrow : public FlyingBird {
+public:
+    void fly() override {
+        // Реализация полёта
+    }
+};
+
+class Penguin : public Bird {
+    // Пингвин не наследуется от FlyingBird
+    // Не нарушает LSP
+};</code></pre>
+
+    <h4>I - Interface Segregation Principle (Принцип разделения интерфейсов)</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│   IReadable          │ ◄─── Интерфейс для чтения
+├──────────────────────┤
+│ + read(): void       │
+└──────────────────────┘
+
+┌──────────────────────┐
+│   IWritable          │ ◄─── Интерфейс для записи
+├──────────────────────┤
+│ + write(): void      │
+└──────────────────────┘
+
+┌──────────────────────┐
+│   FileHandler        │ ◄─── Реализует оба интерфейса
+├──────────────────────┤
+│ + read(): void       │
+│ + write(): void      │
+└──────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Разделение интерфейсов вместо одного большого интерфейса
+class IReadable {
+public:
+    virtual ~IReadable() = default;
+    virtual void read() = 0;
+};
+
+class IWritable {
+public:
+    virtual ~IWritable() = default;
+    virtual void write() = 0;
+};
+
+class FileHandler : public IReadable, public IWritable {
+public:
+    void read() override {
+        // Реализация чтения
+    }
+    
+    void write() override {
+        // Реализация записи
+    }
+};
+
+class ReadOnlyFile : public IReadable {
+public:
+    void read() override {
+        // Реализация чтения
+    }
+    // Не реализует IWritable - правильно!
+};</code></pre>
+
+    <h4>D - Dependency Inversion Principle (Принцип инверсии зависимостей)</h4>
+    
+    <div class="uml-diagram">
+┌──────────────────────┐
+│   HighLevelModule    │
+├──────────────────────┤
+│ - service: IService   │ ◄─── Зависит от абстракции
+└──────────────────────┘
+         ▲
+         │ реализует
+         │
+┌──────────────────────┐
+│      IService        │ ◄─── Абстракция
+└──────────────────────┘
+         ▲
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌─────────┐ ┌──────────┐
+│ServiceA │ │ ServiceB │ ◄─── Конкретные реализации
+└─────────┘ └──────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Зависимость от абстракций, а не от конкретных реализаций
+class IService {
+public:
+    virtual ~IService() = default;
+    virtual void doWork() = 0;
+};
+
+class ServiceA : public IService {
+public:
+    void doWork() override {
+        // Реализация A
+    }
+};
+
+class ServiceB : public IService {
+public:
+    void doWork() override {
+        // Реализация B
+    }
+};
+
+class HighLevelModule {
+private:
+    std::unique_ptr&lt;IService&gt; service;  // Зависит от абстракции
+    
+public:
+    explicit HighLevelModule(std::unique_ptr&lt;IService&gt; s) 
+        : service(std::move(s)) {}
+    
+    void useService() {
+        service->doWork();  // Использует абстракцию
+    }
+};
+
+// Использование:
+void example() {
+    // Можно использовать любую реализацию
+    auto module1 = HighLevelModule(std::make_unique&lt;ServiceA&gt;());
+    auto module2 = HighLevelModule(std::make_unique&lt;ServiceB&gt;());
+    
+    module1.useService();
+    module2.useService();
+}</code></pre>
+
+    <hr>
+
+    <h2>6. Практические примеры применения UML в C++ проектах</h2>
+    
+    <h3>6.1. Архитектура поисковой системы</h3>
+    
+    <div class="uml-diagram">
+┌─────────────────────────────────────────────┐
+│           SearchEngine System               │
+│                                             │
+│  ┌──────────────┐      ┌──────────────┐   │
+│  │SearchServer  │──────▶│InvertedIndex │   │
+│  └──────┬───────┘      └──────┬───────┘   │
+│         │                     │            │
+│         │                     ▼            │
+│         │              ┌──────────────┐   │
+│         │              │ PostingList  │   │
+│         │              └──────────────┘   │
+│         │                                  │
+│         ▼                                  │
+│  ┌──────────────┐      ┌──────────────┐   │
+│  │ConverterJSON │      │   LogFile    │   │
+│  └──────────────┘      └──────────────┘   │
+└─────────────────────────────────────────────┘
+    </div>
+    
+    <pre><code class="language-cpp">// Реализация архитектуры поисковой системы
+#include &lt;vector&gt;
+#include &lt;string&gt;
+#include &lt;memory&gt;
+#include &lt;unordered_map&gt;
+
+// Компонент: InvertedIndex
+class InvertedIndex {
+private:
+    std::unordered_map&lt;std::string, std::vector&lt;size_t&gt;&gt; index;
+    
+public:
+    void addDocument(size_t docId, const std::vector&lt;std::string&gt;& words) {
+        for (const auto& word : words) {
+            index[word].push_back(docId);
+        }
+    }
+    
+    std::vector&lt;size_t&gt; search(const std::string& query) {
+        auto it = index.find(query);
+        if (it != index.end()) {
+            return it->second;
+        }
+        return {};
+    }
+};
+
+// Компонент: SearchServer
+class SearchServer {
+private:
+    InvertedIndex index;
+    
+public:
+    void buildIndex(const std::vector&lt;std::pair&lt;size_t, std::vector&lt;std::string&gt;&gt;&gt;& documents) {
+        for (const auto& [docId, words] : documents) {
+            index.addDocument(docId, words);
+        }
+    }
+    
+    std::vector&lt;size_t&gt; query(const std::string& searchTerm) {
+        return index.search(searchTerm);
+    }
+};
+
+// Компонент: ConverterJSON
+class ConverterJSON {
+public:
+    static nlohmann::json toJSON(const std::vector&lt;size_t&gt;& results) {
+        nlohmann::json json;
+        json["results"] = results;
+        return json;
+    }
+    
+    static std::vector&lt;size_t&gt; fromJSON(const nlohmann::json& json) {
+        return json["results"].get&lt;std::vector&lt;size_t&gt;&gt;();
+    }
+};
+
+// Компонент: LogFile
+class LogFile {
+public:
+    static void write(const std::string& message) {
+        // Реализация логирования
+    }
+};
+
+// Использование:
+void example() {
+    SearchServer server;
+    
+    // Построение индекса
+    std::vector&lt;std::pair&lt;size_t, std::vector&lt;std::string&gt;&gt;&gt; docs = {
+        {1, {"hello", "world"}},
+        {2, {"hello", "cpp"}},
+        {3, {"world", "uml"}}
+    };
+    server.buildIndex(docs);
+    
+    // Поиск
+    auto results = server.query("hello");
+    
+    // Конвертация в JSON
+    auto json = ConverterJSON::toJSON(results);
+    
+    // Логирование
+    LogFile::write("Search completed");
+}</code></pre>
+
+    <hr>
+
+    <h2>7. Инструменты для создания UML диаграмм</h2>
+    
+    <table>
+        <tr>
+            <th>Инструмент</th>
+            <th>Тип</th>
+            <th>Особенности для C++</th>
+        </tr>
+        <tr>
+            <td><strong>PlantUML</strong></td>
+            <td>Текстовый</td>
+            <td>Генерация из кода, интеграция с документацией</td>
+        </tr>
+        <tr>
+            <td><strong>Doxygen</strong></td>
+            <td>Генератор документации</td>
+            <td>Автоматическая генерация UML из комментариев C++</td>
+        </tr>
+        <tr>
+            <td><strong>Visual Paradigm</strong></td>
+            <td>Визуальный редактор</td>
+            <td>Round-trip engineering с C++</td>
+        </tr>
+        <tr>
+            <td><strong>StarUML</strong></td>
+            <td>Визуальный редактор</td>
+            <td>Поддержка C++ code generation</td>
+        </tr>
+        <tr>
+            <td><strong>Draw.io</strong></td>
+            <td>Веб-редактор</td>
+            <td>Бесплатный, простой в использовании</td>
+        </tr>
+    </table>
+
+    <h3>7.1. Пример: PlantUML для C++</h3>
+    
+    <pre><code class="language-plantuml">@startuml
+class UserRegistry {
+    - username_to_id: map
+    - id_to_username: map
+    - next_id: size_t
+    - registry_mutex: mutex
+    + getInstance(): UserRegistry&
+    + isValidUsername(): bool
+    + registerUser(): size_t
+    + saveToFile(): void
+    + loadFromFile(): void
+}
+
+class FileHandler {
+    - file: ifstream
+    + FileHandler(filename: string)
+    + read(): string
+}
+
+UserRegistry --> FileHandler : uses
+@enduml</code></pre>
+
+    <hr>
+
+    <h2>8. Заключение</h2>
+    
+    <div class="note">
+        <h3>Ключевые связи между UML и C++:</h3>
+        <ul>
+            <li><strong>Диаграмма классов ↔ Структура C++ кода:</strong> Классы, наследование, композиция напрямую соответствуют 
+            C++ конструкциям</li>
+            <li><strong>Диаграмма последовательности ↔ Вызовы методов:</strong> Показывает поток выполнения программы</li>
+            <li><strong>Диаграмма состояний ↔ State Pattern:</strong> Реализуется через enum class или полиморфизм</li>
+            <li><strong>Диаграмма компонентов ↔ Модульная архитектура:</strong> Соответствует организации кода в модули/библиотеки</li>
+            <li><strong>UML отношения ↔ C++ идиомы:</strong> Композиция = RAII, Агрегация = умные указатели</li>
+        </ul>
+    </div>
+    
+    <div class="success">
+        <h3>Преимущества использования UML в C++:</h3>
+        <ul>
+            <li><strong>Визуализация архитектуры:</strong> Понимание структуры до написания кода</li>
+            <li><strong>Коммуникация:</strong> Общение с командой и заинтересованными сторонами</li>
+            <li><strong>Документация:</strong> Живая документация системы</li>
+            <li><strong>Рефакторинг:</strong> Понимание зависимостей перед изменениями</li>
+            <li><strong>Применение принципов:</strong> Визуализация SOLID, паттернов проектирования</li>
+        </ul>
+    </div>
+    
+    <div class="principle">
+        <strong>Рекомендация:</strong> Используйте UML как инструмент мышления и коммуникации, а не как самоцель. UML должен 
+        помогать писать лучший C++ код, применяя принципы из C++ Core Guidelines и современные идиомы C++.
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе информации о UML и применении в C++ программировании. 
+    Источник: <a href="https://www.geeksforgeeks.org/system-design/unified-modeling-language-uml-introduction/">GeeksforGeeks - UML Introduction</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

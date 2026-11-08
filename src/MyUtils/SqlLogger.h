@@ -19,9 +19,10 @@ class SqlLogger {
 public:
     // Получение экземпляра Singleton
     static SqlLogger& instance(const std::string& dbPath = "");
+    static void shutdown() noexcept;
 
     // Асинхронное добавление логов
-    void logRequest(const PersonalRequest& request);
+    void logRequest(const PersonalRequest& request, const std::string& remoteIp = {});
 
     void logJson(const nh::json& jsonString);
 
@@ -41,25 +42,32 @@ private:
 private:
     mySQLite db;
 
-    std::queue<PersonalRequest> logQueue;
+    struct LogEntry {
+        PersonalRequest request;
+        std::string remoteIp;
+    };
+    std::queue<LogEntry> logQueue;
     std::thread workerThread;
     std::mutex queueMutex;
     std::condition_variable queueCondVar;
     std::atomic<bool> stopWorker{false};
+    static SqlLogger* instance_;
+    static std::mutex instanceMutex_;
 };
 
 namespace logutil {
-    inline void log(const PersonalRequest& pr) {
+    inline void log(const PersonalRequest& pr, const std::string& remoteIp = {}) {
         try {
-            SqlLogger::instance().logRequest(pr);
+            SqlLogger::instance().logRequest(pr, remoteIp);
         } catch (...) {
             // Безопасно игнорируем ошибку логгирования
         }
     }
 // Удобная inline-функция для логирования
-    inline void log(std::string user, std::string request, std::string type) {
+    inline void log(std::string user, std::string request, std::string type,
+                    const std::string& remoteIp = {}) {
         try {
-            SqlLogger::instance().logRequest(PersonalRequest{user, request, type});
+            SqlLogger::instance().logRequest(PersonalRequest{user, request, type}, remoteIp);
         } catch (...) {
             // Безопасно игнорируем ошибку логгирования
         }

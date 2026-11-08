@@ -1,0 +1,21 @@
+{
+  "Date": "2026-10-28, Asia/Yekaterinburg (UTC+05:00)",
+  "Head": "1b421234526aa88b8dfee151f98ea8e7751e976e",
+  "StandVersion": "0.1.12",
+  "ServiceVersion": "0.1.96",
+  "CppCompilation": false,
+  "VersionBump": false,
+  "StandExeSha256": "FE99022040B4B709817F48186C789DB39E13A2025843F4F739FD0E1F7390C14C",
+  "UnchangedServiceBinaries": 119,
+  "EmbeddedProtectedFiles": 158,
+  "StandChecksumsVerified": 765,
+  "ZipEntriesVerified": 766,
+  "VerifierCases": 22,
+  "InstallerCases": 28,
+  "ReleaseBoundaryAssertions": 51,
+  "CloudUpdated": true,
+  "Zip": "SearchEngineArchiveE2EStand-2026-0.1.12.zip",
+  "LocalSha256": "a2bf6d71ffe5da35100c3cf8e8ce16c84969c7c17b7ec420b1eafabcbc7316e5",
+  "CloudSha256": "38a5fff46fc9dad5cda5c4903315702a5342774db86b09d3d4ecc26f331aae7c",
+  "RealWin7Deployment": false
+}

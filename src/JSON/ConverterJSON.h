@@ -22,14 +22,26 @@ class Telega;
 struct PrefixMap;
 
 namespace nh = nlohmann;
-typedef std::list<std::pair<std::string, float>> listAnswer;
+
+// Один результат поиска: путь, относительная релевантность и метка
+// удаления (true = файл удалён с диска, но след в индексе сохранён).
+struct AnswerItem {
+    std::string path;
+    float       relevance{0.0f};
+    bool        deleted{false};
+};
+
+typedef std::list<AnswerItem> listAnswer;
 typedef std::list<std::pair<listAnswer, std::string>> listAnswers;
 
 
-class BackupGroup;
 class ConverterJSON {
 
 public:
+    /// Enables console/MessageBox diagnostics. Must be disabled before
+    /// loading settings in Windows service mode.
+    static void setInteractiveErrors(bool enabled) noexcept;
+
     /** @param myExp исключения выбрасываемые при проблемах чтения информации из json файлов.
         @param setSettings функция записи настроек сервера в json файл - ни где пока не используется, но может пригодиться..
         @param getSettings функция получения настроек сервера из json файла.
@@ -47,12 +59,11 @@ public:
 
     ConverterJSON() = default;
     static PrefixMap loadAttachPrefixLogin(const std::filesystem::path& path);
-    static void setSettings(const search_server::Settings& val);
+    static void setSettings(const search_server::Settings& val, const std::string& jsonPath = "Settings.json");
     static std::string getJsonTelega(const Telega& val);
     static search_server::Settings getSettings(const std::string& jsonPath = "Settings.json");
     static std::vector<std::string> getRequests(const std::string& jsonPath = "Requests.json");
     static std::vector<std::string> getRequestsFromString(const std::string& jsonString);
-    static std::vector<BackupGroup> parseBackupJobs(const std::string& jsonString = "Backup.json");
     static std::string putAnswers(const listAnswers& answers, const std::string& jsonPath = "Answers.json");
     static void saveAttachPrefixLogin(const PrefixMap &pm, const std::filesystem::path &path);
 };

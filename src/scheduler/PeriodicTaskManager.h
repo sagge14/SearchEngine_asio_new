@@ -6,6 +6,8 @@
 #include <type_traits>
 #include <deque>
 #include <iostream>
+#include <atomic>
+#include <vector>
 
 struct DelayedEvent {
     std::function<void()> action;
@@ -20,6 +22,7 @@ class PeriodicTaskManager {
     std::unordered_multimap<TaskID, std::shared_ptr<AbstractScheduledTask>> tasks_;
     std::mutex mtx_;
     std::deque<DelayedEvent> delayedEvents;
+    std::atomic<bool> stopping_{false};
 
     void scheduler_tick() {
         auto now = std::chrono::steady_clock::now();
@@ -124,13 +127,36 @@ public:
     }
 
     void stopAll() {
+        stopping_.store(true, std::memory_order_release);
         std::lock_guard lock(mtx_);
+        delayedEvents.clear();
         for (auto& [id, task] : tasks_) {
             task->stop();
         }
     }
 
+    void waitAll() {
+        std::vector<std::shared_ptr<AbstractScheduledTask>> tasks;
+        {
+            std::lock_guard lock(mtx_);
+            tasks.reserve(tasks_.size());
+            for (auto& [id, task] : tasks_)
+                tasks.push_back(task);
+        }
+        for (auto& task : tasks)
+            task->wait();
+    }
+
+    void clear() {
+        stopAll();
+        waitAll();
+        std::lock_guard lock(mtx_);
+        tasks_.clear();
+        delayedEvents.clear();
+    }
+
     void startAll() {
+        stopping_.store(false, std::memory_order_release);
         std::lock_guard lock(mtx_);
         for (auto& [id, task] : tasks_) {
             task->start();
@@ -146,12 +172,20 @@ public:
     }
 
     void addDelayedEvent(const DelayedEvent& evt) {
+        if (stopping_.load(std::memory_order_acquire))
+            return;
         std::lock_guard lock(mtx_);
+        if (stopping_.load(std::memory_order_acquire))
+            return;
         delayedEvents.push_back(evt);
     }
 
     void tickDelayedEvents() {
+        if (stopping_.load(std::memory_order_acquire))
+            return;
         std::lock_guard lock(mtx_);
+        if (stopping_.load(std::memory_order_acquire))
+            return;
         scheduler_tick();
     }
 };

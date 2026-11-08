@@ -5,7 +5,7 @@
 #include <vector>
 #include <functional>
 
-#include "OEMtoUpper.h"   // твоя таблица верхнего регистра
+#include "MyUtils/OEMCase.h"
 
 namespace OEMFastTokenizer
 {

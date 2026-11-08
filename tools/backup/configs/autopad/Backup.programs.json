@@ -1,0 +1,40 @@
+{
+  "BackupJobs": [
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 300,
+      "targets": [
+        {
+          "src": "D:\\TVRD",
+          "max_versions": 2016,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": false,
+          "skip_unchanged": true
+        }
+      ]
+    },
+    {
+      "backup_dir": "F:\\AutoPadBackups",
+      "period_sec": 21600,
+      "targets": [
+        {
+          "src": "D:\\F12",
+          "max_versions": 120,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        },
+        {
+          "src": "D:\\OTPRAVKA",
+          "max_versions": 120,
+          "is_directory": true,
+          "mode": "auto",
+          "cache": true,
+          "skip_unchanged": true
+        }
+      ]
+    }
+  ]
+}

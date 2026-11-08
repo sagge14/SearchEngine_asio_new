@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: Con - Константы и неизменяемость (C++ Core Guidelines)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; border-left: 4px solid #3498db; padding-left: 15px; }
+        h3 { color: #555; margin-top: 25px; }
+        h4 { color: #666; font-size: 1.1em; margin-top: 20px; font-weight: 600; }
+        pre { background: #ffffff; border: 1px solid #ddd; border-left: 4px solid #3498db; padding: 15px; overflow-x: auto; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 0.95em; }
+        code { font-family: 'Consolas', 'Monaco', 'Courier New', monospace; }
+        .note { background-color: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 15px 0; }
+        .warning { background-color: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; margin: 15px 0; }
+        .success { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        .bad { background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
+        .good { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        hr { border: none; border-top: 2px solid #ddd; margin: 30px 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        @media (max-width: 768px) { .comparison { grid-template-columns: 1fr; } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>Con: Константы и неизменяемость - Подробный конспект</h1>
+    
+    <div class="note">
+        <strong>О разделе:</strong> Раздел Con содержит рекомендации по использованию констант и неизменяемости. Неизменяемые 
+        объекты проще для понимания и рассуждений, они безопасны для многопоточности и предотвращают ошибки.
+    </div>
+
+    <hr>
+
+    <h2>Con.1: По умолчанию делайте объекты неизменяемыми</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: изменяемые переменные по умолчанию
+for (int i : vec) {  // i может быть изменён
+    i = 42;  // изменяем значение
+    process(i);
+}
+
+int value = 10;
+value = 20;  // изменяем значение</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: const по умолчанию
+for (const int i : vec) {  // i неизменяем
+    // i = 42;  // ошибка компиляции
+    process(i);
+}
+
+const int value = 10;
+// value = 20;  // ошибка компиляции</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Con.2: По умолчанию делайте функции-члены const</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: функция не помечена const
+class Point {
+    int x, y;
+public:
+    int get_x() {  // не const, хотя не изменяет объект
+        return x;
+    }
+};</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: const функция-член
+class Point {
+    int x, y;
+public:
+    int get_x() const {  // const, не изменяет объект
+        return x;
+    }
+    
+    void set_x(int new_x) {  // не const, изменяет объект
+        x = new_x;
+    }
+};
+
+// Использование:
+const Point p{10, 20};
+int x = p.get_x();  // ОК, get_x() const
+// p.set_x(30);  // ошибка, set_x() не const</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Con.3: По умолчанию передавайте указатели и ссылки на const</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: неконстантные параметры
+void process(int* data) {  // может изменять data
+    *data = 42;
+}
+
+void print(std::string& str) {  // может изменять str
+    std::cout << str;
+}</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: const параметры по умолчанию
+void process(const int* data) {  // не может изменять data
+    // *data = 42;  // ошибка компиляции
+    std::cout << *data;
+}
+
+void print(const std::string& str) {  // не может изменять str
+    std::cout << str;
+}
+
+// Только для входно-выходных параметров используйте неконстантные:
+void modify(int& value) {  // явно изменяет значение
+    value = 42;
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Con.5: Используйте constexpr для значений, которые могут быть вычислены на этапе компиляции</h2>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: вычисление во время выполнения
+double calculate_pi() {
+    return 3.14159265358979323846;
+}
+const double pi = calculate_pi();  // вычисляется во время выполнения
+
+int factorial(int n) {
+    return (n <= 1) ? 1 : n * factorial(n - 1);
+}
+int fact_5 = factorial(5);  // вычисляется во время выполнения</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: вычисление на этапе компиляции
+constexpr double calculate_pi() {
+    return 3.14159265358979323846;
+}
+constexpr double pi = calculate_pi();  // вычисляется на этапе компиляции
+
+constexpr int factorial(int n) {
+    return (n <= 1) ? 1 : n * factorial(n - 1);
+}
+constexpr int fact_5 = factorial(5);  // вычисляется на этапе компиляции
+
+// Можно использовать в константах времени компиляции:
+std::array&lt;int, fact_5&gt; arr;  // размер массива известен на этапе компиляции</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Заключение</h2>
+    
+    <div class="note">
+        <h3>Ключевые принципы раздела Con (Константы и неизменяемость):</h3>
+        <ul>
+            <li><strong>Неизменяемость по умолчанию:</strong> Делайте объекты const по умолчанию</li>
+            <li><strong>const функции-члены:</strong> Помечайте функции-члены const, если они не изменяют объект</li>
+            <li><strong>const параметры:</strong> Передавайте параметры по ссылке/указателю на const по умолчанию</li>
+            <li><strong>constexpr:</strong> Используйте constexpr для вычислений на этапе компиляции</li>
+            <li><strong>Безопасность:</strong> Неизменяемые объекты безопасны для многопоточности</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе C++ Core Guidelines. 
+    Полный документ: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

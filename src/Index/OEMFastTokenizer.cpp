@@ -39,14 +39,14 @@ void OEMFastTokenizer::normalizeToken(std::string& s)
 
     // Upper-case OEM
     for (size_t i = 0; i < n; ++i)
-        p[i] = OEMtoUpper::getUpperCharOem(p[i]);
+        p[i] = OEMCase::getUpperCharOem(p[i]);
 
     // Trim left
     size_t start = 0;
     while (start < n)
     {
         unsigned char c = p[start];
-        if (!(OEMtoUpper::iS_not_a_Oem(c) && ispunct(c)))
+        if (!(OEMCase::iS_not_a_Oem(c) && ispunct(c)))
             break;
         start++;
     }
@@ -56,7 +56,7 @@ void OEMFastTokenizer::normalizeToken(std::string& s)
     while (end > start)
     {
         unsigned char c = p[end - 1];
-        if (!(OEMtoUpper::iS_not_a_Oem(c) && ispunct(c)))
+        if (!(OEMCase::iS_not_a_Oem(c) && ispunct(c)))
             break;
         end--;
     }

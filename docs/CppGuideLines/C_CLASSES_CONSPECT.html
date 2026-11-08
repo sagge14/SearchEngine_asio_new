@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Конспект: C - Классы и иерархии классов (C++ Core Guidelines)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs.min.css">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; border-left: 4px solid #3498db; padding-left: 15px; }
+        h3 { color: #555; margin-top: 25px; }
+        h4 { color: #666; font-size: 1.1em; margin-top: 20px; font-weight: 600; }
+        pre { background: #ffffff; border: 1px solid #ddd; border-left: 4px solid #3498db; padding: 15px; overflow-x: auto; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 0.95em; }
+        code { font-family: 'Consolas', 'Monaco', 'Courier New', monospace; }
+        .note { background-color: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 15px 0; }
+        .warning { background-color: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; margin: 15px 0; }
+        .success { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        .bad { background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
+        .good { background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+        hr { border: none; border-top: 2px solid #ddd; margin: 30px 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        @media (max-width: 768px) { .comparison { grid-template-columns: 1fr; } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+</head>
+<body>
+    <h1>C: Классы и иерархии классов - Подробный конспект</h1>
+    
+    <div class="note">
+        <strong>О разделе:</strong> Раздел C содержит рекомендации по проектированию классов и иерархий классов. Правильное 
+        использование классов делает код более модульным, безопасным и понятным.
+    </div>
+
+    <hr>
+
+    <h2>C.1: Организуйте связанные данные в структуры (struct или class)</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Когда данные логически связаны, их следует группировать вместе. Это делает код более понятным и предотвращает ошибки 
+    при передаче параметров.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: неявные связи между параметрами
+void draw_rectangle(int x1, int y1, int x2, int y2);
+void set_user_info(int id, int age, int salary);
+
+// Легко перепутать порядок:
+draw_rectangle(10, 20, 30, 40);  // что есть что?
+set_user_info(25, 30, 50000);    // правильно?</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: явные связи через структуры
+struct Point { int x, y; };
+struct Rectangle { Point top_left, bottom_right; };
+void draw_rectangle(const Rectangle& rect);
+
+struct UserInfo { int id, age, salary; };
+void set_user_info(const UserInfo& info);
+
+// Использование:
+Rectangle rect{{10, 20}, {30, 40}};
+draw_rectangle(rect);  // понятно!
+
+UserInfo user{25, 30, 50000};
+set_user_info(user);  // невозможно перепутать</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.2: Используйте class, если класс имеет инвариант; используйте struct, если члены данных могут изменяться независимо</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Инвариант класса - это условие, которое всегда должно быть истинным для валидного объекта класса. Если класс имеет 
+    инвариант, используйте class с приватными членами. Если члены могут изменяться независимо, используйте struct.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: struct с инвариантом
+struct Date {
+    int year, month, day;  // все публичные
+};
+
+Date d{2024, 13, 32};  // невалидная дата, но компилятор не знает
+
+// Плохо: class без инварианта
+class Pair {
+private:
+    std::string name;  // зачем приватность?
+    int volume;        // если они независимы?
+public:
+    void set_name(const std::string& n) { name = n; }
+    void set_volume(int v) { volume = v; }
+};</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: struct для независимых данных
+struct Pair {
+    std::string name;   // могут изменяться независимо
+    int volume;
+};
+
+Pair p{"item", 10};
+p.name = "new_item";    // ОК
+p.volume = 20;          // ОК
+
+// Хорошо: class для данных с инвариантом
+class Date {
+    int year, month, day;  // приватные для поддержания инварианта
+public:
+    Date(int y, int m, int d) {
+        if (m < 1 || m > 12 || d < 1 || d > 31) {
+            throw std::invalid_argument("Invalid date");
+        }
+        year = y; month = m; day = d;
+    }
+    // методы для безопасного доступа
+};
+
+Date d{2024, 12, 25};  // валидная дата</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.20: Если можете избежать определения операций по умолчанию, делайте это</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Компилятор автоматически генерирует конструктор копирования, оператор присваивания, конструктор перемещения, оператор 
+    перемещения и деструктор, если они не определены. Если поведение по умолчанию подходит, не определяйте их явно.</p>
+    
+    <div class="success">
+        <strong>Правило нуля:</strong> Если все члены класса имеют все специальные функции, дальнейшая работа не нужна.
+    </div>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: ненужное определение операций
+class MyClass {
+    std::string name;
+    int value;
+public:
+    MyClass() = default;
+    MyClass(const MyClass& other) : name(other.name), value(other.value) {}
+    MyClass& operator=(const MyClass& other) {
+        name = other.name;
+        value = other.value;
+        return *this;
+    }
+    ~MyClass() {}  // пустой деструктор
+};</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: компилятор сгенерирует всё автоматически
+class MyClass {
+    std::string name;  // имеет все операции
+    int value;         // имеет все операции
+public:
+    // ничего не нужно определять!
+    // Компилятор сгенерирует:
+    // - конструктор по умолчанию
+    // - конструктор копирования
+    // - оператор присваивания
+    // - конструктор перемещения
+    // - оператор перемещения
+    // - деструктор
+};</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.21: Правило пяти</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Если вы определяете одну из специальных функций (деструктор, конструктор копирования, оператор присваивания, конструктор 
+    перемещения, оператор перемещения), вы должны определить или удалить все пять.</p>
+    
+    <div class="success">
+        <strong>Правило пяти:</strong> Если вы определяете одну из этих операций, определите или =delete все пять.
+    </div>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: определён только деструктор
+class Resource {
+    int* data;
+public:
+    Resource() : data(new int[100]) {}
+    ~Resource() { delete[] data; }  // определён деструктор
+    // но конструктор копирования и оператор присваивания
+    // сгенерированы компилятором - ОПАСНО!
+};
+
+Resource r1;
+Resource r2 = r1;  // копирование указателя!
+// При уничтожении - двойное удаление!</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: определён деструктор, удалены операции копирования
+class Resource {
+    int* data;
+public:
+    Resource() : data(new int[100]) {}
+    ~Resource() { delete[] data; }
+    
+    // Удаляем копирование (или определяем правильно)
+    Resource(const Resource&) = delete;
+    Resource& operator=(const Resource&) = delete;
+    
+    // Разрешаем перемещение
+    Resource(Resource&& other) noexcept : data(other.data) {
+        other.data = nullptr;
+    }
+    Resource& operator=(Resource&& other) noexcept {
+        if (this != &other) {
+            delete[] data;
+            data = other.data;
+            other.data = nullptr;
+        }
+        return *this;
+    }
+};
+
+// Или используем умный указатель (правило нуля)
+class ResourceGood {
+    std::unique_ptr&lt;int[]&gt; data;  // автоматическое управление
+public:
+    ResourceGood() : data(std::make_unique&lt;int[]&gt;(100)) {}
+    // всё остальное сгенерировано автоматически!
+};</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.30: Определите деструктор, если классу нужно явное действие при уничтожении объекта</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Деструктор вызывается автоматически при уничтожении объекта. Если нужно освободить ресурсы или выполнить другую очистку, 
+    определите деструктор.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: ресурс не освобождается
+class FileHandler {
+    FILE* file;
+public:
+    FileHandler(const char* name) {
+        file = fopen(name, "r");
+    }
+    // нет деструктора - утечка файлового дескриптора!
+};
+
+// Плохо: ненужный деструктор
+class SimpleData {
+    int value;
+public:
+    SimpleData(int v) : value(v) {}
+    ~SimpleData() {}  // пустой деструктор не нужен
+};</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: деструктор освобождает ресурс
+class FileHandler {
+    FILE* file;
+public:
+    FileHandler(const char* name) {
+        file = fopen(name, "r");
+        if (!file) throw std::runtime_error("Cannot open file");
+    }
+    ~FileHandler() {
+        if (file) {
+            fclose(file);  // освобождаем ресурс
+        }
+    }
+};
+
+// Хорошо: используем RAII (std::fstream)
+#include &lt;fstream&gt;
+class FileHandlerGood {
+    std::ifstream file;  // автоматически закрывается
+public:
+    FileHandlerGood(const std::string& name) : file(name) {
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot open file");
+        }
+    }
+    // деструктор не нужен - std::ifstream сам закроет файл
+};
+
+// Хорошо: простой класс без деструктора
+class SimpleData {
+    int value;
+public:
+    SimpleData(int v) : value(v) {}
+    // деструктор по умолчанию достаточен
+};</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.42: Если конструктор не может создать валидный объект, выбросьте исключение</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Конструктор должен создавать валидный объект. Если это невозможно, лучше выбросить исключение, чем создать невалидный объект.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: невалидный объект
+class Date {
+    int year, month, day;
+public:
+    Date(int y, int m, int d) {
+        year = y;
+        month = m;  // может быть 13!
+        day = d;    // может быть 32!
+    }
+    bool is_valid() const {
+        return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    }
+};
+
+Date d{2024, 13, 32};  // создан невалидный объект
+if (!d.is_valid()) {  // нужно проверять вручную
+    // ...
+}</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: конструктор гарантирует валидность
+class Date {
+    int year, month, day;
+public:
+    Date(int y, int m, int d) {
+        if (m < 1 || m > 12) {
+            throw std::invalid_argument("Invalid month");
+        }
+        if (d < 1 || d > 31) {
+            throw std::invalid_argument("Invalid day");
+        }
+        year = y;
+        month = m;
+        day = d;
+    }
+    // объект всегда валиден после конструктора
+};
+
+try {
+    Date d{2024, 12, 25};  // валидная дата
+    // можно использовать без проверок
+} catch (const std::invalid_argument& e) {
+    // обработали ошибку
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>C.10: Предпочитайте конкретные типы иерархиям классов</h2>
+    
+    <h4>Проблема/Контекст</h4>
+    <p>Конкретные типы (без виртуальных функций) проще, быстрее и понятнее, чем типы в иерархии классов. Используйте иерархии 
+    только когда нужен полиморфизм.</p>
+    
+    <div class="comparison">
+        <div class="bad">
+            <h4>❌ Как НЕ надо</h4>
+            <pre><code class="language-cpp">// Плохо: ненужная иерархия
+class Shape {
+public:
+    virtual ~Shape() = default;
+    virtual double area() const = 0;
+};
+
+class Circle : public Shape {
+    double radius;
+public:
+    Circle(double r) : radius(r) {}
+    double area() const override {
+        return 3.14159 * radius * radius;
+    }
+};
+
+// Использование только одного типа - зачем иерархия?
+Circle c{5.0};
+double a = c.area();</code></pre>
+        </div>
+        <div class="good">
+            <h4>✅ Как надо</h4>
+            <pre><code class="language-cpp">// Хорошо: конкретный тип
+class Circle {
+    double radius;
+public:
+    explicit Circle(double r) : radius(r) {
+        if (r < 0) throw std::invalid_argument("Radius must be positive");
+    }
+    double area() const {
+        return 3.14159 * radius * radius;
+    }
+    double get_radius() const { return radius; }
+};
+
+// Использование:
+Circle c{5.0};
+double a = c.area();  // быстрее, проще
+
+// Иерархия нужна только для полиморфизма:
+std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt; shapes;
+shapes.push_back(std::make_unique&lt;Circle&gt;(5.0));
+shapes.push_back(std::make_unique&lt;Rectangle&gt;(3.0, 4.0));
+for (auto& shape : shapes) {
+    std::cout << shape->area() << "\n";  // полиморфизм
+}</code></pre>
+        </div>
+    </div>
+
+    <hr>
+
+    <h2>Заключение</h2>
+    
+    <div class="note">
+        <h3>Ключевые принципы раздела C (Классы):</h3>
+        <ul>
+            <li><strong>Группировка данных:</strong> Связанные данные должны быть в структурах</li>
+            <li><strong>class vs struct:</strong> Используйте class для инвариантов, struct для независимых данных</li>
+            <li><strong>Правило нуля:</strong> Если можете избежать определения операций, делайте это</li>
+            <li><strong>Правило пяти:</strong> Если определяете одну операцию, определите все пять</li>
+            <li><strong>Валидные объекты:</strong> Конструктор должен создавать валидный объект</li>
+            <li><strong>Конкретные типы:</strong> Предпочитайте конкретные типы иерархиям</li>
+        </ul>
+    </div>
+
+    <hr>
+
+    <p><em>Конспект создан на основе C++ Core Guidelines. 
+    Полный документ: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines</a></em></p>
+
+    <script>hljs.highlightAll();</script>
+</body>
+</html>

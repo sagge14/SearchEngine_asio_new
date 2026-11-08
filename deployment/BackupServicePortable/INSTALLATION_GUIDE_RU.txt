@@ -1,0 +1,248 @@
+ИНСТРУКЦИЯ: ПЕРЕНОСИМАЯ УСТАНОВКА BACKUP SERVICE
+================================================
+
+Комплект: {{PACKAGE_NAME}}
+Архитектура: {{ARCHITECTURE}}
+Минимальная система: {{MINIMUM_WINDOWS}}
+Пакет VC++ Runtime: {{VC_REDIST_FILE}}
+
+1. ЧТО НУЖНО СКОПИРОВАТЬ
+------------------------
+
+Копируйте на носитель и на целевой компьютер всю папку {{PACKAGE_NAME}}.
+Отдельно взятый BAT или EXE работать не будет: установщик ищет все компоненты
+относительно собственной папки.
+
+{{PACKAGE_NAME}}
+|
+|-- Install-BackupService.bat       установка и переустановка
+|-- Stop-BackupService.bat          штатная остановка службы
+|-- Start-BackupService.bat         запуск службы
+|-- Restart-BackupService.bat       перезапуск службы
+|-- Uninstall-BackupService.bat     резервирование и полное удаление
+|-- Verify-Package.bat              проверка SHA-256
+|-- ServiceInstance.cmd             идентификатор экземпляра (default)
+|-- README.txt
+|-- INSTALLATION_GUIDE_RU.txt
+|-- package-manifest.json
+|-- package-checksums.sha256
+|
+|-- app
+|   `-- BackupService.exe           служба нужной архитектуры
+|
+|-- data
+|   |-- Backup.json                 экономный профиль AutoPad (Backup.economical)
+|   `-- logs                        начальный каталог логов
+|
+`-- prerequisites
+    `-- {{VC_REDIST_FILE}}          автономный Microsoft VC++ Runtime
+
+На машине сборки PowerShell используется только упаковщиком. На целевом
+компьютере все версии комплекта работают через BAT и штатные средства Windows.
+
+Firewall не настраивается: BackupService не слушает сеть.
+
+2. ЧТО СДЕЛАТЬ ДО ЗАПУСКА
+-------------------------
+
+1) Распаковать или скопировать комплект на локальный диск. Не запускать прямо
+   из архива и не копировать только отдельные файлы.
+2) Открыть data\Backup.json обычным текстовым редактором (UTF-8).
+3) Проверить backup_dir каждой группы — каталог назначения снимков.
+4) Проверить src каждого target — файлы и каталоги источников.
+5) Создать отсутствующие локальные каталоги назначения.
+6) Для сети указывать UNC-путь вида \\server\share, а не диск Z:.
+7) Запустить Install-BackupService.bat от имени администратора.
+
+Установщик копирует Backup.json в ProgramData как есть. Интерактивного
+редактора заданий нет: пути правятся вручную до установки.
+
+Проверка конфигурации без установки:
+
+  Install-BackupService.bat /validate
+
+или напрямую:
+
+  app\BackupService.exe --validate-config --config data\Backup.json --data-dir data
+
+Дополнительные флаги установщика:
+
+  /SkipVcRedist   не спрашивать и не запускать установщик VC++ Runtime
+                  (для автоматизации, когда runtime уже гарантирован).
+
+  Install-BackupService.bat /SkipVcRedist
+
+Без /SkipVcRedist на шаге Runtime установщик спрашивает: поставить packaged
+redistributable или пропустить. Если CRT уже доступен (BackupService.exe
+успешно загрузился), рекомендуется пропуск; иначе — установка.
+
+3. УСТАНОВКА
+------------
+
+Установщик:
+
+1) проверяет SHA-256 комплекта;
+2) вызывает BackupService.exe --validate-config;
+3) при leftover-папках без зарегистрированной службы предлагает удалить их
+   или отменить установку;
+4) обеспечивает VC++ Runtime best-effort: интерактивный вопрос или
+   /SkipVcRedist; при сбое quiet-установщика предлагает продолжить или
+   отменить;
+5) при переустановке: stop → wait STOPPED → wait PID → экспорт настроек/логов
+   → move в rollback → копирование → sc create/config → start → RUNNING →
+   удаление rollback;
+6) копирует программу в Program Files\SearchEngineBackupService\bin;
+7) копирует данные в C:\ProgramData\SearchEngineBackupService;
+8) регистрирует службу SearchEngineBackupService (delayed-auto, recovery,
+   PreshutdownTimeout 30 мин);
+9) запускает службу и ждёт состояния RUNNING до 120 с.
+
+Force-stop процесса предлагается только после таймаута 120 с и только по
+явному выбору оператора.
+
+Учётная запись по умолчанию — LocalSystem. Для UNC-путей после установки
+смените учётную запись службы в services.msc на доменную/служебную с правами
+на сеть, src и backup_dir.
+
+4. РАСПОЛОЖЕНИЕ ФАЙЛОВ ПОСЛЕ УСТАНОВКИ
+--------------------------------------
+
+Program Files\SearchEngineBackupService\
+  bin\BackupService.exe
+  README.txt
+  INSTALLATION_GUIDE_RU.txt
+  ServiceInstance.cmd
+
+C:\ProgramData\SearchEngineBackupService\
+  Backup.json
+  logs\
+
+Снимки и mirror history создаются в backup_dir из Backup.json и не являются
+частью ProgramData.
+
+5. УПРАВЛЕНИЕ
+-------------
+
+  Stop-BackupService.bat
+  Start-BackupService.bat
+  Restart-BackupService.bat
+  Uninstall-BackupService.bat
+  sc query SearchEngineBackupService
+
+Stop-BackupService.bat и Start-BackupService.bat — штатная пара остановки и
+последующего запуска Windows-службы. Это не Pause/Continue: служба их не
+поддерживает. После Stop → Start создаётся новый процесс BackupService, и
+BackupServiceApplication::configure() заново читает рабочий
+C:\ProgramData\SearchEngineBackupService\Backup.json. Отдельной доработки C++
+для перезагрузки конфигурации не требуется.
+
+Редактируйте установленный Backup.json в ProgramData. Изменение
+data\Backup.json внутри исходного portable-комплекта не изменяет уже
+установленную службу.
+
+Режимы остановки Stop / Restart / Uninstall:
+
+  [1] Graceful (по умолчанию, рекомендуется)
+      Штатный STOP: служба запрещает новые задания, отменяет таймеры и
+      дожидается завершения уже выполняющегося BackupEngine::runOnce().
+      Скрипт ждёт STOPPED до 1800 секунд и не вызывает taskkill.
+
+  [2] Immediate
+      Сначала обычный STOP (прекращение планирования), короткая пауза
+      (2 секунды), затем при необходимости принудительное завершение только
+      повторно проверенного PID выбранного экземпляра.
+      Не используется taskkill /IM BackupService.exe.
+      ВНИМАНИЕ: текущий backup будет прерван. Незавершённый staging
+      (.partial_*) может остаться до следующего запуска службы, который
+      очищает такие каталоги. Опубликованные snapshots, cache и конфигурация
+      не удаляются.
+
+  [0] Отмена — состояние службы не меняется.
+
+Аргументы командной строки: graceful или immediate. Без аргумента в
+неинтерактивной среде выбирается Graceful. Enter в меню тоже выбирает
+Graceful.
+
+Остановка из services.msc, а также SERVICE_CONTROL_SHUTDOWN /
+SERVICE_CONTROL_PRESHUTDOWN всегда выполняют Graceful внутри службы.
+Интерактивный выбор режима есть только в пользовательских скриптах
+управления (служба работает в Session 0 и не показывает диалоги).
+
+Примеры:
+
+  Stop-BackupService.bat
+  Stop-BackupService.bat graceful
+  Stop-BackupService.bat immediate
+  Stop-BackupService.bat myinstance graceful
+  Restart-BackupService.bat immediate
+  Uninstall-BackupService.bat graceful
+
+Эквиваленты PowerShell (на машине разработчика):
+
+  Stop-BackupService.ps1 -InstanceId default -StopMode Graceful
+  Stop-BackupService.ps1 -InstanceId default -StopMode Immediate
+
+Stop-BackupService.bat:
+
+- требует права администратора;
+- в Graceful ждёт штатный STOPPED до 1800 секунд;
+- в Immediate после STOP может завершить только дважды проверенный PID;
+- если служба уже STOPPED — завершается успешно.
+
+Start-BackupService.bat:
+
+- требует права администратора;
+- если служба уже RUNNING — завершается успешно;
+- при STOP_PENDING ждёт STOPPED, затем запускает службу;
+- сообщает путь к установленному Backup.json, а не к шаблону комплекта.
+
+Restart-BackupService.bat применяет выбранный StopMode и не запускает новый
+процесс, пока прежний PID ещё существует.
+
+Остановленная служба с Automatic / Delayed Start снова запустится после
+перезагрузки Windows. Stop предназначен для временной остановки. Для
+долговременного отключения отдельно переведите Startup Type в Manual или
+Disabled — скрипты Stop/Start это автоматически не делают.
+
+Идентификатор экземпляра берётся из ServiceInstance.cmd или первого аргумента
+(если это не graceful/immediate):
+
+  Stop-BackupService.bat
+  Start-BackupService.bat
+  Stop-BackupService.bat myinstance
+  Start-BackupService.bat myinstance
+
+Разовый прогон без службы (после установки):
+
+  "C:\Program Files\SearchEngineBackupService\bin\BackupService.exe" --once ^
+    --config "C:\ProgramData\SearchEngineBackupService\Backup.json" ^
+    --data-dir "C:\ProgramData\SearchEngineBackupService"
+
+6. УДАЛЕНИЕ
+-----------
+
+Uninstall-BackupService.bat:
+
+1) пишет diagnostic log в %TEMP%\SearchEngineBackupService-Uninstall-last.log;
+2) предлагает архив настроек и логов;
+3) выбирает StopMode (Graceful/Immediate) и останавливает службу
+   (STOPPED + выход PID);
+4) удаляет Program Files и ProgramData с повторными попытками;
+5) удаляет orphaned rollback-каталоги;
+6) только затем снимает регистрацию службы (с ожиданием исчезновения ключа
+   реестра);
+7) ждёт нажатия 0 перед закрытием окна.
+
+Каталоги backup_dir (снимки, кэш, история) не удаляются — их нужно чистить
+отдельно при необходимости.
+
+7. ЗАМЕЧАНИЯ
+------------
+
+- Не запускайте одновременно economical/Backup.all и перекрывающие их
+  Backup.databases.json / Backup.programs.json на одних и тех же путях.
+- Mapped drive letters службой не видны; установщик отклоняет такие пути.
+- Классический snapshot-профиль Backup.all.json можно подставить при сборке:
+  -ConfigPath tools\backup\configs\autopad\Backup.all.json
+- Пути Program Files (x86) обрабатываются через отдельные goto-ветки, без
+  скобок внутри if (...).
