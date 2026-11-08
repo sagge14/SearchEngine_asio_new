@@ -9,6 +9,8 @@
   built x86 SearchEngineService portable package, generates a v3 stand,
   verifies it, writes release metadata/checksums, and optionally publishes a
   ZIP to the dedicated SearchEngineArchiveE2EStand release channel.
+  -SkipBuild -SkipVersionBump reuses the existing version-checked generator
+  without configuring, compiling, or synchronizing version resources.
 #>
 [CmdletBinding()]
 param(
@@ -32,12 +34,16 @@ param(
     [string]$CloudReleaseId,
     [switch]$SkipCloudPublish,
     [switch]$SkipConfigure,
+    [switch]$SkipBuild,
     [switch]$SkipVersionBump,
     [switch]$AllowDirtySource
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($SkipBuild -and -not $SkipVersionBump) {
+    throw '-SkipBuild requires -SkipVersionBump: existing stand binaries cannot acquire a new PE version.'
+}
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'AppVersion.ps1')
@@ -423,10 +429,15 @@ try {
         )
     }
 
-    $versionInfo = Sync-SearchEngineAppVersion `
-        -ProjectRoot $projectRoot `
-        -ProductName $productName `
-        -BumpPatch:(-not $SkipVersionBump)
+    if ($SkipBuild) {
+        $versionInfo = $currentVersion
+        Write-Host 'Package-only mode: reusing the existing stand generator without version sync or compilation.'
+    } else {
+        $versionInfo = Sync-SearchEngineAppVersion `
+            -ProjectRoot $projectRoot `
+            -ProductName $productName `
+            -BumpPatch:(-not $SkipVersionBump)
+    }
     if ($versionInfo.Version -ne $plannedVersion) {
         throw (
             "Stand version changed during release: planned '$plannedVersion', " +
@@ -434,25 +445,27 @@ try {
         )
     }
 
-    Push-Location $projectRoot
-    try {
-        if (-not $SkipConfigure) {
-            & cmake --preset $configurePreset
+    if (-not $SkipBuild) {
+        Push-Location $projectRoot
+        try {
+            if (-not $SkipConfigure) {
+                & cmake --preset $configurePreset
+                if ($LASTEXITCODE -ne 0) {
+                    throw "CMake configure '$configurePreset' failed with exit code $LASTEXITCODE."
+                }
+            }
+            & cmake --build --preset $buildPreset `
+                --target SearchEngineArchiveE2EStand -- /m
             if ($LASTEXITCODE -ne 0) {
-                throw "CMake configure '$configurePreset' failed with exit code $LASTEXITCODE."
+                throw (
+                    'SearchEngineArchiveE2EStand Windows 7 x86 Release build failed ' +
+                    "with exit code $LASTEXITCODE."
+                )
             }
         }
-        & cmake --build --preset $buildPreset `
-            --target SearchEngineArchiveE2EStand -- /m
-        if ($LASTEXITCODE -ne 0) {
-            throw (
-                'SearchEngineArchiveE2EStand Windows 7 x86 Release build failed ' +
-                "with exit code $LASTEXITCODE."
-            )
+        finally {
+            Pop-Location
         }
-    }
-    finally {
-        Pop-Location
     }
 
     $helperPath = Resolve-RequiredFile `
@@ -514,6 +527,7 @@ try {
         createdUtc = (Get-Date).ToUniversalTime().ToString('o')
         sourceCommit = $sourceCommit
         sourceDirtyBeforeRelease = $sourceDirtyBeforeRelease
+        reusedStandBinary = [bool]$SkipBuild
     }
     [IO.File]::WriteAllText(
         (Join-Path $OutputDirectory 'stand-release.json'),

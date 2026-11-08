@@ -1,0 +1,757 @@
+{
+  "date": "2026-10-17",
+  "product": "SearchEngineService",
+  "target_version": "0.1.96",
+  "html_pages": 21,
+  "quick_pages": 8,
+  "tutorial_files": 22,
+  "reachable_pages": 21,
+  "links_and_anchors_checked": 249,
+  "markdown_links_checked": 52,
+  "json_examples": 10,
+  "server_parameters": 34,
+  "offline_copy_byte_for_byte": true,
+  "offline_copy": "C:\\Users\\user\\.codex\\visualizations\\2026\\10\\10\\01a12697-d8e3-7ee2-9932-5a1e24c8e65e\\Переработка-2026-10-16\\Офлайн с кириллицей и пробелами\\SearchEngineService\\tutorials",
+  "checksums": {
+    "00_Все_руководства.html": "4119e9535cb3e67b070a8567f8e227f86bd7b12f6087a8b6b3345ffc1f276a1e",
+    "Оформление.css": "01cedf811c63d68f8a94dc070a0e910cc66fca7b48f10c549440bc719b48af25",
+    "Батники/Батники_серверного_пакета.html": "061f9c6632634e93e88f2c0d892b84f6b7a75f130d6c18fb079bb04457798e0d",
+    "Батники/Запущенные_службы_и_порты.html": "cc1233a9a1e854b61db4e1e204935e841c23b693317da3527b4272bcefce7bbc",
+    "Батники/Установка_обновление_и_удаление.html": "2912e791dbb673f69326a682d4dbb69d70b6478b3ff10598c4f9d23d28a7d4f9",
+    "Быстрые_действия/Вернуть_сервер_из_архива.html": "7e221650b212ea11285263db425486490982093c67455586db1c8956c002d952",
+    "Быстрые_действия/Изменить_настройки.html": "e2f2b483da5b941a4295ee8f83c256fa9ff238547bf6115d1440620edc6bc41b",
+    "Быстрые_действия/Обновить_сервер.html": "aff66a9ab809abea9bd265254e05f2ea3167153e32ce8b391a7385c3f7521d50",
+    "Быстрые_действия/Перенести_год_в_архив.html": "900509db57258447d35c27943fe57718151eecd2b4659c457124960da7968168",
+    "Быстрые_действия/Подключить_дополнительный_ПК.html": "79b3453dfca72e78f6f841a3fcd5561700381015b2e33102a18b40540e8a59e4",
+    "Быстрые_действия/Проверить_и_перезапустить_сервер.html": "e63d55d1fdaee295918dbbfce2086668d68bff570905431c4880f9f81787041e",
+    "Быстрые_действия/Удалить_сервер.html": "4bb3f566c8a67edfa088bc9c606256e008aca729afbc30dbae41d477fa3eb0e9",
+    "Быстрые_действия/Установить_сервер.html": "c50c692449d6ca81ab36c930d416054cf0afa3e0735dcdb2830dd3ab178538fd",
+    "Настройки/Настройки_сервера.html": "e79d8fbb474e6a25890f1137e83e22ccb4cd97b7440bbc94ce422d82f5a51266",
+    "Настройки/Связанные_файлы_и_доступ.html": "777fe40a814d42bf857d367419bf0748c4395d7b95a95a7bfb3950b107286a6f",
+    "Настройки/Совместимость_старых_настроек.html": "d382616ca70a9cb09f87bfc486b23ee5c84a1af7f85d5265a5202ab1eaff3cd4",
+    "Подробные_руководства/Заморозка_и_архивация_сервера.html": "a52c044250755b92d81a42939aa6ab0492c1a3ad56a3ffbe8b67332953c1e976",
+    "Подробные_руководства/Общий_доступ_к_серверам.html": "863116ffd13e15c246c4831336edcd327816ebbe6722941cb263b138d0f22391",
+    "Подробные_руководства/Примеры_настройки_сервера.html": "2fca8f5a5e375368c57da083c352b32b290e8b2eceb501ae1485a2c93b8ace48",
+    "Подробные_руководства/Разморозка_сервера.html": "e3f48b05cece6fca61b7373beb6143bc3e6a013360cec597e41f3b021c888806",
+    "Подробные_руководства/Токен_удалённого_ПК.html": "d5778d2ff73eea1510bd349f9fe48a25b341fce9120c7f64767dab7e206d94f9",
+    "Подробные_руководства/Утрачен_пароль_ключа_издателя.html": "ba427489d8bdfff38a914ec5a7a9497caeb339136b90527bcdf199736e13a5ee"
+  },
+  "page_metrics": [
+    {
+      "file": "00_Все_руководства.html",
+      "words": 325,
+      "ordered_steps": [],
+      "quick": false,
+      "longest_paragraph_words": 40
+    },
+    {
+      "file": "Батники/Батники_серверного_пакета.html",
+      "words": 1396,
+      "ordered_steps": [
+        5,
+        5
+      ],
+      "quick": false,
+      "longest_paragraph_words": 44
+    },
+    {
+      "file": "Батники/Запущенные_службы_и_порты.html",
+      "words": 275,
+      "ordered_steps": [
+        4
+      ],
+      "quick": false,
+      "longest_paragraph_words": 32
+    },
+    {
+      "file": "Батники/Установка_обновление_и_удаление.html",
+      "words": 1270,
+      "ordered_steps": [
+        6
+      ],
+      "quick": false,
+      "longest_paragraph_words": 93
+    },
+    {
+      "file": "Быстрые_действия/Вернуть_сервер_из_архива.html",
+      "words": 337,
+      "ordered_steps": [
+        7
+      ],
+      "quick": true,
+      "longest_paragraph_words": 30
+    },
+    {
+      "file": "Быстрые_действия/Изменить_настройки.html",
+      "words": 187,
+      "ordered_steps": [
+        6
+      ],
+      "quick": true,
+      "longest_paragraph_words": 34
+    },
+    {
+      "file": "Быстрые_действия/Обновить_сервер.html",
+      "words": 277,
+      "ordered_steps": [
+        7
+      ],
+      "quick": true,
+      "longest_paragraph_words": 33
+    },
+    {
+      "file": "Быстрые_действия/Перенести_год_в_архив.html",
+      "words": 321,
+      "ordered_steps": [
+        7
+      ],
+      "quick": true,
+      "longest_paragraph_words": 35
+    },
+    {
+      "file": "Быстрые_действия/Подключить_дополнительный_ПК.html",
+      "words": 283,
+      "ordered_steps": [
+        6
+      ],
+      "quick": true,
+      "longest_paragraph_words": 37
+    },
+    {
+      "file": "Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+      "words": 216,
+      "ordered_steps": [
+        6
+      ],
+      "quick": true,
+      "longest_paragraph_words": 36
+    },
+    {
+      "file": "Быстрые_действия/Удалить_сервер.html",
+      "words": 227,
+      "ordered_steps": [
+        6
+      ],
+      "quick": true,
+      "longest_paragraph_words": 23
+    },
+    {
+      "file": "Быстрые_действия/Установить_сервер.html",
+      "words": 223,
+      "ordered_steps": [
+        6
+      ],
+      "quick": true,
+      "longest_paragraph_words": 29
+    },
+    {
+      "file": "Настройки/Настройки_сервера.html",
+      "words": 1918,
+      "ordered_steps": [
+        4
+      ],
+      "quick": false,
+      "longest_paragraph_words": 50
+    },
+    {
+      "file": "Настройки/Связанные_файлы_и_доступ.html",
+      "words": 744,
+      "ordered_steps": [],
+      "quick": false,
+      "longest_paragraph_words": 55
+    },
+    {
+      "file": "Настройки/Совместимость_старых_настроек.html",
+      "words": 383,
+      "ordered_steps": [
+        4
+      ],
+      "quick": false,
+      "longest_paragraph_words": 51
+    },
+    {
+      "file": "Подробные_руководства/Заморозка_и_архивация_сервера.html",
+      "words": 2354,
+      "ordered_steps": [
+        6,
+        3,
+        3,
+        2,
+        6,
+        5
+      ],
+      "quick": false,
+      "longest_paragraph_words": 78
+    },
+    {
+      "file": "Подробные_руководства/Общий_доступ_к_серверам.html",
+      "words": 1046,
+      "ordered_steps": [
+        7
+      ],
+      "quick": false,
+      "longest_paragraph_words": 60
+    },
+    {
+      "file": "Подробные_руководства/Примеры_настройки_сервера.html",
+      "words": 581,
+      "ordered_steps": [],
+      "quick": false,
+      "longest_paragraph_words": 51
+    },
+    {
+      "file": "Подробные_руководства/Разморозка_сервера.html",
+      "words": 1824,
+      "ordered_steps": [
+        5,
+        5,
+        6,
+        6
+      ],
+      "quick": false,
+      "longest_paragraph_words": 53
+    },
+    {
+      "file": "Подробные_руководства/Токен_удалённого_ПК.html",
+      "words": 693,
+      "ordered_steps": [
+        5,
+        7,
+        5,
+        3
+      ],
+      "quick": false,
+      "longest_paragraph_words": 62
+    },
+    {
+      "file": "Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+      "words": 920,
+      "ordered_steps": [
+        5,
+        4,
+        4,
+        4
+      ],
+      "quick": false,
+      "longest_paragraph_words": 49
+    }
+  ],
+  "errors": [],
+  "static_status": "passed",
+  "application_workflows_run": false,
+  "browser_views": [
+    {
+      "file": "00_Все_руководства.html",
+      "width": 1100,
+      "h1": "Все руководства SearchEngineService",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "00_Все_руководства.html",
+      "width": 390,
+      "h1": "Все руководства SearchEngineService",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Батники_серверного_пакета.html",
+      "width": 1100,
+      "h1": "Батники серверного пакета",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 3041.984375,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Батники_серверного_пакета.html",
+      "width": 390,
+      "h1": "Батники серверного пакета",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 5132.21875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Запущенные_службы_и_порты.html",
+      "width": 1100,
+      "h1": "Запущенные службы SearchEngine: годы и порты",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 375.421875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Запущенные_службы_и_порты.html",
+      "width": 390,
+      "h1": "Запущенные службы SearchEngine: годы и порты",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 510.828125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Установка_обновление_и_удаление.html",
+      "width": 1100,
+      "h1": "Установка, обновление и удаление серверной службы",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 2032.921875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Батники/Установка_обновление_и_удаление.html",
+      "width": 390,
+      "h1": "Установка, обновление и удаление серверной службы",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 3867.0625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Вернуть_сервер_из_архива.html",
+      "width": 1100,
+      "h1": "Вернуть сервер из архива",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 647.03125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Вернуть_сервер_из_архива.html",
+      "width": 390,
+      "h1": "Вернуть сервер из архива",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1079.40625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Изменить_настройки.html",
+      "width": 1100,
+      "h1": "Изменить настройки сервера",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 499.875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Изменить_настройки.html",
+      "width": 390,
+      "h1": "Изменить настройки сервера",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 650.71875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Обновить_сервер.html",
+      "width": 1100,
+      "h1": "Обновить сервер",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 525.46875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Обновить_сервер.html",
+      "width": 390,
+      "h1": "Обновить сервер",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 804.28125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Перенести_год_в_архив.html",
+      "width": 1100,
+      "h1": "Перенести год в архив",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 672.625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Перенести_год_в_архив.html",
+      "width": 390,
+      "h1": "Перенести год в архив",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1079.40625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Подключить_дополнительный_ПК.html",
+      "width": 1100,
+      "h1": "Подключить дополнительный ПК",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 499.875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Подключить_дополнительный_ПК.html",
+      "width": 390,
+      "h1": "Подключить дополнительный ПК",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 757.5,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+      "width": 1100,
+      "h1": "Проверить и перезапустить сервер",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 403.90625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Проверить_и_перезапустить_сервер.html",
+      "width": 390,
+      "h1": "Проверить и перезапустить сервер",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 507.96875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Удалить_сервер.html",
+      "width": 1100,
+      "h1": "Удалить сервер",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 474.28125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Удалить_сервер.html",
+      "width": 390,
+      "h1": "Удалить сервер",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 650.71875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Установить_сервер.html",
+      "width": 1100,
+      "h1": "Установить сервер",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 499.875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Быстрые_действия/Установить_сервер.html",
+      "width": 390,
+      "h1": "Установить сервер",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 676.3125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Настройки_сервера.html",
+      "width": 1100,
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 717.3125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Настройки_сервера.html",
+      "width": 390,
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 852.71875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Связанные_файлы_и_доступ.html",
+      "width": 1100,
+      "h1": "Файлы данных, доступ и связанные настройки",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Связанные_файлы_и_доступ.html",
+      "width": 390,
+      "h1": "Файлы данных, доступ и связанные настройки",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Совместимость_старых_настроек.html",
+      "width": 1100,
+      "h1": "Совместимость старых настроек и приоритет значений",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1486.203125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Настройки/Совместимость_старых_настроек.html",
+      "width": 390,
+      "h1": "Совместимость старых настроек и приоритет значений",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 2449.21875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Заморозка_и_архивация_сервера.html",
+      "width": 1100,
+      "h1": "Заморозка сервера и перенос года в архив",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1262.0625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Заморозка_и_архивация_сервера.html",
+      "width": 390,
+      "h1": "Заморозка сервера и перенос года в архив",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1980.375,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Общий_доступ_к_серверам.html",
+      "width": 1100,
+      "h1": "Общий доступ к нескольким серверам",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1054.25,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Общий_доступ_к_серверам.html",
+      "width": 390,
+      "h1": "Общий доступ к нескольким серверам",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1894.78125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Примеры_настройки_сервера.html",
+      "width": 1100,
+      "h1": "Практические примеры настройки сервера",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Примеры_настройки_сервера.html",
+      "width": 390,
+      "h1": "Практические примеры настройки сервера",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": null,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Разморозка_сервера.html",
+      "width": 1100,
+      "h1": "Разморозка сервера и возврат из архива",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 736.890625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Разморозка_сервера.html",
+      "width": 390,
+      "h1": "Разморозка сервера и возврат из архива",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 979.796875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Токен_удалённого_ПК.html",
+      "width": 1100,
+      "h1": "ПК-токен для удалённого компьютера",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 534.1875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Токен_удалённого_ПК.html",
+      "width": 390,
+      "h1": "ПК-токен для удалённого компьютера",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 951.125,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+      "width": 1100,
+      "h1": "Утрачен пароль ключа издателя",
+      "viewport": 1100,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 731.421875,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    },
+    {
+      "file": "Подробные_руководства/Утрачен_пароль_ключа_издателя.html",
+      "width": 390,
+      "h1": "Утрачен пароль ключа издателя",
+      "viewport": 390,
+      "scrollY": 0,
+      "stylesheets": 1,
+      "firstStepTop": 1360.015625,
+      "hiddenContent": 0,
+      "externalAssets": 0
+    }
+  ],
+  "browser_errors": [],
+  "readability_notes": [
+    {
+      "file": "Быстрые_действия/Вернуть_сервер_из_архива.html",
+      "width": 390,
+      "firstStepTop": 1079.40625,
+      "note": "Before actions the page shows necessary prerequisites and visible warnings; scrolling is required on the narrow screen."
+    },
+    {
+      "file": "Быстрые_действия/Обновить_сервер.html",
+      "width": 390,
+      "firstStepTop": 804.28125,
+      "note": "Before actions the page shows necessary prerequisites and visible warnings; scrolling is required on the narrow screen."
+    },
+    {
+      "file": "Быстрые_действия/Перенести_год_в_архив.html",
+      "width": 390,
+      "firstStepTop": 1079.40625,
+      "note": "Before actions the page shows necessary prerequisites and visible warnings; scrolling is required on the narrow screen."
+    }
+  ],
+  "print_samples": [
+    "SearchEngineService-Печать-Удалить_сервер.pdf",
+    "SearchEngineService-Печать-Настройки_сервера.pdf",
+    "SearchEngineService-Печать-Батники_серверного_пакета.pdf"
+  ],
+  "offline_browser_status": "passed",
+  "print_render_samples": [
+    {
+      "file": "SearchEngineService-Печать-Батники_серверного_пакета.pdf",
+      "pages": 5,
+      "rendered_pages": 5,
+      "text_not_empty": true
+    },
+    {
+      "file": "SearchEngineService-Печать-Настройки_сервера.pdf",
+      "pages": 9,
+      "rendered_pages": 9,
+      "text_not_empty": true
+    },
+    {
+      "file": "SearchEngineService-Печать-Удалить_сервер.pdf",
+      "pages": 1,
+      "rendered_pages": 1,
+      "text_not_empty": true
+    }
+  ],
+  "print_render_status": "passed",
+  "manual_screen_review_status": "passed",
+  "manual_print_review_status": "passed",
+  "manual_review_notes": "Просмотрены оглавления, короткие инструкции, настройки и BAT на обычном и узком экранах; проверены все 16 страниц четырёх печатных образцов. Обрезанного текста и скрытых предупреждений нет. После уточнения версии клиента повторены проверки и печать."
+}

@@ -335,13 +335,13 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
              options.root / L"content" / L"JANUARY" / L"126001001",
              options.root / L"content" / L"TLG" / L"226001001.ATL"})
     {
-        const std::string text = readTextFile(telegram);
-        EXPECT_NE(text.find(" CODE = "), std::string::npos);
+        const std::string text = encoding::oem866_to_utf8(readTextFile(telegram));
+        EXPECT_NE(text.find(" КОД = "), std::string::npos);
         EXPECT_NE(
-            text.find(" DIGITAL = 3141592653 "),
+            text.find(" ЦИФРЫ = 3141592653 "),
             std::string::npos);
-        EXPECT_EQ(text.find("CODE="), std::string::npos);
-        EXPECT_EQ(text.find("DIGITAL="), std::string::npos);
+        EXPECT_EQ(text.find("КОД="), std::string::npos);
+        EXPECT_EQ(text.find("ЦИФРЫ="), std::string::npos);
     }
 
     for (int month = 1; month <= 12; ++month) {
@@ -372,6 +372,27 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
                     database,
                     "SELECT COUNT(DISTINCT CAST(Lists AS INTEGER)) FROM ARCHIVE"),
                 9);
+            const bool prm = database.parent_path().parent_path().filename() == L"PRM";
+            const std::string operatorColumn = prm ? "Familia" : "Copyes";
+            const std::string cityColumn = prm ? "FFrom" : "FFrom1";
+            const std::string summaryColumn = prm ? "PrilName1" : "FFrom5";
+            for (const auto& column : {operatorColumn, cityColumn, summaryColumn}) {
+                SCOPED_TRACE(column);
+                EXPECT_EQ(sqliteScalarInt(database, (
+                    "SELECT COUNT(DISTINCT " + column + ") FROM ARCHIVE").c_str()), 10);
+                EXPECT_EQ(sqliteScalarInt(database, (
+                    "SELECT COUNT(*) FROM ARCHIVE WHERE " + column + " IS NULL OR " +
+                    column + "='' OR " + column + " NOT GLOB '*[А-Яа-яЁё]*' OR " + column +
+                    " GLOB '*[A-Za-z]*' OR " + column +
+                    " GLOB '*TEST*' OR " + column + " GLOB '*SYNTHETIC*' OR " +
+                    column + " GLOB '*UNIQUE-SUMMARY*'").c_str()), 0);
+            }
+            EXPECT_EQ(sqliteScalarInt(database,
+                "SELECT COUNT(DISTINCT PodpNo) FROM ARCHIVE"), 10);
+            EXPECT_EQ(sqliteScalarInt(database,
+                "SELECT COUNT(*) FROM ARCHIVE WHERE PodpNo GLOB '123/[0-9][0-9][0-9]'"), 5);
+            EXPECT_EQ(sqliteScalarInt(database,
+                "SELECT COUNT(*) FROM ARCHIVE WHERE PodpNo GLOB '254/[0-9][0-9][0-9]'"), 5);
         }
         const fs::path prmDatabase =
             options.root / L"autopad" / L"PRM" / L"METH_BASES" /
@@ -402,6 +423,19 @@ TEST(ArchiveE2EStand, GeneratesAndVerifiesCompleteSyntheticYear)
     EXPECT_TRUE(fs::is_regular_file(
         options.root / L"server" / L"data" / L"Settings.json"));
     EXPECT_FALSE(fs::exists(options.root / L"content" / L"autopad"));
+    const std::string reply = encoding::oem866_to_utf8(readTextFile(
+        options.root / L"content" / L"TLG" / L"226001002.ATL"));
+    EXPECT_NE(reply.find("Подписной номер: 254/001 от 02.01.2026"), std::string::npos);
+    EXPECT_NE(reply.find("В ответ на указание ВХ № 123/001 от 01.01.2026"),
+              std::string::npos);
+    const std::string followup = encoding::oem866_to_utf8(readTextFile(
+        options.root / L"content" / L"TLG" / L"226001004.ATL"));
+    EXPECT_NE(followup.find("В дополнение к письму ВХ № 254/001 от 02.01.2026"),
+              std::string::npos);
+    const std::string february = encoding::oem866_to_utf8(readTextFile(
+        options.root / L"content" / L"FEBRUARY" / L"126002001"));
+    EXPECT_NE(february.find("Во исполнение указания ИСХ № 123/001 от 01.01.2026"),
+              std::string::npos);
     EXPECT_TRUE(fs::is_regular_file(
         options.root / L"content" / L"JANUARY" / L"126001001"));
     EXPECT_TRUE(fs::is_regular_file(
@@ -461,9 +495,9 @@ TEST(ArchiveE2EStand, DetectsUnspacedSyntheticTelegramFields)
     const fs::path telegram =
         options.root / L"content" / L"JANUARY" / L"126001001";
     std::string text = readTextFile(telegram);
-    const std::size_t position = text.find(" CODE = ");
+    const std::size_t position = text.find(" = ");
     ASSERT_NE(position, std::string::npos);
-    text.erase(position + 5, 1);
+    text.erase(position, 1);
     writeFile(telegram, text);
 
     EXPECT_THROW(
@@ -529,6 +563,24 @@ TEST(ArchiveE2EStand, GeneratesLegacyRestorableServiceArchiveV3)
     EXPECT_TRUE(fs::is_regular_file(
         options.stand.root / L"tools" /
         L"SearchEngineArchiveE2EStand.exe"));
+    const fs::path index = options.stand.root / L"server" / L"data" /
+        L"inverted_index.sqlite";
+    EXPECT_EQ(sqliteScalarInt(index,
+        "SELECT COUNT(*) FROM postings p JOIN words w USING(word_id) "
+        "WHERE p.doc_id=226001002 AND w.word IN ('254/001','123/001')"), 2);
+    EXPECT_EQ(sqliteScalarInt(index,
+        "SELECT COUNT(*) FROM postings p JOIN words w USING(word_id) "
+        "WHERE p.doc_id=126002001 AND w.word='123/001' AND p.cnt=1"), 1);
+    EXPECT_EQ(sqliteScalarInt(index,
+        "SELECT COUNT(*) FROM postings p JOIN words w USING(word_id) "
+        "WHERE p.doc_id=226001002 AND w.word='123/002'"), 0);
+    // Words use the same uppercase OEM866 bytes as the production index.
+    EXPECT_EQ(sqliteScalarInt(index,
+        "SELECT COUNT(*) FROM postings p JOIN words w USING(word_id) "
+        "WHERE p.doc_id=226001002 AND hex(w.word)='8E92828592'"), 1); // ОТВЕТ
+    EXPECT_EQ(sqliteScalarInt(index,
+        "SELECT COUNT(*) FROM postings p JOIN words w USING(word_id) "
+        "WHERE p.doc_id=226001002 AND hex(w.word)='8F908E8285908A80'"), 1); // ПРОВЕРКА
 
     const std::string activation = readTextFile(
         options.stand.root / L"Activate-Archived-Stand.bat");

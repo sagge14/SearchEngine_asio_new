@@ -33,6 +33,18 @@ function Assert-Equal($Expected, $Actual, [string]$Message) {
 
 Write-Host '=== Archive E2E stand release boundary tests ==='
 
+$standVersionPath = Join-Path $projectRoot 'app-version.SearchEngineArchiveE2EStand.json'
+$versionHashBefore = (Get-FileHash -LiteralPath $standVersionPath).Hash
+$skipBuildRejected = $false
+try {
+    & $releaseScript -SkipBuild -SkipCloudPublish
+} catch {
+    $skipBuildRejected = $_.Exception.Message.Contains('-SkipBuild requires -SkipVersionBump')
+}
+Assert-True $skipBuildRejected 'package-only mode rejects a version bump before any release work'
+Assert-Equal $versionHashBefore (Get-FileHash -LiteralPath $standVersionPath).Hash `
+    'rejected package-only invocation preserves the version manifest'
+
 $tokens = $null
 $parseErrors = $null
 [Management.Automation.Language.Parser]::ParseFile(

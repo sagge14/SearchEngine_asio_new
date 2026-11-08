@@ -1,0 +1,198 @@
+{
+  "date": "2026-10-17",
+  "product": "SearchEngineService",
+  "version": "0.1.96",
+  "packages": [
+    {
+      "package": "out/package/0.1.96/SearchEngineService-x64",
+      "html_pages": 21,
+      "tutorial_files": 22,
+      "local_links_and_anchors_checked": 249,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "tutorial_role_passed": true,
+      "protected_package_files": 68,
+      "checksum_records": 68,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x64-0.1.96.zip",
+      "cloud_zip_sha256": "66c5a1396542f19a6d9e567bf635fe4ed2568ebecf5e1fa5471cc22eec8508f9",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true,
+      "cloud_full_payload_byte_for_byte": true
+    },
+    {
+      "package": "out/package/0.1.96/SearchEngineService-x86",
+      "html_pages": 21,
+      "tutorial_files": 22,
+      "local_links_and_anchors_checked": 249,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "tutorial_role_passed": true,
+      "protected_package_files": 160,
+      "checksum_records": 160,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x86-0.1.96.zip",
+      "cloud_zip_sha256": "023825c2bee2efb19e305c8d218b01ba701f8ebe1f25838678933c13063cb481",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true,
+      "cloud_full_payload_byte_for_byte": true
+    },
+    {
+      "package": "out/package/0.1.96/SearchEngineService-x86-Windows7",
+      "html_pages": 21,
+      "tutorial_files": 22,
+      "local_links_and_anchors_checked": 249,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "tutorial_role_passed": true,
+      "protected_package_files": 158,
+      "checksum_records": 158,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x86-Windows7-0.1.96.zip",
+      "cloud_zip_sha256": "16ad500b029444470c6ddbe8eb84fd2116485824b0d16c5a8fb907b4ba5c3af7",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true,
+      "cloud_full_payload_byte_for_byte": true
+    }
+  ],
+  "service_installation_run": false,
+  "working_data_used": false,
+  "commit_or_push_run": false,
+  "source_fingerprint": "a854d2c33b923523e3a35479d399e4c86826f85a86eedadf1d8501ac3dfe6050",
+  "same_source_fingerprint_all_architectures": true,
+  "offline_package_views": [
+    {
+      "package": "SearchEngineService-x64",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    }
+  ],
+  "offline_package_pages_status": "passed",
+  "pe_versions": [
+    {
+      "productVersion": "0.1.96",
+      "package": "SearchEngineService-x64",
+      "fileVersion": "0.1.96.0"
+    },
+    {
+      "productVersion": "0.1.96",
+      "package": "SearchEngineService-x86",
+      "fileVersion": "0.1.96.0"
+    },
+    {
+      "productVersion": "0.1.96",
+      "package": "SearchEngineService-x86-Windows7",
+      "fileVersion": "0.1.96.0"
+    }
+  ],
+  "native_package_verifiers_status": "passed",
+  "canonical_release_exit_code": 0,
+  "documentation_qa_report": "Проверка_руководств_2026-10-17.json",
+  "release_attempts": 1
+}

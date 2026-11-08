@@ -1,0 +1,78 @@
+{
+  "Date": "2026-10-21",
+  "Timezone": "Asia/Yekaterinburg (UTC+05:00)",
+  "Version": "0.1.96",
+  "Head": "1b421234526aa88b8dfee151f98ea8e7751e976e",
+  "Fix": "HashAlgorithm.Clear for PowerShell 2.0 / CLR 2.0",
+  "SourceFingerprint": "14e0b42a8520fb167034b7adfd04b14a74aef92041176f24f2e5e1570bff0841",
+  "CppCompilation": false,
+  "VersionBump": false,
+  "ProductBinaryChanges": false,
+  "LegacyRuntime": "PowerShell 2.0 / CLR 2.0.50727.9179",
+  "LegacyFailureReproduced": true,
+  "VerifierCases": 26,
+  "InstallerFixtureCases": 84,
+  "ConsoleAssertions": 1217,
+  "RealWindows7ServiceInstall": false,
+  "CloudUpdated": true,
+  "Packages": [
+    {
+      "Package": "SearchEngineService-x64",
+      "ManifestSha256": "13607F2D643FCFCCD93AF9C049C6379B7357D556A6E7074665CC615DF13D5C51",
+      "ExeSha256": "D750623926170E7B2F27E95156BC3C24794142641DB8A6F4F46CEBECE29EAA27",
+      "ChangedProtectedFiles": [
+        "Install-SearchEngineService.bat",
+        "Local-Machine-Install.bat",
+        "Verify-Package.bat"
+      ],
+      "UnchangedExeDllFiles": 29,
+      "Zip": "SearchEngineService-x64-0.1.96.zip",
+      "ZipSha256": "f591be1d6b8e52bb157f6d21e0ce94ab14628f50234ea65b75299986d2334e5c",
+      "ZipEntriesVerified": 78,
+      "VerifyExit": 0,
+      "ValidateExit": 0,
+      "LegacyVerifierExit": 0,
+      "CloudSha256": "f591be1d6b8e52bb157f6d21e0ce94ab14628f50234ea65b75299986d2334e5c",
+      "CloudEntriesVerified": 78
+    },
+    {
+      "Package": "SearchEngineService-x86",
+      "ManifestSha256": "8F19F170E53911AE223482D7671576AC8F7925623F19D8C72250BEEA23CD7F3B",
+      "ExeSha256": "19BDAC93A6EEA6DF7F87C2145C72C88C30495C78C44455E7FD6E0C98C9C883AF",
+      "ChangedProtectedFiles": [
+        "Install-SearchEngineService.bat",
+        "Local-Machine-Install.bat",
+        "Verify-Package.bat"
+      ],
+      "UnchangedExeDllFiles": 121,
+      "Zip": "SearchEngineService-x86-0.1.96.zip",
+      "ZipSha256": "313ec0494ee29b7f9b48bd2c8fe7ec80535f34eb73f72c10d5edd700ca8e6083",
+      "ZipEntriesVerified": 170,
+      "VerifyExit": 0,
+      "ValidateExit": 0,
+      "LegacyVerifierExit": 0,
+      "CloudSha256": "313ec0494ee29b7f9b48bd2c8fe7ec80535f34eb73f72c10d5edd700ca8e6083",
+      "CloudEntriesVerified": 170
+    },
+    {
+      "Package": "SearchEngineService-x86-Windows7",
+      "ManifestSha256": "67169D1832DA58A1210AC7580FD3E5FC49A1C63AFB93AE39B424DC610071B9B6",
+      "ExeSha256": "E804562FA3307FE2008F4BCEB0DA65BE66E34B94CE1F2FD0656D327DC0D9FB3F",
+      "ChangedProtectedFiles": [
+        "Install-SearchEngineService.bat",
+        "Local-Machine-Install.bat",
+        "Verify-Package.bat"
+      ],
+      "UnchangedExeDllFiles": 119,
+      "Zip": "SearchEngineService-x86-Windows7-0.1.96.zip",
+      "ZipSha256": "3cbb1332d79570c87ed4fc593ad8e1413b8f638084240f774158a4674fa57d30",
+      "ZipEntriesVerified": 168,
+      "VerifyExit": 0,
+      "ValidateExit": 0,
+      "LegacyVerifierExit": 0,
+      "CloudSha256": "3cbb1332d79570c87ed4fc593ad8e1413b8f638084240f774158a4674fa57d30",
+      "CloudEntriesVerified": 168
+    }
+  ],
+  "CloudBackupCleanupDeferred": true
+}

@@ -508,6 +508,11 @@ struct Row {
     int month{};
     int record{};
     std::string date;
+    std::string city;
+    std::string operatorName;
+    std::string signatureNumber;
+    std::string referenceNumber;
+    std::string summary;
     std::string directTo;
     std::string fileName;
     std::string mainText;
@@ -633,6 +638,65 @@ fs::path f12DatabaseRelativePath(int year)
         (std::to_wstring(year) + L".db");
 }
 
+std::string signatureNumber(int month, int record, int count)
+{
+    std::ostringstream value;
+    value << (record % 2 == 1 ? "123/" : "254/")
+          << std::setw(3) << std::setfill('0')
+          << (month - 1) * ((count + 1) / 2) + (record + 1) / 2;
+    return value.str();
+}
+
+std::string telegramDate(int year, int month, int record)
+{
+    std::ostringstream value;
+    value << std::setw(2) << std::setfill('0') << ((record - 1) % 28 + 1)
+          << '.' << monthText(month) << '.' << year;
+    return value.str();
+}
+
+std::string toOem866(const std::string& text)
+{
+    const std::wstring wide = encoding::utf8_to_wstring(text);
+    if (wide.empty())
+        return {};
+    BOOL substituted = FALSE;
+    const int size = WideCharToMultiByte(866, WC_NO_BEST_FIT_CHARS,
+        wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, &substituted);
+    if (size <= 0)
+        throw std::runtime_error("cannot size synthetic OEM866 text");
+    std::string result(size, '\0');
+    if (WideCharToMultiByte(866, WC_NO_BEST_FIT_CHARS,
+            wide.data(), static_cast<int>(wide.size()), result.data(), size,
+            nullptr, &substituted) != size || substituted)
+        throw std::runtime_error("synthetic text cannot be represented in OEM866");
+    return result;
+}
+
+std::map<std::string, int> telegramWordCounts(const std::string& oemText)
+{
+    // Match the server's whitespace tokenizer, edge punctuation trim and
+    // OEM866 uppercase normalization, preserving slashes inside numbers.
+    std::map<std::string, int> counts;
+    std::istringstream input(oemText);
+    std::string word;
+    const auto punctuation = [](unsigned char ch) {
+        return ch < 128 && std::ispunct(ch);
+    };
+    while (input >> word) {
+        const auto begin = std::find_if_not(word.begin(), word.end(), punctuation);
+        const auto end = std::find_if_not(word.rbegin(), word.rend(), punctuation).base();
+        if (begin >= end)
+            continue;
+        std::wstring upper = encoding::utf8_to_wstring(
+            encoding::oem866_to_utf8(std::string(begin, end)));
+        if (!CharUpperBuffW(upper.data(), static_cast<DWORD>(upper.size())))
+            throw std::runtime_error("cannot normalize synthetic index word");
+        ++counts[toOem866(encoding::wstring_to_utf8(upper))];
+    }
+    return counts;
+}
+
 std::vector<Row> makeRows(
     bool prm,
     int year,
@@ -648,27 +712,81 @@ std::vector<Row> makeRows(
     const fs::path physicalDirectory = physicalRoot / relativeDirectory;
     fs::create_directories(physicalDirectory);
 
+    // SQLite strings are UTF-8; telegram files and their ZIP copies are OEM866.
+    static constexpr std::array<const char*, 10> operators{
+        "Иванов И.И.", "Петров П.А.", "Сидорова Е.В.", "Смирнов А.С.",
+        "Кузнецова Н.П.", "Попов Д.М.", "Волкова О.А.", "Соколов В.Н.",
+        "Фёдорова Т.И.", "Морозов С.В."};
+    static constexpr std::array<const char*, 12> cities{
+        "Москва", "Санкт-Петербург", "Екатеринбург", "Новосибирск",
+        "Казань", "Нижний Новгород", "Самара", "Омск",
+        "Челябинск", "Ростов-на-Дону", "Пермь", "Владивосток"};
+    static constexpr std::array<const char*, 12> summaries{
+        "План проверки оборудования", "Заявка на поставку материалов",
+        "Отчёт о выполнении работ", "Согласование графика поставок",
+        "Уведомление о проведении совещания", "Запрос технической документации",
+        "Подтверждение получения документов", "График обслуживания оборудования",
+        "Заявка на ремонт линии связи", "Итоги проверки готовности объекта",
+        "Согласование сроков обучения", "Отчёт о наличии запасных частей"};
+
     for (int record = 1; record <= count; ++record) {
         Row row;
         row.id = telegramId(prm, year, month, record);
         row.prm = prm;
         row.month = month;
         row.record = record;
-        std::ostringstream date;
-        date << std::setw(2) << std::setfill('0') << ((record - 1) % 28 + 1)
-             << '.' << monthValue << '.' << year;
-        row.date = date.str();
+        const int displayIndex = record - 1 + (month - 1) * 3 + (prm ? 0 : 5);
+        row.city = cities[displayIndex % cities.size()];
+        row.operatorName = operators[displayIndex % operators.size()];
+        row.signatureNumber = signatureNumber(month, record, count);
+        row.summary = summaries[(record - 1 + month - 1 + (prm ? 0 : 4)) %
+                                summaries.size()];
+        row.date = telegramDate(year, month, record);
         row.directTo = utf8(logicalDirectory) + "\\";
         row.fileName = std::to_string(row.id) +
             (prm ? "" : (record % 5 == 0 ? ".SHP" : ".ATL"));
-        const std::string token = sourceName(prm) + "-" +
-            std::to_string(year) + "-M" + monthValue + "-R" +
-            std::to_string(record) + "-ID" + std::to_string(row.id);
+        const std::string token = std::string(prm ? "ВХ" : "ИСХ") + "-" +
+            std::to_string(year) + "-М" + monthValue + "-З" +
+            std::to_string(record) + "-ИД" + std::to_string(row.id);
         row.mainText =
-            "SYNTHETIC-ARCHIVE-E2E " + token +
-            " UNIQUEWORD_" + token +
-            " CODE = " + std::to_string(row.id * 7LL + 31LL) +
-            " DIGITAL = 3141592653 SEARCH-CONTROL\r\n";
+            "УЧЕБНАЯ-ТЕЛЕГРАММА " + token +
+            " УНИКАЛЬНОЕ_СЛОВО_" + token +
+            " КОД = " + std::to_string(row.id * 7LL + 31LL) +
+            " ЦИФРЫ = 3141592653 КОНТРОЛЬ-ПОИСКА\r\n";
+        row.mainText += "Подписной номер: " + row.signatureNumber +
+            " от " + row.date + ".\r\nТема: " + row.summary + ".\r\n";
+        if (record == 1 && month == 1) {
+            row.mainText += "Указание: провести проверку готовности оборудования "
+                "и представить отчёт о выполнении работ.\r\n";
+        } else {
+            // Replies refer to real documents in the opposite direction;
+            // first-of-month instructions continue the previous month's thread.
+            const int referenceMonth = record == 1 ? month - 1 : month;
+            const int referenceRecord = record > 2 && record % 4 == 0 ? 2 : 1;
+            row.referenceNumber = signatureNumber(referenceMonth, referenceRecord, count);
+            const std::string reference = std::string(prm ? "ИСХ" : "ВХ") + " № " +
+                row.referenceNumber + " от " +
+                telegramDate(year, referenceMonth, referenceRecord);
+            switch (record % 4) {
+            case 0:
+                row.mainText += "В дополнение к письму " + reference +
+                    " направляем уточнённый график выполнения работ.\r\n";
+                break;
+            case 2:
+                row.mainText += "В ответ на указание " + reference +
+                    " сообщаем: проверка оборудования выполнена, замечаний нет.\r\n";
+                break;
+            case 3:
+                row.mainText += "Отчёт по указанию " + reference +
+                    ": работы завершены, документы переданы ответственному оператору.\r\n";
+                break;
+            default:
+                row.mainText += "Во исполнение указания " + reference +
+                    " просим согласовать сроки проверки и представления отчёта.\r\n";
+                break;
+            }
+        }
+        row.mainText = toOem866(row.mainText);
 
         const int attachmentCount = record % 3;
         for (int attachment = 1; attachment <= attachmentCount; ++attachment) {
@@ -678,7 +796,7 @@ std::vector<Row> makeRows(
                 std::to_string(attachment) + ".bin";
             item.size = static_cast<std::uint32_t>(
                 192 + month * 17 + record * 13 + attachment * 31);
-            item.security = "SYNTHETIC-GRIF";
+            item.security = "Учебный";
             row.attachments.push_back(std::move(item));
         }
 
@@ -763,28 +881,28 @@ void createDatabase(
             if (sqlite3_bind_int(statement, 1, row.id) != SQLITE_OK)
                 throw std::runtime_error("SQLite id bind failed");
             bindText(statement, 2, row.date);
-            bindText(statement, 3, prm ? "SYNTHETIC-INCOMING" : "SYNTHETIC-OUTGOING");
+            bindText(statement, 3, row.city);
             bindText(statement, 4, std::to_string(autoPadTelNo(row.id)));
-            bindText(statement, 5, "SYN-" + std::to_string(row.id));
+            bindText(statement, 5, row.signatureNumber);
             bindText(statement, 6, row.date);
-            bindText(statement, 7, prm ? "TEST-OPERATOR" : "TEST-COPIES");
-            bindText(statement, 8, "UNIQUE-SUMMARY-" + std::to_string(row.id));
+            bindText(statement, 7, row.operatorName);
+            bindText(statement, 8, row.summary);
             bindText(statement, 9, prm ? joinTerminated(names, ';') : join(names, ';'));
             bindText(statement, 10, names.empty() ? "" : std::to_string(names.size()));
             bindText(statement, 11, row.directTo);
             bindText(statement, 12, row.fileName);
-            bindText(statement, 13, "SYNTHETIC-BLANK-" + std::to_string(row.id));
+            bindText(statement, 13, "Учебный бланк № " + std::to_string(row.id));
             bindText(statement, 14, "0");
-            bindText(statement, 15, "E2E-STAND");
+            bindText(statement, 15, "Учебный стенд");
             bindText(statement, 16, prm ? joinTerminated(sizes, ';') : join(sizes, ';'));
-            bindText(statement, 17, prm ? "SYNTHETIC-KEY" : "TEST");
-            bindText(statement, 18, prm ? "SYNTHETIC-ONLY" : "ATLAS-TEST");
+            bindText(statement, 17, "Учебный");
+            bindText(statement, 18, prm ? "Учебная запись" : "Учебный АТЛАС");
             if (prm) {
                 bindText(statement, 19, joinTerminated(securities, ';'));
-                bindText(statement, 20, "SYNTHETIC-GRIF");
-                bindText(statement, 21, "E2E-STAND");
+                bindText(statement, 20, "Учебный");
+                bindText(statement, 21, "Учебный стенд");
             } else {
-                bindText(statement, 19, "ISTOK-TEST");
+                bindText(statement, 19, "Учебный ИСТОК");
                 bindText(statement, 20, "");
             }
             const int listsIndex = prm ? 22 : 21;
@@ -934,12 +1052,10 @@ void createSyntheticIndex(
     database.execute("CREATE INDEX idx_docs_deleted ON docs(deleted)");
     database.execute("CREATE INDEX idx_postings_doc ON postings(doc_id)");
     database.execute("INSERT INTO meta(key,value) VALUES('schema_version','3')");
-    database.execute(
-        "INSERT INTO words(word_id,word) VALUES"
-        "(0,'synthetic'),(1,'archive'),(2,'e2e'),(3,'search'),(4,'control')");
 
     sqlite3_stmt* insertDocument = nullptr;
     sqlite3_stmt* insertPosting = nullptr;
+    sqlite3_stmt* insertWord = nullptr;
     if (sqlite3_prepare_v2(
             database.get(),
             "INSERT INTO docs(doc_id,path,mtime_ticks,size_int64,deleted) "
@@ -947,15 +1063,20 @@ void createSyntheticIndex(
             -1, &insertDocument, nullptr) != SQLITE_OK ||
         sqlite3_prepare_v2(
             database.get(),
-            "INSERT INTO postings(word_id,doc_id,cnt) VALUES(?,?,1)",
-            -1, &insertPosting, nullptr) != SQLITE_OK)
+            "INSERT INTO postings(word_id,doc_id,cnt) VALUES(?,?,?)",
+            -1, &insertPosting, nullptr) != SQLITE_OK ||
+        sqlite3_prepare_v2(
+            database.get(), "INSERT INTO words(word_id,word) VALUES(?,?)",
+            -1, &insertWord, nullptr) != SQLITE_OK)
     {
         sqlite3_finalize(insertDocument);
         sqlite3_finalize(insertPosting);
+        sqlite3_finalize(insertWord);
         throw std::runtime_error("cannot prepare synthetic index inserts");
     }
 
     database.execute("BEGIN IMMEDIATE");
+    std::map<std::string, int> wordIds;
     try {
         for (const auto& row : rows) {
             const fs::path logicalFile =
@@ -975,9 +1096,20 @@ void createSyntheticIndex(
             sqlite3_reset(insertDocument);
             sqlite3_clear_bindings(insertDocument);
 
-            for (int wordId = 0; wordId < 5; ++wordId) {
-                sqlite3_bind_int(insertPosting, 1, wordId);
+            for (const auto& [token, count] : telegramWordCounts(row.mainText)) {
+                const int nextWordId = static_cast<int>(wordIds.size());
+                const auto [word, inserted] = wordIds.emplace(token, nextWordId);
+                if (inserted) {
+                    sqlite3_bind_int(insertWord, 1, word->second);
+                    bindText(insertWord, 2, token);
+                    if (sqlite3_step(insertWord) != SQLITE_DONE)
+                        throw std::runtime_error("cannot insert synthetic index word");
+                    sqlite3_reset(insertWord);
+                    sqlite3_clear_bindings(insertWord);
+                }
+                sqlite3_bind_int(insertPosting, 1, word->second);
                 sqlite3_bind_int(insertPosting, 2, row.id);
+                sqlite3_bind_int(insertPosting, 3, count);
                 if (sqlite3_step(insertPosting) != SQLITE_DONE)
                     throw std::runtime_error("cannot insert synthetic index posting");
                 sqlite3_reset(insertPosting);
@@ -989,10 +1121,12 @@ void createSyntheticIndex(
         database.execute("ROLLBACK");
         sqlite3_finalize(insertDocument);
         sqlite3_finalize(insertPosting);
+        sqlite3_finalize(insertWord);
         throw;
     }
     sqlite3_finalize(insertDocument);
     sqlite3_finalize(insertPosting);
+    sqlite3_finalize(insertWord);
     database.execute("PRAGMA integrity_check");
 }
 
@@ -1742,13 +1876,15 @@ StandSummary verifyInternal(
                 throw std::runtime_error("synthetic telegram file is missing");
             }
             std::ifstream mainInput(mainFile, std::ios::binary);
-            const std::string mainText{
+            const std::string rawText{
                 std::istreambuf_iterator<char>(mainInput),
                 std::istreambuf_iterator<char>()};
-            if (mainText.find("SYNTHETIC-ARCHIVE-E2E") == std::string::npos ||
+            const bool russian = manifest.value("telegram_encoding", "") == "cp866";
+            const std::string mainText = russian ? encoding::oem866_to_utf8(rawText) : rawText;
+            if (mainText.find(russian ? "УЧЕБНАЯ-ТЕЛЕГРАММА" : "SYNTHETIC-ARCHIVE-E2E") == std::string::npos ||
                 mainText.find(std::to_string(id)) == std::string::npos ||
-                mainText.find(" CODE = ") == std::string::npos ||
-                mainText.find(" DIGITAL = 3141592653 ") == std::string::npos ||
+                mainText.find(russian ? " КОД = " : " CODE = ") == std::string::npos ||
+                mainText.find(russian ? " ЦИФРЫ = 3141592653 " : " DIGITAL = 3141592653 ") == std::string::npos ||
                 hasUnspacedEquals(mainText))
             {
                 sqlite3_finalize(statement);
@@ -2623,6 +2759,8 @@ StandSummary generateStand(const StandOptions& options)
         {"root", utf8(logicalRoot)},
         {"year", options.year},
         {"records_per_month", options.recordsPerMonth},
+        {"text_language", "ru"},
+        {"telegram_encoding", "cp866"},
         {"schema_reference", json::array({
             "D:/BASES/ARCHIVE.db3 (structure only)",
             "D:/BASES_PRD/ARCHIVE.db3 (structure only)",
@@ -2776,6 +2914,8 @@ StandSummary generateServiceArchiveStand(
         {"port", options.port},
         {"year", options.stand.year},
         {"records_per_month", options.stand.recordsPerMonth},
+        {"text_language", "ru"},
+        {"telegram_encoding", "cp866"},
         {"schema_reference", json::array({
             "D:/BASES/ARCHIVE.db3 (structure only)",
             "D:/BASES_PRD/ARCHIVE.db3 (structure only)",

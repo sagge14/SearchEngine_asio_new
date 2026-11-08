@@ -1,0 +1,169 @@
+{
+  "date": "2026-10-13",
+  "product": "SearchEngineService",
+  "version": "0.1.95",
+  "packages": [
+    {
+      "package": "out/package/0.1.95/SearchEngineService-x64",
+      "html_pages": 13,
+      "tutorial_files": 14,
+      "local_links_and_anchors_checked": 155,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "protected_package_files": 60,
+      "checksum_records": 60,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x64-0.1.95.zip",
+      "cloud_zip_sha256": "4dfd425c4cd3ba39506b73cc5fd64783197e1df7aa1ee20304be16f5f29f0f70",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true
+    },
+    {
+      "package": "out/package/0.1.95/SearchEngineService-x86",
+      "html_pages": 13,
+      "tutorial_files": 14,
+      "local_links_and_anchors_checked": 155,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "protected_package_files": 152,
+      "checksum_records": 152,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x86-0.1.95.zip",
+      "cloud_zip_sha256": "7dcc733b55399ba3bb46fb081c5ebec3ae9d71116e983b5179bfcebf83765f0c",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true
+    },
+    {
+      "package": "out/package/0.1.95/SearchEngineService-x86-Windows7",
+      "html_pages": 13,
+      "tutorial_files": 14,
+      "local_links_and_anchors_checked": 155,
+      "tutorials_byte_for_byte": true,
+      "tutorials_in_manifest": true,
+      "protected_package_files": 150,
+      "checksum_records": 150,
+      "checksums_passed": true,
+      "internal_docs_absent": true,
+      "cloud_zip": "SearchEngineService-x86-Windows7-0.1.95.zip",
+      "cloud_zip_sha256": "5d03c859a134b39f7d463396b7eb40668984def49d64a9803f64f6295bdc0789",
+      "cloud_zip_and_sidecar_passed": true,
+      "cloud_tutorials_byte_for_byte": true
+    }
+  ],
+  "service_installation_run": false,
+  "working_data_used": false,
+  "commit_or_push_run": false,
+  "offline_package_views": [
+    {
+      "package": "SearchEngineService-x64",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x64",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 1100,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 1100,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 1100,
+      "viewport": 1100
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 390,
+      "stage": "contents",
+      "h1": "Все руководства SearchEngineService",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    },
+    {
+      "package": "SearchEngineService-x86-Windows7",
+      "width": 390,
+      "stage": "settings",
+      "h1": "Настройки сервера: полный справочник Settings.json",
+      "stylesheetCount": 1,
+      "pageWidth": 390,
+      "viewport": 390
+    }
+  ],
+  "offline_package_pages_status": "passed"
+}
